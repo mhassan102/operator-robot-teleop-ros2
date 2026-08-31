@@ -9,4 +9,5 @@ ros2_ws/log/
 artifacts/
 *.pcap
 *.pcapng
-
+**/__pycache__/
+*.py[cod]

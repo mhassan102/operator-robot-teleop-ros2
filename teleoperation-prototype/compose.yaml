@@ -36,7 +36,7 @@ services:
     <<: *ros-service
     container_name: ros2-teleop-robot
     hostname: robot
-    command: ["sleep", "infinity"]
+    command: ["ros2", "run", "teleop_demo", "robot_receiver"]
 
 networks:
   teleop_net:

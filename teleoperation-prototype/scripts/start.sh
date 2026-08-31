@@ -4,6 +4,11 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${project_dir}"
 
+if [[ ! -f ros2_ws/install/setup.bash ]]; then
+  echo "ROS workspace is not built; performing the one-time workspace build."
+  ./scripts/build_workspace.sh
+fi
+
 docker compose up -d operator robot
 
 deadline=$((SECONDS + 90))
@@ -27,4 +32,3 @@ docker compose ps
 docker compose logs --no-color
 echo "ERROR: containers did not become healthy within 90 seconds" >&2
 exit 1
-
