@@ -1,0 +1,9 @@
+/**:
+  ros__parameters:
+    command_rate_hz: 20.0
+    heartbeat_rate_hz: 10.0
+    watchdog_timeout_ms: 500
+    max_linear_velocity: 1.0
+    max_angular_velocity: 1.0
+    telemetry_rate_hz: 10.0
+

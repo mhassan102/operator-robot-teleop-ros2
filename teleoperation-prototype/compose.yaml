@@ -1,0 +1,44 @@
+name: ${COMPOSE_PROJECT_NAME:-ros2_teleop_poc}
+
+x-ros-service: &ros-service
+  image: ${TELEOP_IMAGE:-ros2-teleop-poc:humble}
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  init: true
+  environment:
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+    RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    CYCLONEDDS_URI: file:///teleop/config/cyclonedds.xml
+  volumes:
+    - ./config:/teleop/config:ro
+    - ./ros2_ws:/teleop/ros2_ws
+  networks:
+    - teleop_net
+  restart: "no"
+  healthcheck:
+    test: ["CMD", "bash", "-c", "source /opt/ros/humble/setup.bash && ros2 pkg list >/dev/null"]
+    interval: 5s
+    timeout: 5s
+    retries: 12
+    start_period: 5s
+
+services:
+  operator:
+    <<: *ros-service
+    container_name: ros2-teleop-operator
+    hostname: operator
+    command: ["sleep", "infinity"]
+    cap_add:
+      - NET_ADMIN
+
+  robot:
+    <<: *ros-service
+    container_name: ros2-teleop-robot
+    hostname: robot
+    command: ["sleep", "infinity"]
+
+networks:
+  teleop_net:
+    name: ros2_teleop_poc_net
+    driver: bridge
