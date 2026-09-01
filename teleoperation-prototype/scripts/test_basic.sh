@@ -38,7 +38,7 @@ if [[ "${topic_info}" != *"Type: teleop_demo_msgs/msg/TeleopCommand"* ]]; then
   exit 1
 fi
 
-directions=(forward backward left right stop)
+directions=(+x x- +y +yaw stop)
 for direction in "${directions[@]}"; do
   echo "Publishing ${direction}..."
   docker compose exec -T operator \
@@ -49,7 +49,7 @@ done
 
 sleep 1
 robot_logs="$(docker compose logs --no-color robot)"
-for direction in FORWARD BACKWARD LEFT RIGHT STOP; do
+for direction in +X -X +Y +YAW STOP; do
   if [[ "${robot_logs}" != *"direction=${direction}"* ]]; then
     echo "ERROR: robot log does not contain ${direction}." >&2
     echo "${robot_logs}" >&2
@@ -67,7 +67,7 @@ echo "Publishing 100-message reliable transport burst..."
 before_burst="${received_count}"
 docker compose exec -T operator \
   /teleop/entrypoint.sh ros2 run teleop_demo operator_command \
-    --direction forward --count 100 --rate 100 --quiet \
+    --direction +x --count 100 --rate 100 --quiet \
     --ros-args --params-file /teleop/config/teleop.yaml
 
 burst_deadline=$((SECONDS + 10))

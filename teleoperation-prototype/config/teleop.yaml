@@ -2,8 +2,16 @@
   ros__parameters:
     command_rate_hz: 20.0
     heartbeat_rate_hz: 10.0
+    controller_rate_hz: 50.0
     watchdog_timeout_ms: 500
-    max_linear_velocity: 1.0
-    max_angular_velocity: 1.0
+    command_timeout_ms: 200
+    max_linear_velocity: 0.1
+    max_angular_velocity: 0.3
+    min_gripper: 0.0
+    max_gripper: 1.0
+    command_frame: tool0
     telemetry_rate_hz: 10.0
-
+    # Connection stays up if a command OR a heartbeat arrives within
+    # watchdog_timeout_ms. Cartesian jog output is zeroed separately when
+    # no command arrives within command_timeout_ms (rates are not latched).
+    watchdog_keep_alive: command_or_heartbeat

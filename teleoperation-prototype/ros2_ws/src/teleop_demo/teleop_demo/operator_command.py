@@ -7,7 +7,14 @@ import rclpy
 from rclpy.node import Node
 from rclpy.utilities import remove_ros_args
 
-from teleop_demo.commands import COMMANDS, build_sequence_list, clamp_velocity, parse_arguments
+from teleop_demo.commands import (
+    COMMANDS,
+    build_sequence_list,
+    clamp_gripper,
+    clamp_twist,
+    fill_twist,
+    parse_arguments,
+)
 from teleop_demo.delivery import DeliveryTracker, LatencyStats, time_msg_to_ns
 from teleop_demo.parameters import declare_teleop_parameters
 from teleop_demo.qos import command_qos
@@ -57,8 +64,8 @@ class OperatorCommand(Node):
         direction: str,
         sequences: list[int],
         rate: float,
-        linear: float,
-        angular: float,
+        values: tuple[float, ...],
+        frame_id: str,
         quiet: bool,
     ) -> None:
         period = 1.0 / rate
@@ -69,9 +76,10 @@ class OperatorCommand(Node):
             message = TeleopCommand()
             message.sequence = sequence
             message.stamp = now.to_msg()
-            message.twist.linear.x = linear
-            message.twist.angular.z = angular
+            message.frame_id = frame_id
             message.session_id = self.session_id
+            fill_twist(message.twist, values)
+            message.gripper = values[6]
             self.publisher.publish(message)
             self.sent += 1
             if not quiet:
@@ -79,10 +87,16 @@ class OperatorCommand(Node):
                     "COMMAND SENT "
                     f"seq={sequence} "
                     f"session={self.session_id} "
-                    f"direction={direction.upper()} "
+                    f"direction={direction} "
                     f"sample={index}/{total} "
-                    f"linear_x={linear:.3f} "
-                    f"angular_z={angular:.3f} "
+                    f"linear_x={message.twist.linear.x:.3f} "
+                    f"linear_y={message.twist.linear.y:.3f} "
+                    f"linear_z={message.twist.linear.z:.3f} "
+                    f"angular_x={message.twist.angular.x:.3f} "
+                    f"angular_y={message.twist.angular.y:.3f} "
+                    f"angular_z={message.twist.angular.z:.3f} "
+                    f"gripper={message.gripper:.3f} "
+                    f"frame={frame_id} "
                     f"source_time_ns={now.nanoseconds}"
                 )
             next_send += period
@@ -136,7 +150,20 @@ def main(args=None) -> None:
     try:
         max_linear = float(node.get_parameter("max_linear_velocity").value)
         max_angular = float(node.get_parameter("max_angular_velocity").value)
-        linear, angular = clamp_velocity(*COMMANDS[parsed.direction], max_linear, max_angular)
+        min_gripper = float(node.get_parameter("min_gripper").value)
+        max_gripper = float(node.get_parameter("max_gripper").value)
+        frame_id = str(node.get_parameter("command_frame").value)
+        values = list(COMMANDS[parsed.direction])
+        message_twist = TeleopCommand().twist
+        fill_twist(message_twist, values)
+        clamp_twist(message_twist, max_linear, max_angular)
+        values[0] = message_twist.linear.x
+        values[1] = message_twist.linear.y
+        values[2] = message_twist.linear.z
+        values[3] = message_twist.angular.x
+        values[4] = message_twist.angular.y
+        values[5] = message_twist.angular.z
+        values[6] = clamp_gripper(values[6], min_gripper, max_gripper)
         count, rate = _resolve_count_and_rate(node, parsed)
         sequences = build_sequence_list(count, parsed.inject)
 
@@ -145,7 +172,12 @@ def main(args=None) -> None:
             exit_code = 2
         else:
             node.publish_sequence(
-                parsed.direction, sequences, rate, linear, angular, parsed.quiet
+                parsed.direction,
+                sequences,
+                rate,
+                tuple(values),
+                frame_id,
+                parsed.quiet,
             )
             node.wait_for_acks(expected=len(sequences), timeout_sec=10.0)
             node.get_logger().info(node.stats_line())

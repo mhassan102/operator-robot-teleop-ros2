@@ -61,7 +61,7 @@ fi
 
 echo "Sending a 20 Hz sequence for 30 seconds..."
 baseline_started=$SECONDS
-baseline_output="$(run_operator --direction forward --duration 30 --quiet)"
+baseline_output="$(run_operator --direction +x --duration 30 --quiet)"
 baseline_elapsed=$((SECONDS - baseline_started))
 echo "${baseline_output}"
 if (( baseline_elapsed < 29 )); then
@@ -133,7 +133,7 @@ if [[ "$(field "${robot_stats}" unique)" != "600" ]]; then
 fi
 
 echo "Repeating a 100-command unimpaired burst..."
-repeat_output="$(run_operator --direction forward --count 100 --rate 20 --quiet)"
+repeat_output="$(run_operator --direction +x --count 100 --rate 20 --quiet)"
 repeat_stats="$(grep 'OPERATOR STATS' <<<"${repeat_output}" | tail -1 || true)"
 if [[ "$(field "${repeat_stats}" sent)" != "100" || "$(field "${repeat_stats}" missing_acks)" != "0" ]]; then
   echo "ERROR: repeated baseline run had loss: ${repeat_stats}" >&2
@@ -141,7 +141,7 @@ if [[ "$(field "${repeat_stats}" sent)" != "100" || "$(field "${repeat_stats}" m
 fi
 
 echo "Injecting a duplicate sequence..."
-dup_output="$(run_operator --direction forward --count 5 --rate 20 --inject duplicate --quiet)"
+dup_output="$(run_operator --direction +x --count 5 --rate 20 --inject duplicate --quiet)"
 dup_stats="$(grep 'OPERATOR STATS' <<<"${dup_output}" | tail -1 || true)"
 dup_session="$(field "${dup_stats}" session)"
 dup_robot="$(docker compose logs --no-color robot | grep "STATS session=${dup_session} " | tail -1 || true)"
@@ -151,7 +151,7 @@ if [[ "$(field "${dup_robot}" duplicates)" -lt 1 ]]; then
 fi
 
 echo "Injecting a reordered sequence..."
-reorder_output="$(run_operator --direction forward --count 5 --rate 20 --inject reorder --quiet)"
+reorder_output="$(run_operator --direction +x --count 5 --rate 20 --inject reorder --quiet)"
 reorder_stats="$(grep 'OPERATOR STATS' <<<"${reorder_output}" | tail -1 || true)"
 reorder_session="$(field "${reorder_stats}" session)"
 reorder_robot="$(docker compose logs --no-color robot | grep "STATS session=${reorder_session} " | tail -1 || true)"

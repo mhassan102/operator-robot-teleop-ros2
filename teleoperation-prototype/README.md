@@ -1,8 +1,8 @@
 # ROS 2 Teleoperation Prototype
 
 This directory contains the incremental local ROS 2 Humble teleoperation proof
-of concept. Milestone 3 adds stamped commands, acknowledgements, and delivery
-statistics on top of the CycloneDDS path verified in Milestone 2.
+of concept. Milestone 4 adds a Cartesian arm command vocabulary, heartbeat,
+and a watchdog safety gateway on top of the stamped DDS path from Milestone 3.
 
 ## Milestone 1 quick start
 
@@ -22,36 +22,32 @@ rebuild it explicitly while the project is stopped:
 ./scripts/build_workspace.sh
 ```
 
-## Milestone 2 transport test
+## Transport and delivery tests
 
 ```bash
 ./scripts/start.sh
 ./scripts/test_basic.sh
-```
-
-## Milestone 3 delivery test
-
-```bash
-./scripts/start.sh
 ./scripts/test_delivery.sh
+./scripts/test_watchdog.sh
 ```
 
-Publish one stamped command burst manually:
+Publish a Cartesian jog burst:
 
 ```bash
 docker compose exec operator \
   /teleop/entrypoint.sh ros2 run teleop_demo operator_command \
-    --direction forward --count 5 \
+    --direction +x --count 5 \
     --ros-args --params-file /teleop/config/teleop.yaml
 docker compose logs robot
 ```
 
-Valid directions are `forward`, `backward`, `left`, `right`, and `stop`.
-The operator publishes `teleop_demo_msgs/msg/TeleopCommand` on `/teleop/command`
-and waits for `teleop_demo_msgs/msg/TeleopAck` on `/teleop/ack`. Each command
-has a session id, sequence number, and source timestamp. The robot logs
-receive time, one-way age, and counters for missing, duplicate, and
-out-of-order sequences.
+`Twist` is a 6-DOF **tool jog** (m/s and rad/s), not a wheeled-base `cmd_vel`.
+Directions: `+x` `x-` `+y` `y-` `+z` `z-` `+roll` `roll-` `+pitch` `pitch-`
+`+yaw` `yaw-` `stop` `open` `close`. Negative axes are `x-` not `-x` so the
+CLI does not treat them as flags. Aliases `forward`/`backward`/`left`/`right`
+map to `+x`/`x-`/`+yaw`/`yaw-`. Gripper is a separate field (`0` closed, `1`
+open). The safety node publishes validated output on `/cmd_vel_safe` and
+`/gripper_safe`. A watchdog zeros the jog if the operator is silent for 500 ms.
 
 The Compose project uses the dedicated `ros2_teleop_poc_net` bridge and does not
 modify unrelated containers. Only the operator container currently receives

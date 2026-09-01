@@ -9,6 +9,8 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TeleopCommand.msg"
   "msg/TeleopAck.msg"
+  "msg/TeleopHeartbeat.msg"
+  "msg/TeleopState.msg"
   DEPENDENCIES builtin_interfaces geometry_msgs
 )
 

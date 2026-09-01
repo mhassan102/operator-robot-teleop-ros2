@@ -18,12 +18,11 @@ Start the project and run the deterministic transport test:
 ./scripts/test_basic.sh
 ```
 
-The test verifies cross-container ROS discovery, receipt of forward, backward,
-left, right, and stop commands, an exact 100-message burst, recovery after
-restarting the robot container, and isolation from a different ROS domain ID.
-It now uses `/teleop/command` (`teleop_demo_msgs/msg/TeleopCommand`) instead of
-the Milestone 2 `/cmd_vel_raw` Twist topic. It exits nonzero and prints robot
-logs on failure.
+The test verifies cross-container ROS discovery, receipt of Cartesian `+x`,
+`x-`, `+y`, `+yaw`, and `stop` commands, an exact 100-message burst, recovery
+after restarting the robot container, and isolation from a different ROS domain
+ID. It uses `/teleop/command` (`teleop_demo_msgs/msg/TeleopCommand`). It exits
+nonzero and prints robot logs on failure.
 
 ## Milestone 3
 
@@ -45,5 +44,26 @@ The test verifies:
 8. a new operator session logs `SESSION RESET` and starts counters at the new
    session's received count.
 
-Unit tests in `teleop_demo/test` cover command parsing, velocity clamping,
-sequence fault lists, and the delivery/latency counters without DDS.
+Unit tests in `teleop_demo/test` cover command parsing, six-axis clamping,
+sequence fault lists, delivery/latency counters, and the watchdog state
+machine without DDS.
+
+## Milestone 4
+
+```bash
+./scripts/start.sh
+./scripts/test_watchdog.sh
+```
+
+The test verifies:
+
+1. the robot latches `SAFE STOP ACTIVATED` at startup;
+2. a `+x` jog appears on `/cmd_vel_safe` at 0.05 m/s;
+3. stopping the operator produces `TIMEOUT` and a zero safe twist;
+4. a heartbeat restores the connection without replaying the last jog;
+5. a fresh command is required before `/cmd_vel_safe` is non-zero again; and
+6. with heartbeat still running, command silence zeros the jog without a new
+   watchdog timeout.
+
+Connection policy is `command_or_heartbeat` as documented in
+`config/teleop.yaml`. `heartbeat_only` is covered by unit tests.

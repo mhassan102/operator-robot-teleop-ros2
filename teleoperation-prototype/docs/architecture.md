@@ -2,42 +2,47 @@
 
 Milestone 1 defines two logical services built from a common ROS 2 Humble image:
 
-- `operator`: future keyboard control, heartbeat, and monitoring;
-- `robot`: future safety controller, simulator, telemetry, and camera.
+- `operator`: scripted Cartesian jog, heartbeat, and future keyboard/monitor;
+- `robot`: delivery tracking, safety gateway, and future MoveIt Servo / Gazebo.
 
 Both use CycloneDDS on a dedicated Docker bridge with ROS domain ID 42 by
-default. The common image reduces build time while Compose keeps runtime roles
-separate.
+default.
 
-## Milestone 2 command path
-
-Milestone 2 published a bare `geometry_msgs/msg/Twist` on `/cmd_vel_raw`. That
-topic is no longer the command path.
-
-## Milestone 3 command path
+## Command path
 
 ```text
-operator_command (operator container)
-  -> /teleop/command [teleop_demo_msgs/msg/TeleopCommand]
-        sequence, stamp, twist, session_id
+operator_command / operator_heartbeat
+  -> /teleop/command   [TeleopCommand: seq, stamp, frame_id, session, Twist, gripper]
+  -> /teleop/heartbeat [TeleopHeartbeat]
   -> CycloneDDS over ros2_teleop_poc_net
-  -> robot_command_receiver (robot container)
-  -> /teleop/ack [teleop_demo_msgs/msg/TeleopAck]
-        sequence, session_id, source_stamp, receive_stamp, disposition
-  -> operator_command latency / RTT stats
+  -> robot_command_receiver
+        delivery stats + ack
+        safety: validate, clamp, watchdog
+  -> /teleop/ack       [TeleopAck]
+  -> /cmd_vel_safe     [geometry_msgs/Twist]   Cartesian tool jog, never raw
+  -> /gripper_safe     [std_msgs/Float64]
+  -> /teleop/state     [TeleopState]
 ```
 
-The custom command still carries a standard `Twist` so a later safety layer can
-extract `/cmd_vel_safe` for the simulator. `/teleop/command` is not a motor
-command.
+`Twist` is interpreted as a 6-DOF Cartesian **tool rate** (`linear` m/s,
+`angular` rad/s) in `command_frame` (default `tool0`). It is not a wheeled-base
+velocity. The gripper is not part of Twist.
 
-Command and acknowledgement topics use RELIABLE, VOLATILE, KEEP_LAST depth 10.
-That is a small queue so stale commands do not pile up, while an unimpaired
-local network still has a zero-loss baseline.
+`/cmd_vel_safe` is the only motion output. Later MoveIt Servo will consume a
+`TwistStamped` built from this safe twist. Raw `/teleop/command` never reaches
+motors.
 
-Rates and velocity limits come from `config/teleop.yaml`. The operator clamps
-linear and angular velocity before publishing. Each operator run creates a new
-`session_id`; the robot resets sequence counters when the session changes.
+## Safety policy
+
+- Invalid (NaN/Inf) commands are rejected and do not keep the watchdog alive.
+- Linear and angular axes are clamped to YAML limits (0.1 m/s, 0.3 rad/s).
+- `watchdog_keep_alive: command_or_heartbeat`: either a valid command or a
+  heartbeat resets the 500 ms watchdog.
+- Cartesian jog is a rate: if commands stop while still CONNECTED, the safe
+  twist is zeroed after `command_timeout_ms` (200 ms). Last non-zero twist is
+  never replayed after a watchdog timeout.
+- Logged once per transition: `CONNECTED`, `TIMEOUT`, `SAFE STOP ACTIVATED`,
+  `RESTORED`. After `RESTORED`, motion resumes only on a fresh command.
 
 One-way command age is `receive_stamp - source_stamp`. Acknowledgement RTT is
 operator receive time minus `source_stamp`. Both are valid on this prototype

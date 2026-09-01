@@ -21,6 +21,7 @@ setup(
     entry_points={
         "console_scripts": [
             "operator_command = teleop_demo.operator_command:main",
+            "operator_heartbeat = teleop_demo.operator_heartbeat:main",
             "robot_receiver = teleop_demo.robot_receiver:main",
         ],
     },
