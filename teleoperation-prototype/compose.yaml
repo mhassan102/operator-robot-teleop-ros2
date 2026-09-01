@@ -36,7 +36,16 @@ services:
     <<: *ros-service
     container_name: ros2-teleop-robot
     hostname: robot
-    command: ["ros2", "run", "teleop_demo", "robot_receiver"]
+    command:
+      [
+        "ros2",
+        "run",
+        "teleop_demo",
+        "robot_receiver",
+        "--ros-args",
+        "--params-file",
+        "/teleop/config/teleop.yaml",
+      ]
 
 networks:
   teleop_net:

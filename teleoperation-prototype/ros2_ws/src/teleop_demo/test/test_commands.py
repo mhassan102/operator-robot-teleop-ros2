@@ -1,7 +1,12 @@
 from geometry_msgs.msg import Twist
 
-from teleop_demo.operator_command import COMMANDS, parse_arguments
-from teleop_demo.robot_receiver import command_direction
+from teleop_demo.commands import (
+    COMMANDS,
+    build_sequence_list,
+    clamp_velocity,
+    command_direction,
+    parse_arguments,
+)
 
 
 def make_twist(linear: float = 0.0, angular: float = 0.0) -> Twist:
@@ -37,3 +42,27 @@ def test_valid_arguments() -> None:
     assert parsed.count == 3
     assert parsed.rate == 20.0
     assert parsed.quiet is True
+    assert parsed.inject == "none"
+
+
+def test_duration_and_inject_arguments() -> None:
+    parsed = parse_arguments(
+        ["--direction", "forward", "--duration", "30", "--inject", "duplicate"]
+    )
+    assert parsed.duration == 30.0
+    assert parsed.inject == "duplicate"
+
+
+def test_velocity_clamping() -> None:
+    linear, angular = clamp_velocity(1.5, -2.0, max_linear=1.0, max_angular=1.0)
+    assert linear == 1.0
+    assert angular == -1.0
+    linear, angular = clamp_velocity(0.5, 0.8, max_linear=1.0, max_angular=1.0)
+    assert linear == 0.5
+    assert angular == 0.8
+
+
+def test_sequence_fault_injection() -> None:
+    assert build_sequence_list(5, "none") == [1, 2, 3, 4, 5]
+    assert build_sequence_list(5, "duplicate") == [1, 2, 2, 3, 4, 5]
+    assert build_sequence_list(5, "reorder") == [1, 3, 2, 4, 5]

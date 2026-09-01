@@ -29,11 +29,11 @@ if (( SECONDS >= node_deadline )); then
   exit 1
 fi
 
-echo "Checking /cmd_vel_raw endpoint and message type..."
+echo "Checking /teleop/command endpoint and message type..."
 topic_info="$(docker compose exec -T operator \
-  /teleop/entrypoint.sh ros2 topic info /cmd_vel_raw --verbose)"
-if [[ "${topic_info}" != *"Type: geometry_msgs/msg/Twist"* ]]; then
-  echo "ERROR: /cmd_vel_raw is not geometry_msgs/msg/Twist." >&2
+  /teleop/entrypoint.sh ros2 topic info /teleop/command --verbose)"
+if [[ "${topic_info}" != *"Type: teleop_demo_msgs/msg/TeleopCommand"* ]]; then
+  echo "ERROR: /teleop/command is not teleop_demo_msgs/msg/TeleopCommand." >&2
   echo "${topic_info}" >&2
   exit 1
 fi
@@ -43,7 +43,8 @@ for direction in "${directions[@]}"; do
   echo "Publishing ${direction}..."
   docker compose exec -T operator \
     /teleop/entrypoint.sh ros2 run teleop_demo operator_command \
-      --direction "${direction}" --count 3 --rate 10
+      --direction "${direction}" --count 3 --rate 10 \
+      --ros-args --params-file /teleop/config/teleop.yaml
 done
 
 sleep 1
@@ -66,7 +67,8 @@ echo "Publishing 100-message reliable transport burst..."
 before_burst="${received_count}"
 docker compose exec -T operator \
   /teleop/entrypoint.sh ros2 run teleop_demo operator_command \
-    --direction forward --count 100 --rate 100 --quiet
+    --direction forward --count 100 --rate 100 --quiet \
+    --ros-args --params-file /teleop/config/teleop.yaml
 
 burst_deadline=$((SECONDS + 10))
 while (( SECONDS < burst_deadline )); do

@@ -11,8 +11,11 @@ RUN apt-get update \
         net-tools \
         python3-colcon-common-extensions \
         python3-pip \
+        python3-pytest \
         ros-humble-geometry-msgs \
         ros-humble-rmw-cyclonedds-cpp \
+        ros-humble-rosidl-default-generators \
+        ros-humble-rosidl-default-runtime \
         tcpdump \
     && rm -rf /var/lib/apt/lists/*
 

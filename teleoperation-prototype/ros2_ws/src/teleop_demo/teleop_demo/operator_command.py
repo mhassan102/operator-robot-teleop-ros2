@@ -1,26 +1,35 @@
-import argparse
 import sys
 import time
+import uuid
 
-from geometry_msgs.msg import Twist
+from teleop_demo_msgs.msg import TeleopAck, TeleopCommand
 import rclpy
 from rclpy.node import Node
 from rclpy.utilities import remove_ros_args
 
-
-COMMANDS = {
-    "forward": (0.5, 0.0),
-    "backward": (-0.5, 0.0),
-    "left": (0.0, 0.8),
-    "right": (0.0, -0.8),
-    "stop": (0.0, 0.0),
-}
+from teleop_demo.commands import COMMANDS, build_sequence_list, clamp_velocity, parse_arguments
+from teleop_demo.delivery import DeliveryTracker, LatencyStats, time_msg_to_ns
+from teleop_demo.parameters import declare_teleop_parameters
+from teleop_demo.qos import command_qos
 
 
 class OperatorCommand(Node):
     def __init__(self) -> None:
         super().__init__("operator_command")
-        self.publisher = self.create_publisher(Twist, "/cmd_vel_raw", 10)
+        declare_teleop_parameters(self)
+        self.session_id = uuid.uuid4().hex[:12]
+        self.publisher = self.create_publisher(TeleopCommand, "/teleop/command", command_qos())
+        self.ack_subscription = self.create_subscription(
+            TeleopAck,
+            "/teleop/ack",
+            self.ack_callback,
+            command_qos(),
+        )
+        self.sent = 0
+        self.acks = 0
+        self.one_way = LatencyStats()
+        self.rtt = LatencyStats()
+        self.ack_tracker = DeliveryTracker()
 
     def wait_for_robot(self, timeout_sec: float) -> bool:
         deadline = time.monotonic() + timeout_sec
@@ -30,38 +39,90 @@ class OperatorCommand(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
         return False
 
-    def publish_direction(
-        self, direction: str, count: int, rate: float, quiet: bool = False
-    ) -> None:
-        linear, angular = COMMANDS[direction]
-        message = Twist()
-        message.linear.x = linear
-        message.angular.z = angular
-        period = 1.0 / rate
+    def ack_callback(self, message: TeleopAck) -> None:
+        if message.session_id != self.session_id:
+            return
+        now = self.get_clock().now()
+        source_ns = time_msg_to_ns(message.source_stamp)
+        receive_ns = time_msg_to_ns(message.receive_stamp)
+        one_way_ns = receive_ns - source_ns
+        rtt_ns = now.nanoseconds - source_ns
+        self.acks += 1
+        self.ack_tracker.observe(message.sequence)
+        self.one_way.add(one_way_ns)
+        self.rtt.add(rtt_ns)
 
-        for index in range(1, count + 1):
+    def publish_sequence(
+        self,
+        direction: str,
+        sequences: list[int],
+        rate: float,
+        linear: float,
+        angular: float,
+        quiet: bool,
+    ) -> None:
+        period = 1.0 / rate
+        total = len(sequences)
+        next_send = time.monotonic()
+        for index, sequence in enumerate(sequences, start=1):
+            now = self.get_clock().now()
+            message = TeleopCommand()
+            message.sequence = sequence
+            message.stamp = now.to_msg()
+            message.twist.linear.x = linear
+            message.twist.angular.z = angular
+            message.session_id = self.session_id
             self.publisher.publish(message)
+            self.sent += 1
             if not quiet:
                 self.get_logger().info(
-                    f"COMMAND SENT direction={direction.upper()} "
-                    f"sample={index}/{count} linear_x={linear:.3f} "
-                    f"angular_z={angular:.3f}"
+                    "COMMAND SENT "
+                    f"seq={sequence} "
+                    f"session={self.session_id} "
+                    f"direction={direction.upper()} "
+                    f"sample={index}/{total} "
+                    f"linear_x={linear:.3f} "
+                    f"angular_z={angular:.3f} "
+                    f"source_time_ns={now.nanoseconds}"
                 )
-            rclpy.spin_once(self, timeout_sec=period)
+            next_send += period
+            while time.monotonic() < next_send and rclpy.ok():
+                remaining = next_send - time.monotonic()
+                rclpy.spin_once(self, timeout_sec=max(remaining, 0.0))
+
+    def wait_for_acks(self, expected: int, timeout_sec: float) -> None:
+        deadline = time.monotonic() + timeout_sec
+        while self.acks < expected and time.monotonic() < deadline and rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.05)
+
+    def stats_line(self) -> str:
+        missing_acks = max(self.sent - self.acks, 0)
+        return (
+            "OPERATOR STATS "
+            f"session={self.session_id} "
+            f"sent={self.sent} "
+            f"acks={self.acks} "
+            f"missing_acks={missing_acks} "
+            f"duplicates={self.ack_tracker.duplicates} "
+            f"out_of_order={self.ack_tracker.out_of_order} "
+            f"one_way_current_ns={self.one_way.current_ns} "
+            f"one_way_min_ns={self.one_way.min_ns} "
+            f"one_way_max_ns={self.one_way.max_ns} "
+            f"one_way_avg_ns={self.one_way.average_ns} "
+            f"rtt_current_ns={self.rtt.current_ns} "
+            f"rtt_min_ns={self.rtt.min_ns} "
+            f"rtt_max_ns={self.rtt.max_ns} "
+            f"rtt_avg_ns={self.rtt.average_ns}"
+        )
 
 
-def parse_arguments(arguments: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Publish a scripted velocity command.")
-    parser.add_argument("--direction", choices=COMMANDS, required=True)
-    parser.add_argument("--count", type=int, default=5)
-    parser.add_argument("--rate", type=float, default=10.0)
-    parser.add_argument("--quiet", action="store_true")
-    parsed = parser.parse_args(arguments)
-    if parsed.count < 1:
-        parser.error("--count must be at least 1")
-    if parsed.rate <= 0.0:
-        parser.error("--rate must be greater than zero")
-    return parsed
+def _resolve_count_and_rate(node: OperatorCommand, parsed) -> tuple[int, float]:
+    rate = parsed.rate
+    if rate is None:
+        rate = float(node.get_parameter("command_rate_hz").value)
+    if parsed.duration is not None:
+        return max(1, int(round(rate * parsed.duration))), rate
+    return parsed.count, rate
 
 
 def main(args=None) -> None:
@@ -73,13 +134,26 @@ def main(args=None) -> None:
     node = OperatorCommand()
     exit_code = 0
     try:
+        max_linear = float(node.get_parameter("max_linear_velocity").value)
+        max_angular = float(node.get_parameter("max_angular_velocity").value)
+        linear, angular = clamp_velocity(*COMMANDS[parsed.direction], max_linear, max_angular)
+        count, rate = _resolve_count_and_rate(node, parsed)
+        sequences = build_sequence_list(count, parsed.inject)
+
         if not node.wait_for_robot(timeout_sec=10.0):
-            node.get_logger().error("No /cmd_vel_raw subscriber discovered within 10 seconds")
+            node.get_logger().error("No /teleop/command subscriber discovered within 10 seconds")
             exit_code = 2
         else:
-            node.publish_direction(
-                parsed.direction, parsed.count, parsed.rate, quiet=parsed.quiet
+            node.publish_sequence(
+                parsed.direction, sequences, rate, linear, angular, parsed.quiet
             )
+            node.wait_for_acks(expected=len(sequences), timeout_sec=10.0)
+            node.get_logger().info(node.stats_line())
+            if parsed.inject == "none" and node.acks != node.sent:
+                node.get_logger().error(
+                    f"Expected {node.sent} acknowledgements, received {node.acks}"
+                )
+                exit_code = 1
     finally:
         node.destroy_node()
         rclpy.shutdown()

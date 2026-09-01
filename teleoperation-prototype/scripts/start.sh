@@ -4,8 +4,8 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${project_dir}"
 
-if [[ ! -f ros2_ws/install/setup.bash ]]; then
-  echo "ROS workspace is not built; performing the one-time workspace build."
+if [[ ! -f ros2_ws/install/setup.bash ]] || [[ ! -d ros2_ws/install/teleop_demo_msgs ]]; then
+  echo "ROS workspace is not built; performing the workspace build."
   ./scripts/build_workspace.sh
 fi
 
