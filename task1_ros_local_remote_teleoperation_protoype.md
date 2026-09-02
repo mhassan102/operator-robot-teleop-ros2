@@ -1,4 +1,112 @@
-# Task: Build a Local ROS 2 Remote Teleoperation Prototype on Ubuntu 22.04
+# Task: ROS 2 Remote Teleoperation Prototype (6-DOF arm)
+
+**Living status:** see
+`task1_ros_local_remote_teleoperation_implementation_plan.md`
+(milestones with `status` / `committed`). This file is the product intent.
+The original wheeled-robot + netem + camera wording below is **superseded**
+where it conflicts with the first target.
+
+## First target (current)
+
+Do **remote keyboard teleoperation** from this Ubuntu machine over a **WAN**,
+using **Zenoh** (`rmw_zenoh`), to an **NVIDIA Jetson** that runs:
+
+- the same robot-side safety stack, and
+- either **Gazebo** (6-DOF arm) or a **hardware arm**.
+
+Already done locally (Docker, CycloneDDS, one host): containers, stamped
+Cartesian commands, watchdog, Gazebo arm motion, keyboard teleop.
+
+Out of scope for this first target:
+
+- simulated camera / video
+- `tc netem` WAN emulation (use the real WAN + benchmarks)
+- DDS/RTPS capture (transport becomes Zenoh)
+- TurtleBot / differential-drive
+
+## Environment
+
+Host OS: Ubuntu 22.04
+
+Use:
+
+- Docker / Docker Compose on the operator machine
+- ROS 2 Humble
+- Gazebo Classic for the local/Jetson simulator
+- 6-DOF arm (custom Gazebo model now; hardware later)
+- Keyboard teleop (implemented)
+- CycloneDDS today; **Zenoh** for the WAN split
+- Jetson as the robot-side computer
+
+## Target architecture
+
+```text
+        This machine (operator)              NVIDIA Jetson (robot)
+     ┌─────────────────────┐              ┌──────────────────────────┐
+     │ ROS 2 Humble        │              │ ROS 2 Humble             │
+     │ Keyboard teleop     │   Zenoh      │ Safety + watchdog        │
+     │ (optional monitor)  │─────────────▶│ MoveIt Servo (planned)   │
+     └─────────────────────┘              │ Gazebo arm or hardware   │
+                                          └──────────────────────────┘
+```
+
+Local Docker still uses two containers (operator + robot) as the development
+stand-in for those two machines.
+
+## Control path (as built)
+
+```text
+Keyboard / scripted CLI
+   ↓
+TeleopCommand (Twist 6-axis tool jog + seq + stamp + session + gripper)
+   ↓
+ROS 2 (CycloneDDS now, Zenoh next)
+   ↓
+Safety / 500 ms watchdog
+   ↓
+/cmd_vel_safe
+   ↓
+Jacobian jogger (POC) → later MoveIt Servo
+   ↓
+Gazebo 6-DOF arm  (or hardware on Jetson)
+```
+
+`Twist` is a **tool rate**, not wheel `cmd_vel`. There is no “go to pose”
+until MoveIt planning (implementation plan M7).
+
+## Keyboard (done)
+
+```text
+./scripts/start.sh --gui
+./scripts/keyboard_teleop.sh
+```
+
+`w/s` +x/x-, `a/d` +y/y-, `r/f` +z/z-, `j/l` yaw, `u/o` roll, `i/k` pitch,
+`g/h` gripper, space stop. See `teleoperation-prototype/teleop_gui_steps.txt`.
+
+## Safety (done)
+
+Heartbeat + command keep-alive. If silent > 500 ms: zero jog, log
+`TIMEOUT` / `SAFE STOP ACTIVATED`. Fresh command after restore; do not replay
+stale Twist.
+
+## Remaining product work
+
+1. **MoveIt Servo / planning** — replace homemade Jacobian; named home/fold.
+2. **Zenoh** — replace CycloneDDS; then operator host ↔ Jetson over WAN.
+3. **Monitor** — pose, latency, watchdog (no camera).
+4. **Benchmarking** — local vs WAN latency, loss, watchdog timing.
+
+## Original task notes (historical)
+
+The rest of this document was the first write-up (mobile robot, netem, DDS
+inspect, video). Treat it as background. Do **not** implement TurtleBot,
+`network_*.sh`, tcpdump DDS, or camera unless the first target above is done
+and a later phase explicitly asks for them.
+
+---
+
+# Original request (kept for history)
 
 I want to build a small end-to-end remote teleoperation prototype on my Ubuntu 22.04 development machine.
 
@@ -46,605 +154,17 @@ Create two logical sides:
 
 Prefer separate Docker containers for the operator and robot sides.
 
-For the first working version, using Docker host networking is acceptable if it simplifies ROS 2 DDS discovery.
-
-Later the networking should be easy to change to isolated Docker networks.
-
-## Phase 1: Basic ROS 2 Communication
-
-Create:
-
-1. Operator container
-2. Robot container
-3. ROS 2 Humble installation in both containers
-4. DDS communication between them
-
-Implement a simple control flow:
-
-```text
-Keyboard
-   ↓
-Operator ROS 2 Node
-   ↓
-/cmd_vel
-   ↓
-DDS
-   ↓
-Robot ROS 2 Node
-```
-
-Use the standard ROS geometry message where appropriate, preferably:
-
-```text
-geometry_msgs/msg/Twist
-```
-
-The operator should be able to issue commands such as:
-
-```text
-forward
-backward
-turn left
-turn right
-stop
-```
-
-The robot-side node should print received velocity commands with timestamps and sequence information where useful.
-
-## Phase 2: Simulated Mobile Robot
-
-Add a lightweight simulated mobile robot.
-
-Prefer something commonly supported by ROS 2 Humble, such as TurtleBot3 or another simple differential-drive robot.
-
-The objective is:
-
-```text
-Keyboard
-   ↓
-ROS 2 teleoperation
-   ↓
-/cmd_vel
-   ↓
-Simulated robot
-   ↓
-Robot moves in simulator
-```
-
-Avoid unnecessary complexity.
-
-I want to clearly see the robot moving based on commands coming from the operator side.
-
-## Phase 3: Robot Telemetry
-
-Add a robot telemetry publisher.
-
-Publish at least:
-
-```text
-robot position
-linear velocity
-angular velocity
-robot state
-timestamp
-communication status
-```
-
-If simulator data is available, use real simulated odometry.
-
-Prefer standard ROS messages where possible, such as:
-
-```text
-nav_msgs/msg/Odometry
-```
-
-The operator side should subscribe and print/display the robot status.
-
-Example:
-
-```text
-Robot position: x=2.3 y=1.5
-Linear velocity: 0.8 m/s
-Angular velocity: 0.2 rad/s
-Last telemetry age: 12 ms
-```
-
-## Phase 4: Heartbeat and Communication Watchdog
-
-Add a simple teleoperation heartbeat mechanism.
-
-Operator publishes heartbeat messages periodically.
-
-Example:
-
-```text
-Operator
-   ↓
-/teleop/heartbeat
-   ↓
-Robot
-```
-
-Robot keeps track of the last valid heartbeat or control command.
-
-If no valid command/heartbeat is received within a configurable timeout, for example:
-
-```text
-500 ms
-```
-
-the robot must automatically issue a zero-velocity safe-stop command.
-
-Conceptually:
-
-```text
-if current_time - last_command_time > watchdog_timeout:
-    stop_robot()
-```
-
-The timeout must be configurable.
-
-Log clearly when watchdog state changes:
-
-```text
-TELEOP CONNECTED
-TELEOP TIMEOUT
-SAFE STOP ACTIVATED
-TELEOP RESTORED
-```
-
-## Phase 5: Network Impairment Simulation
-
-Create scripts that use Linux `tc netem` so I can emulate realistic remote network conditions.
-
-Provide commands or helper scripts for:
-
-### Normal network
-
-```text
-0-5 ms delay
-no loss
-```
-
-### Moderate remote connection
-
-```text
-50 ms delay
-10 ms jitter
-0.5% packet loss
-```
-
-### Poor connection
-
-```text
-150 ms delay
-40 ms jitter
-3% packet loss
-```
-
-### Very poor connection
-
-```text
-300 ms delay
-80 ms jitter
-10% packet loss
-```
-
-Provide scripts such as:
-
-```text
-scripts/network_good.sh
-scripts/network_medium.sh
-scripts/network_bad.sh
-scripts/network_reset.sh
-```
-
-The scripts should clearly identify which interface they modify.
-
-Do not silently modify the host's main network interface.
-
-Prefer applying network impairment inside a container or on a dedicated Docker network/interface where possible.
-
-## Phase 6: Latency Measurement
-
-Add application-level timestamping so we can measure command latency.
-
-For example:
-
-```text
-Operator sends command:
-
-sequence = 152
-timestamp = T1
-
-Robot receives:
-
-timestamp = T2
-
-latency = T2 - T1
-```
-
-Print statistics such as:
-
-```text
-Current latency
-Minimum latency
-Maximum latency
-Average latency
-Packets received
-Packets lost
-Out-of-order messages
-```
-
-If one-way latency cannot be measured correctly because clocks are independent, document that limitation and use RTT instead.
-
-Since everything initially runs on one Ubuntu host, host clock synchronization is sufficient for the first prototype.
-
-## Phase 7: DDS Inspection
-
-I want to understand ROS 2 networking underneath.
-
-Prefer CycloneDDS if it can be configured cleanly with ROS 2 Humble.
-
-Document:
-
-```text
-ROS 2 node
-    ↓
-DDS implementation
-    ↓
-UDP/IP
-    ↓
-Linux network
-```
-
-Provide instructions for inspecting traffic with:
-
-```bash
-tcpdump
-```
-
-For example, document how to identify DDS/RTPS packets.
-
-Do not hard-code assumptions if Docker networking changes the interface names.
-
-## Phase 8: Video Prototype
-
-After the basic control path is stable, add a simple simulated video path.
-
-Preferred architecture:
-
-```text
-Virtual camera
-     ↓
-Robot container
-     ↓
-ROS image topic OR GStreamer
-     ↓
-Network
-     ↓
-Operator side
-     ↓
-Display
-```
-
-Keep the first implementation simple.
-
-A ROS 2 image topic is acceptable initially.
-
-If GStreamer is easier or more representative for remote teleoperation, implement a minimal pipeline.
-
-The purpose is to demonstrate that teleoperation commonly has two very different traffic paths:
-
-```text
-Control:
-small packets
-latency sensitive
-
-Video:
-large bandwidth
-latency sensitive
-```
-
-## Phase 9: Monitoring
-
-Create a simple terminal-based monitoring tool or ROS node showing:
-
-```text
-Teleop connection status
-Command rate
-Last command age
-Heartbeat age
-Robot velocity
-Packet/sequence loss
-Average latency
-Maximum latency
-Watchdog state
-```
-
-Example:
-
-```text
-================ TELEOP STATUS ================
-
-Connection:        CONNECTED
-Command rate:      20 Hz
-Last command:      18 ms ago
-Heartbeat age:     35 ms
-
-Robot velocity:    0.72 m/s
-Angular velocity:  0.10 rad/s
-
-Average latency:   48 ms
-Maximum latency:   91 ms
-Lost commands:     2
-Out-of-order:      0
-
-Watchdog:          OK
-
-===============================================
-```
-
-## Suggested Project Structure
-
-Create something similar to:
-
-```text
-teleoperation-prototype/
-│
-├── docker/
-│   ├── operator.Dockerfile
-│   └── robot.Dockerfile
-│
-├── docker-compose.yml
-│
-├── ros2_ws/
-│   └── src/
-│       └── teleop_demo/
-│           ├── operator_node/
-│           ├── robot_node/
-│           ├── telemetry/
-│           ├── heartbeat/
-│           └── monitoring/
-│
-├── config/
-│   ├── cyclonedds.xml
-│   └── teleop.yaml
-│
-├── scripts/
-│   ├── build.sh
-│   ├── start.sh
-│   ├── stop.sh
-│   ├── test_basic.sh
-│   ├── network_good.sh
-│   ├── network_medium.sh
-│   ├── network_bad.sh
-│   └── network_reset.sh
-│
-├── docs/
-│   ├── architecture.md
-│   ├── networking.md
-│   └── testing.md
-│
-└── README.md
-```
-
-Adjust this structure if a better ROS 2 layout is appropriate.
-
-## Configuration
-
-Keep important parameters in YAML/configuration rather than hard-coding them.
-
-For example:
-
-```yaml
-command_rate_hz: 20
-heartbeat_rate_hz: 10
-watchdog_timeout_ms: 500
-
-max_linear_velocity: 1.0
-max_angular_velocity: 1.0
-
-telemetry_rate_hz: 10
-```
-
-## Safety Behavior
-
-Even though this is only a simulation, implement the architecture as if a physical robot could eventually be connected.
-
-Remote commands must not directly bypass safety logic.
-
-Preferred conceptual flow:
-
-```text
-Remote command
-      ↓
-Teleoperation receiver
-      ↓
-Command validation
-      ↓
-Watchdog / safety layer
-      ↓
-Robot controller
-      ↓
-Simulated motors
-```
-
-Reject or clamp commands exceeding configured limits.
-
-On communication timeout:
-
-```text
-linear velocity = 0
-angular velocity = 0
-```
-
-## Testing
-
-Create automated or semi-automated tests covering at least:
-
-```text
-1. Containers start correctly
-2. ROS 2 discovery works
-3. Operator can publish commands
-4. Robot receives commands
-5. Simulated robot moves
-6. Telemetry reaches operator
-7. Heartbeat works
-8. Watchdog stops robot when communication disappears
-9. Robot resumes correctly after communication returns
-10. Artificial network latency affects measured latency
-11. Packet loss can be observed
-12. DDS traffic can be captured with tcpdump
-```
-
-Also provide a simple test procedure.
-
-Example:
-
-```text
-Terminal 1:
-./scripts/start.sh
-
-Terminal 2:
-start operator teleop
-
-Terminal 3:
-start monitoring
-
-Test:
-move robot forward
-
-Then apply:
-./scripts/network_bad.sh
-
-Observe:
-latency
-packet loss
-video delay
-robot response
-
-Then stop operator container and confirm:
-
-SAFE STOP ACTIVATED
-```
-
-## Important Implementation Approach
-
-Please build this incrementally.
-
-Do not attempt all phases at once.
-
-First achieve:
-
-```text
-Operator container
-      ↓
-ROS 2 / DDS
-      ↓
-Robot container
-      ↓
-cmd_vel received
-```
-
-Then verify it.
-
-After that add:
-
-```text
-Gazebo robot
-```
-
-Then:
-
-```text
-telemetry
-```
-
-Then:
-
-```text
-heartbeat/watchdog
-```
-
-Then:
-
-```text
-network impairment
-```
-
-Then:
-
-```text
-latency statistics
-```
-
-Finally:
-
-```text
-video
-```
-
-At each stage:
-
-1. build
-2. run
-3. verify
-4. fix errors
-5. document the working state
-6. then continue
-
-Do not leave placeholder code where a simple working implementation is possible.
-
-## Expected First Milestone
-
-The first milestone should be a working prototype where I can run something similar to:
-
-```bash
-./scripts/build.sh
-./scripts/start.sh
-```
-
-and then control the simulated robot from an operator terminal.
-
-I should be able to see:
-
-```text
-Operator command
-      ↓
-ROS 2 topic
-      ↓
-DDS communication
-      ↓
-Robot controller
-      ↓
-Gazebo simulated robot
-```
-
-and inspect the traffic using Linux networking tools.
-
-Once that basic path is stable, continue with heartbeat, watchdog, telemetry, latency emulation, packet loss testing, monitoring, and video.
-
-## Documentation Requirements
-
-The README should explain the project for someone new to robotics.
-
-Include:
-
-```text
-What ROS 2 is
-What DDS is
-What /cmd_vel represents
-What telemetry means
-What heartbeat means
-What watchdog means
-Why stale commands are dangerous
-Why UDP/DDS is useful for real-time communication
-What latency and jitter mean
-How network impairment is simulated
-How the safe-stop mechanism works
-```
-
-Also include an architecture diagram using plain text or Mermaid.
-
-The final prototype should remain simple enough that I can use it as a learning environment and later extend it toward a real remote teleoperation system.
+## Phases (mapped to the living plan)
+
+- Phase 1 basic ROS 2: **done** (M1–M2)
+- Phase 2 simulated robot: **done as 6-DOF Gazebo arm**, not TurtleBot (M5)
+- Phase 3 telemetry: **remaining** as M9 monitor
+- Phase 4 heartbeat/watchdog: **done** (M4)
+- Phase 5 netem: **dropped** (real WAN + M10 benchmarks)
+- Phase 6 latency: **done locally** (M3); WAN numbers in M10
+- Phase 7 DDS inspect: **dropped** (M8 is Zenoh)
+- Phase 8 video: **dropped** for first target
+- Phase 9 monitoring: **remaining** M9
+- Keyboard: **done** (M6)
+
+Safety, YAML config, and incremental build still apply as originally requested.
