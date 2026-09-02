@@ -36,7 +36,12 @@ Headless Gazebo is the default. For an interactive window (needs X11):
 
 ```bash
 ./scripts/start.sh --gui
+./scripts/keyboard_teleop.sh
 ```
+
+Focus that terminal and hold keys (`w/s` tool +x/x-, `a/d` +y/y-, `r/f` +z/z-,
+`j/l` yaw, `g/h` gripper, space stop). That node streams the same
+`/teleop/command` Twist as the CLI bursts, plus a heartbeat.
 
 Publish a Cartesian jog burst:
 

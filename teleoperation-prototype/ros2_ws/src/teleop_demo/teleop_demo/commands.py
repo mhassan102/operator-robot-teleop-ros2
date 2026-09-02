@@ -34,6 +34,25 @@ COMMANDS = {
     "right": (0.0, 0.0, 0.0, 0.0, 0.0, -JOG_ANGULAR, 0.0),
 }
 
+# Terminal keys -> COMMANDS names. Hold a key (OS key-repeat) to keep jogging.
+KEY_BINDINGS = {
+    "w": "+x",
+    "s": "x-",
+    "a": "+y",
+    "d": "y-",
+    "r": "+z",
+    "f": "z-",
+    "u": "+roll",
+    "o": "roll-",
+    "i": "+pitch",
+    "k": "pitch-",
+    "j": "+yaw",
+    "l": "yaw-",
+    " ": "stop",
+    "g": "open",
+    "h": "close",
+}
+
 
 def make_twist(
     linear_x: float = 0.0,

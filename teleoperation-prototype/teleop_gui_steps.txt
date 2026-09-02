@@ -1,0 +1,19 @@
+GUI + keyboard teleop (current milestone)
+
+1. Start Gazebo with the arm window:
+   ./scripts/start.sh --gui
+
+2. Start keyboard teleop (focus this terminal, not Gazebo):
+   ./scripts/keyboard_teleop.sh
+
+Keys (hold to jog):
+
+  w / s     tool +x / x-
+  a / d     +y / y-
+  r / f     +z / z-
+  j / l     yaw
+  u / o     roll
+  i / k     pitch
+  g / h     gripper open / close
+  space     stop
+  Ctrl-C    quit

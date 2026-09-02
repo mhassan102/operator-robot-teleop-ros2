@@ -2,6 +2,7 @@ from teleop_demo.commands import (
     COMMANDS,
     JOG_ANGULAR,
     JOG_LINEAR,
+    KEY_BINDINGS,
     build_sequence_list,
     clamp_gripper,
     clamp_twist,
@@ -27,6 +28,16 @@ def test_cartesian_command_values() -> None:
     assert COMMANDS["backward"] == COMMANDS["x-"]
     assert COMMANDS["left"] == COMMANDS["+yaw"]
     assert COMMANDS["right"] == COMMANDS["yaw-"]
+
+
+def test_keyboard_bindings() -> None:
+    assert KEY_BINDINGS["w"] == "+x"
+    assert KEY_BINDINGS["s"] == "x-"
+    assert KEY_BINDINGS[" "] == "stop"
+    assert KEY_BINDINGS["g"] == "open"
+    assert KEY_BINDINGS["h"] == "close"
+    for direction in KEY_BINDINGS.values():
+        assert direction in COMMANDS
 
 
 def test_direction_classification() -> None:
