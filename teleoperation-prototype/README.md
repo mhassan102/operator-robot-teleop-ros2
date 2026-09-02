@@ -1,8 +1,8 @@
 # ROS 2 Teleoperation Prototype
 
 This directory contains the incremental local ROS 2 Humble teleoperation proof
-of concept. Milestone 4 adds a Cartesian arm command vocabulary, heartbeat,
-and a watchdog safety gateway on top of the stamped DDS path from Milestone 3.
+of concept. Milestone 5 drives a 6-DOF Gazebo arm from the Cartesian
+`/cmd_vel_safe` path added in Milestone 4.
 
 ## Milestone 1 quick start
 
@@ -29,6 +29,13 @@ rebuild it explicitly while the project is stopped:
 ./scripts/test_basic.sh
 ./scripts/test_delivery.sh
 ./scripts/test_watchdog.sh
+./scripts/test_sim.sh
+```
+
+Headless Gazebo is the default. For an interactive window (needs X11):
+
+```bash
+./scripts/start.sh --gui
 ```
 
 Publish a Cartesian jog burst:
@@ -47,7 +54,8 @@ Directions: `+x` `x-` `+y` `y-` `+z` `z-` `+roll` `roll-` `+pitch` `pitch-`
 CLI does not treat them as flags. Aliases `forward`/`backward`/`left`/`right`
 map to `+x`/`x-`/`+yaw`/`yaw-`. Gripper is a separate field (`0` closed, `1`
 open). The safety node publishes validated output on `/cmd_vel_safe` and
-`/gripper_safe`. A watchdog zeros the jog if the operator is silent for 500 ms.
+`/gripper_safe`. A Jacobian jogger turns that Twist into joint positions for a
+Gazebo 6-DOF arm. A watchdog zeros the jog if the operator is silent for 500 ms.
 
 The Compose project uses the dedicated `ros2_teleop_poc_net` bridge and does not
 modify unrelated containers. Only the operator container currently receives

@@ -33,9 +33,11 @@ later phase will not be used to hide or work around a failure in an earlier one.
 - Existing Docker workloads must not be stopped, renamed, or modified.
 - The project will use explicit Compose project/container/network names to avoid
   colliding with existing containers.
-- The first simulator target will be a simple differential-drive robot. A
-  minimal custom model is preferred over a full TurtleBot3 stack if it gives a
-  smaller and more reliable Humble/Gazebo dependency set.
+- The first simulator target is a custom 6-DOF arm with a simple gripper, not
+  a differential-drive mobile robot. A minimal custom model is preferred over
+  a full industrial arm / MoveIt stack if it gives a smaller Humble/Gazebo
+  dependency set. MoveIt Servo can be added after the arm moves from
+  `/cmd_vel_safe`.
 - Gazebo will support GUI and headless modes. Headless mode is the required path
   for automated testing; GUI mode is for interactive demonstrations.
 - Network impairment will be applied only to a container's `eth0` on a dedicated
@@ -60,14 +62,14 @@ Host keyboard/display
 |                    robot container                  |
 | receiver -> validation -> watchdog -> safe cmd_vel  |
 |                                      |              |
-| telemetry/ack/image <- Gazebo <- diff-drive plugin  |
+| telemetry/ack/image <- Gazebo <- 6-DOF arm + jogger |
 +-----------------------------------------------------+
 ```
 
 The safety node will be the only remote-control path to the simulator:
 
 ```text
-/teleop/command -> validation/watchdog -> /cmd_vel_safe -> simulator
+/teleop/command -> validation/watchdog -> /cmd_vel_safe -> Cartesian jogger -> Gazebo arm
 ```
 
 Raw remote commands will never be connected directly to the simulated motors.
@@ -277,29 +279,31 @@ Acceptance criteria:
 - Invalid and stale commands never reach `/cmd_vel_safe`.
 - All state changes appear once, clearly, in logs and telemetry.
 
-### Milestone 5: Integrate a lightweight differential-drive simulation
+### Milestone 5: Integrate a 6-DOF arm in Gazebo
 
 Implementation:
 
-1. Add Gazebo Classic compatible with ROS 2 Humble, unless build validation shows
-   a smaller supported simulator is materially more reliable.
-2. Create a minimal world, differential-drive robot, odometry, and camera sensor.
-3. Connect only `/cmd_vel_safe` to the drive plugin.
-4. Publish standard `nav_msgs/msg/Odometry` and TF frames.
-5. Add headless and GUI Compose profiles.
-6. Configure software rendering as the fallback and optional GPU device mapping
-   only when `/dev/dri` is available.
+1. Add Gazebo Classic compatible with ROS 2 Humble, plus `ros2_control` and
+   `gazebo_ros2_control`.
+2. Create a minimal world and a custom 6-DOF arm with a simple gripper. Do not
+   use a differential-drive / TurtleBot model.
+3. Convert `/cmd_vel_safe` Cartesian tool Twist into joint motion with a
+   damped-least-squares Jacobian jogger. Never connect `/teleop/command`
+   directly to Gazebo.
+4. Publish TF (`base_link` → `tool0`) and `/teleop/tool_pose`.
+5. Apply `/gripper_safe` to the gripper joints.
+6. Add headless (required) and GUI Compose/start modes. Use software rendering
+   as the GUI fallback.
 
 Verification and tests:
 
 Headless automated test:
 
-1. Record initial odometry.
-2. Command forward motion for a fixed duration.
-3. Command stop.
-4. Assert position changed beyond a tolerance.
-5. Command rotation and assert yaw changed.
-6. Trigger watchdog and assert velocity approaches zero.
+1. Wait until `/joint_states` and `/teleop/tool_pose` are available.
+2. Record the initial tool pose.
+3. Command `+x` for a fixed duration.
+4. Assert the tool pose changed beyond a tolerance.
+5. Trigger watchdog and assert the tool stops moving.
 
 GUI demonstration:
 
@@ -311,8 +315,8 @@ GUI demonstration:
 Acceptance criteria:
 
 - Simulation reaches a ready/clock-publishing state within a bounded timeout.
-- Scripted forward and turn commands produce measurable odometry changes.
-- Watchdog stops the simulated robot.
+- Scripted Cartesian jogs produce measurable tool-pose changes.
+- Watchdog stops the simulated arm.
 - GUI visibly shows motion when display forwarding is available.
 - All required automated checks also work without the GUI.
 

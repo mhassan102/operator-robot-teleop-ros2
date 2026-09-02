@@ -67,3 +67,15 @@ The test verifies:
 
 Connection policy is `command_or_heartbeat` as documented in
 `config/teleop.yaml`. `heartbeat_only` is covered by unit tests.
+
+## Milestone 5
+
+```bash
+./scripts/start.sh
+./scripts/test_sim.sh
+```
+
+The headless test waits for `/teleop/tool_pose`, records the tool position,
+sends a 2-second `+x` jog, asserts the pose changed, then checks that the
+watchdog stops further motion. `./scripts/start.sh --gui` is optional and
+requires a working `DISPLAY`.

@@ -1,7 +1,15 @@
+import os
+from glob import glob
+
 from setuptools import find_packages, setup
 
 
 package_name = "teleop_demo"
+
+
+def share_files(subdir: str) -> tuple[str, list[str]]:
+    return os.path.join("share", package_name, subdir), glob(os.path.join(subdir, "*"))
+
 
 setup(
     name=package_name,
@@ -10,6 +18,10 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
+        share_files("launch"),
+        share_files("urdf"),
+        share_files("worlds"),
+        share_files("config"),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -23,6 +35,7 @@ setup(
             "operator_command = teleop_demo.operator_command:main",
             "operator_heartbeat = teleop_demo.operator_heartbeat:main",
             "robot_receiver = teleop_demo.robot_receiver:main",
+            "cartesian_jog = teleop_demo.cartesian_jog:main",
         ],
     },
 )

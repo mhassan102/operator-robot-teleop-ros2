@@ -10,18 +10,17 @@ x-ros-service: &ros-service
     ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
     RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
     CYCLONEDDS_URI: file:///teleop/config/cyclonedds.xml
+    DISPLAY: ${DISPLAY:-:0}
+    QT_X11_NO_MITSHM: "1"
+    LIBGL_ALWAYS_SOFTWARE: "1"
+    TELEOP_GAZEBO_GUI: ${TELEOP_GAZEBO_GUI:-false}
   volumes:
     - ./config:/teleop/config:ro
     - ./ros2_ws:/teleop/ros2_ws
+    - /tmp/.X11-unix:/tmp/.X11-unix:rw
   networks:
     - teleop_net
   restart: "no"
-  healthcheck:
-    test: ["CMD", "bash", "-c", "source /opt/ros/humble/setup.bash && ros2 pkg list >/dev/null"]
-    interval: 5s
-    timeout: 5s
-    retries: 12
-    start_period: 5s
 
 services:
   operator:
@@ -31,6 +30,12 @@ services:
     command: ["sleep", "infinity"]
     cap_add:
       - NET_ADMIN
+    healthcheck:
+      test: ["CMD", "bash", "-c", "source /opt/ros/humble/setup.bash && ros2 pkg list >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
 
   robot:
     <<: *ros-service
@@ -39,13 +44,22 @@ services:
     command:
       [
         "ros2",
-        "run",
+        "launch",
         "teleop_demo",
-        "robot_receiver",
-        "--ros-args",
-        "--params-file",
-        "/teleop/config/teleop.yaml",
+        "robot_sim.launch.py",
       ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bash",
+          "-c",
+          "source /opt/ros/humble/setup.bash && source /teleop/ros2_ws/install/setup.bash && ros2 topic list | grep -q /joint_states",
+        ]
+      interval: 5s
+      timeout: 8s
+      retries: 24
+      start_period: 20s
 
 networks:
   teleop_net:

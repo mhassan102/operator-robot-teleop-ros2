@@ -4,6 +4,12 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${project_dir}"
 
+if [[ "${1:-}" == "--gui" ]]; then
+  export TELEOP_GAZEBO_GUI=true
+else
+  export TELEOP_GAZEBO_GUI=false
+fi
+
 if [[ ! -f ros2_ws/install/setup.bash ]] || [[ ! -d ros2_ws/install/teleop_demo_msgs ]]; then
   echo "ROS workspace is not built; performing the workspace build."
   ./scripts/build_workspace.sh
@@ -11,11 +17,15 @@ fi
 
 docker compose up -d operator robot
 
-deadline=$((SECONDS + 90))
+deadline=$((SECONDS + 180))
 while (( SECONDS < deadline )); do
   unhealthy=0
   for service in operator robot; do
     container_id="$(docker compose ps -q "${service}")"
+    if [[ -z "${container_id}" ]]; then
+      unhealthy=1
+      continue
+    fi
     status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container_id}")"
     if [[ "${status}" != "healthy" ]]; then
       unhealthy=1
@@ -30,5 +40,5 @@ done
 
 docker compose ps
 docker compose logs --no-color
-echo "ERROR: containers did not become healthy within 90 seconds" >&2
+echo "ERROR: containers did not become healthy within 180 seconds" >&2
 exit 1

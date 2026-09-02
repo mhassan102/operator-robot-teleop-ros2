@@ -1,0 +1,302 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="teleop_arm">
+  <xacro:arg name="controller_yaml" default=""/>
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.07" length="0.08"/></geometry>
+      <material name="base_mat"><color rgba="0.15 0.15 0.18 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.07" length="0.08"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="2.0"/>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.005"/>
+    </inertial>
+  </link>
+
+  <link name="link1">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.035" length="0.08"/></geometry>
+      <material name="l1"><color rgba="0.85 0.45 0.15 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.035" length="0.08"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.6"/>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.0005"/>
+    </inertial>
+  </link>
+
+  <link name="link2">
+    <visual>
+      <origin xyz="0.10 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.20 0.045 0.045"/></geometry>
+      <material name="l2"><color rgba="0.2 0.45 0.75 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0.10 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.20 0.045 0.045"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.8"/>
+      <origin xyz="0.10 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.0004" ixy="0" ixz="0" iyy="0.003" iyz="0" izz="0.003"/>
+    </inertial>
+  </link>
+
+  <link name="link3">
+    <visual>
+      <origin xyz="0.09 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.18 0.04 0.04"/></geometry>
+      <material name="l3"><color rgba="0.2 0.45 0.75 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0.09 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.18 0.04 0.04"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.6"/>
+      <origin xyz="0.09 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.0003" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.002"/>
+    </inertial>
+  </link>
+
+  <link name="link4">
+    <visual>
+      <origin xyz="0.02 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.04 0.035 0.035"/></geometry>
+      <material name="l4"><color rgba="0.85 0.45 0.15 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0.02 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.04 0.035 0.035"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.2"/>
+      <origin xyz="0.02 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <link name="link5">
+    <visual>
+      <geometry><cylinder radius="0.022" length="0.04"/></geometry>
+      <material name="l5"><color rgba="0.3 0.3 0.32 1"/></material>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.022" length="0.04"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.15"/>
+      <inertia ixx="0.00005" ixy="0" ixz="0" iyy="0.00005" iyz="0" izz="0.00004"/>
+    </inertial>
+  </link>
+
+  <link name="link6">
+    <visual>
+      <origin xyz="0.02 0 0" rpy="0 1.5708 0"/>
+      <geometry><cylinder radius="0.02" length="0.04"/></geometry>
+      <material name="l6"><color rgba="0.3 0.3 0.32 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0.02 0 0" rpy="0 1.5708 0"/>
+      <geometry><cylinder radius="0.02" length="0.04"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.12"/>
+      <inertia ixx="0.00004" ixy="0" ixz="0" iyy="0.00004" iyz="0" izz="0.00003"/>
+    </inertial>
+  </link>
+
+  <link name="tool0">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.04 0.06 0.02"/></geometry>
+      <material name="tool"><color rgba="0.1 0.7 0.35 1"/></material>
+    </visual>
+    <collision>
+      <geometry><box size="0.04 0.06 0.02"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.08"/>
+      <inertia ixx="0.00003" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00003"/>
+    </inertial>
+  </link>
+
+  <link name="finger_left_link">
+    <visual>
+      <origin xyz="0.02 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.04 0.01 0.02"/></geometry>
+      <material name="finger"><color rgba="0.7 0.7 0.7 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0.02 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.04 0.01 0.02"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.02"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <link name="finger_right_link">
+    <visual>
+      <origin xyz="0.02 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.04 0.01 0.02"/></geometry>
+      <material name="finger2"><color rgba="0.7 0.7 0.7 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0.02 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.04 0.01 0.02"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.02"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <joint name="joint1" type="revolute">
+    <parent link="base_link"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0.08" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.8" upper="2.8" effort="80" velocity="2.0"/>
+    <dynamics damping="0.8" friction="0.0"/>
+  </joint>
+  <joint name="joint2" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="0 0 0.08" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.6" upper="1.6" effort="80" velocity="2.0"/>
+    <dynamics damping="0.8" friction="0.0"/>
+  </joint>
+  <joint name="joint3" type="revolute">
+    <parent link="link2"/>
+    <child link="link3"/>
+    <origin xyz="0.20 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.4" upper="2.4" effort="60" velocity="2.0"/>
+    <dynamics damping="0.8" friction="0.0"/>
+  </joint>
+  <joint name="joint4" type="revolute">
+    <parent link="link3"/>
+    <child link="link4"/>
+    <origin xyz="0.18 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.8" upper="1.8" effort="40" velocity="2.0"/>
+    <dynamics damping="0.5" friction="0.0"/>
+  </joint>
+  <joint name="joint5" type="revolute">
+    <parent link="link4"/>
+    <child link="link5"/>
+    <origin xyz="0.04 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.8" upper="2.8" effort="30" velocity="2.0"/>
+    <dynamics damping="0.4" friction="0.0"/>
+  </joint>
+  <joint name="joint6" type="revolute">
+    <parent link="link5"/>
+    <child link="link6"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-2.8" upper="2.8" effort="20" velocity="2.0"/>
+    <dynamics damping="0.3" friction="0.0"/>
+  </joint>
+  <joint name="tool_fixed" type="fixed">
+    <parent link="link6"/>
+    <child link="tool0"/>
+    <origin xyz="0.08 0 0" rpy="0 0 0"/>
+  </joint>
+  <joint name="finger_left" type="prismatic">
+    <parent link="tool0"/>
+    <child link="finger_left_link"/>
+    <origin xyz="0 0.015 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="0.0" upper="0.03" effort="20" velocity="0.05"/>
+  </joint>
+  <joint name="finger_right" type="prismatic">
+    <parent link="tool0"/>
+    <child link="finger_right_link"/>
+    <origin xyz="0 -0.015 0" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <limit lower="0.0" upper="0.03" effort="20" velocity="0.05"/>
+  </joint>
+
+  <ros2_control name="GazeboSystem" type="system">
+    <hardware>
+      <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+    </hardware>
+    <joint name="joint1">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="joint2">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.55</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="joint3">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">-1.15</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="joint4">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.60</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="joint5">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="joint6">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="finger_left">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="finger_right">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+  <gazebo>
+    <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
+      <parameters>$(arg controller_yaml)</parameters>
+    </plugin>
+  </gazebo>
+</robot>

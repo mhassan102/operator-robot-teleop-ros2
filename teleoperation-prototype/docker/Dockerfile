@@ -11,11 +11,21 @@ RUN apt-get update \
         net-tools \
         python3-colcon-common-extensions \
         python3-pip \
+        python3-numpy \
         python3-pytest \
+        ros-humble-controller-manager \
+        ros-humble-forward-command-controller \
+        ros-humble-gazebo-ros-pkgs \
+        ros-humble-gazebo-ros2-control \
         ros-humble-geometry-msgs \
+        ros-humble-joint-state-broadcaster \
+        ros-humble-robot-state-publisher \
         ros-humble-rmw-cyclonedds-cpp \
+        ros-humble-ros2-control \
+        ros-humble-ros2-controllers \
         ros-humble-rosidl-default-generators \
         ros-humble-rosidl-default-runtime \
+        ros-humble-xacro \
         tcpdump \
     && rm -rf /var/lib/apt/lists/*
 
