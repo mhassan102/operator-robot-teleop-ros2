@@ -15,7 +15,7 @@ for service in operator robot; do
 done
 
 echo "Waiting for /teleop/tool_pose..."
-pose_deadline=$((SECONDS + 60))
+pose_deadline=$((SECONDS + 90))
 while (( SECONDS < pose_deadline )); do
   if docker compose exec -T operator \
       /teleop/entrypoint.sh ros2 topic list --no-daemon 2>/dev/null \

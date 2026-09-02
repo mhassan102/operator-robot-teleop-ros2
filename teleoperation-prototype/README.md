@@ -1,8 +1,8 @@
 # ROS 2 Teleoperation Prototype
 
 This directory contains the incremental local ROS 2 Humble teleoperation proof
-of concept. Milestone 5 drives a 6-DOF Gazebo arm from the Cartesian
-`/cmd_vel_safe` path added in Milestone 4.
+of concept. Milestone 7 drives a 6-DOF Gazebo arm with MoveIt Servo from the
+Cartesian `/cmd_vel_safe` path, plus named-pose planning (`home` / `fold`).
 
 ## Milestone 1 quick start
 
@@ -30,6 +30,7 @@ rebuild it explicitly while the project is stopped:
 ./scripts/test_delivery.sh
 ./scripts/test_watchdog.sh
 ./scripts/test_sim.sh
+./scripts/test_named_pose.sh
 ```
 
 Headless Gazebo is the default. For an interactive window (needs X11):
@@ -59,8 +60,15 @@ Directions: `+x` `x-` `+y` `y-` `+z` `z-` `+roll` `roll-` `+pitch` `pitch-`
 CLI does not treat them as flags. Aliases `forward`/`backward`/`left`/`right`
 map to `+x`/`x-`/`+yaw`/`yaw-`. Gripper is a separate field (`0` closed, `1`
 open). The safety node publishes validated output on `/cmd_vel_safe` and
-`/gripper_safe`. A Jacobian jogger turns that Twist into joint positions for a
+`/gripper_safe`. MoveIt Servo turns that Twist into joint trajectories for a
 Gazebo 6-DOF arm. A watchdog zeros the jog if the operator is silent for 500 ms.
+
+Named poses are a separate robot-side service, not a `TeleopCommand` field:
+
+```bash
+./scripts/named_pose.sh fold
+./scripts/named_pose.sh home
+```
 
 The Compose project uses the dedicated `ros2_teleop_poc_net` bridge and does not
 modify unrelated containers. Only the operator container currently receives

@@ -66,13 +66,13 @@ Safety / 500 ms watchdog
    ↓
 /cmd_vel_safe
    ↓
-Jacobian jogger (POC) → later MoveIt Servo
+MoveIt Servo
    ↓
 Gazebo 6-DOF arm  (or hardware on Jetson)
 ```
 
-`Twist` is a **tool rate**, not wheel `cmd_vel`. There is no “go to pose”
-until MoveIt planning (implementation plan M7).
+`Twist` is a **tool rate**, not wheel `cmd_vel`. Named poses (`home` / `fold`)
+are MoveIt goals via `./scripts/named_pose.sh`, not reverse jogs.
 
 ## Keyboard (done)
 
@@ -92,7 +92,7 @@ stale Twist.
 
 ## Remaining product work
 
-1. **MoveIt Servo / planning** — replace homemade Jacobian; named home/fold.
+1. **MoveIt Servo / planning** — done (not committed).
 2. **Zenoh** — replace CycloneDDS; then operator host ↔ Jetson over WAN.
 3. **Monitor** — pose, latency, watchdog (no camera).
 4. **Benchmarking** — local vs WAN latency, loss, watchdog timing.

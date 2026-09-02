@@ -1,0 +1,5 @@
+# Plan and execute a named arm pose (home or fold). Not a TeleopCommand.
+string name
+---
+bool success
+string message

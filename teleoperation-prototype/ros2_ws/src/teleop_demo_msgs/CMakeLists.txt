@@ -11,6 +11,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TeleopAck.msg"
   "msg/TeleopHeartbeat.msg"
   "msg/TeleopState.msg"
+  "srv/GoNamedPose.srv"
   DEPENDENCIES builtin_interfaces geometry_msgs
 )
 

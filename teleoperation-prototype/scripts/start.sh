@@ -17,7 +17,7 @@ fi
 
 docker compose up -d operator robot
 
-deadline=$((SECONDS + 180))
+deadline=$((SECONDS + 240))
 while (( SECONDS < deadline )); do
   unhealthy=0
   for service in operator robot; do
@@ -40,5 +40,5 @@ done
 
 docker compose ps
 docker compose logs --no-color
-echo "ERROR: containers did not become healthy within 180 seconds" >&2
+echo "ERROR: containers did not become healthy within 240 seconds" >&2
 exit 1

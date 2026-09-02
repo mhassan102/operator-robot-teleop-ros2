@@ -58,8 +58,8 @@ services:
         ]
       interval: 5s
       timeout: 8s
-      retries: 24
-      start_period: 20s
+      retries: 36
+      start_period: 45s
 
 networks:
   teleop_net:

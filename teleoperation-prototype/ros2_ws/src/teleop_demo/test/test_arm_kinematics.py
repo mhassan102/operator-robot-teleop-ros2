@@ -1,7 +1,11 @@
 import numpy as np
+import pytest
 
 from teleop_demo.arm_kinematics import (
+    FOLD_POSITION,
     HOME_POSITION,
+    JOINT_LIMITS,
+    NAMED_POSES,
     cartesian_step,
     forward_kinematics,
     gripper_positions,
@@ -40,9 +44,23 @@ def test_slew_limits_rate() -> None:
     current = np.zeros(6)
     target = np.ones(6)
     stepped = slew(current, target, 0.1, 0.8)
-    assert float(np.max(np.abs(stepped))) == 0.08
+    assert float(np.max(np.abs(stepped))) == pytest.approx(0.08)
 
 
 def test_gripper_open_amount() -> None:
     assert gripper_positions(0.0)[0] == 0.0
     assert abs(gripper_positions(1.0)[0] - 0.03) < 1e-9
+
+
+def test_fold_joints_within_limits() -> None:
+    for value, (lower, upper) in zip(FOLD_POSITION, JOINT_LIMITS):
+        assert lower <= float(value) <= upper
+    home, _rotation, _jacobian = forward_kinematics(HOME_POSITION)
+    fold, _fold_rotation, _fold_jacobian = forward_kinematics(FOLD_POSITION)
+    assert float(np.linalg.norm(fold - home)) > 0.05
+
+
+def test_named_poses_include_home_and_fold() -> None:
+    assert list(NAMED_POSES) == ["home", "fold"]
+    assert np.allclose(NAMED_POSES["home"], HOME_POSITION)
+    assert np.allclose(NAMED_POSES["fold"], FOLD_POSITION)

@@ -30,6 +30,11 @@ JOINT_LIMITS = (
 )
 
 HOME_POSITION = np.array([0.0, 0.55, -1.15, 0.60, 0.0, 0.0])
+FOLD_POSITION = np.array([1.2, 0.35, -1.70, 0.80, 0.0, 0.0])
+NAMED_POSES = {
+    "home": HOME_POSITION,
+    "fold": FOLD_POSITION,
+}
 ARM_JOINT_NAMES = (
     "joint1",
     "joint2",

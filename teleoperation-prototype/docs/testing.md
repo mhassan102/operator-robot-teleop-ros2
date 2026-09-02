@@ -79,3 +79,20 @@ The headless test waits for `/teleop/tool_pose`, records the tool position,
 sends a 2-second `+x` jog, asserts the pose changed, then checks that the
 watchdog stops further motion. `./scripts/start.sh --gui` is optional and
 requires a working `DISPLAY`.
+
+## Milestone 7
+
+```bash
+./scripts/start.sh
+./scripts/test_sim.sh
+./scripts/test_named_pose.sh
+```
+
+The named-pose test plans `fold` then `home` through `/teleop/go_named_pose`
+and checks that a `+x` jog still moves the tool afterwards. Keyboard keys and
+`/teleop/command` are unchanged; named poses are a separate service:
+
+```bash
+./scripts/named_pose.sh fold
+./scripts/named_pose.sh home
+```

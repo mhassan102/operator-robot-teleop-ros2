@@ -20,7 +20,7 @@ keyboard / scripted CLI
   -> CycloneDDS on ros2_teleop_poc_net
   -> robot safety + 500 ms watchdog
   -> /cmd_vel_safe
-  -> Jacobian jogger (POC stand-in for MoveIt Servo)
+  -> MoveIt Servo
   -> Gazebo Classic 6-DOF arm
 ```
 
@@ -43,7 +43,7 @@ See `teleoperation-prototype/teleop_gui_steps.txt`.
 | 4 | Cartesian Twist, heartbeat, watchdog | done | done | `0faba42` |
 | 5 | Gazebo 6-DOF arm from `/cmd_vel_safe` | done | done | `4ba8c4e` |
 | 6 | Keyboard teleop | done | done | `fe647cd` |
-| 7 | MoveIt Servo / planning | remaining | remaining | — |
+| 7 | MoveIt Servo / planning | done | remaining | — |
 | 8 | Replace CycloneDDS with Zenoh | remaining | remaining | — |
 | 9 | Operator monitor / telemetry | remaining | remaining | — |
 | 10 | Benchmarking (local and WAN) | remaining | remaining | — |
@@ -95,14 +95,14 @@ Host keyboard + Gazebo GUI
 | robot_receiver: ack, stats, safety, watchdog  |
 |   /cmd_vel_safe  Twist                        |
 |   /gripper_safe  Float64                      |
-| cartesian_jog: Jacobian (POC; MoveIt in M7)   |
+| MoveIt Servo + named poses (home / fold)      |
 | Gazebo Classic 6-DOF arm + gripper            |
 |   /teleop/tool_pose                           |
 +-----------------------------------------------+
 ```
 
 ```text
-/teleop/command -> validate/watchdog -> /cmd_vel_safe -> jogger -> Gazebo joints
+/teleop/command -> validate/watchdog -> /cmd_vel_safe -> Servo -> Gazebo joints
 ```
 
 ## 4. Repository layout (as built)
@@ -191,14 +191,15 @@ CLI `operator_command` remains for automated tests.
 
 ### Milestone 7: MoveIt Servo / planning
 
-- status: **remaining**
+- status: **done** (verified locally; not committed)
 - committed: **remaining**
 
-Replace the homemade Jacobian jogger with **MoveIt Servo** for Cartesian
-streaming (`/cmd_vel_safe` → Servo → joints). Add **MoveIt planning** for
-named poses (home / fold) so “go to bent pose” is a goal, not a reverse jog.
+Replaced the homemade Jacobian jogger with **MoveIt Servo** for Cartesian
+streaming (`/cmd_vel_safe` Twist → `servo_bridge` TwistStamped → Servo →
+`arm_controller` JointTrajectory). Added **MoveIt planning** for named poses
+(`home` / `fold`) via `/teleop/go_named_pose` and `./scripts/named_pose.sh`.
 
-Keep the operator wire (`TeleopCommand`, keyboard) unchanged. Safety still sits
+Operator wire (`TeleopCommand`, keyboard keys) unchanged. Safety still sits
 in front of Servo.
 
 ### Milestone 8: Replace CycloneDDS with Zenoh
@@ -248,9 +249,10 @@ Scripts with clear numbers and logs. No video bandwidth work in this milestone.
 | `/teleop/heartbeat` | operator → robot | `teleop_demo_msgs/TeleopHeartbeat` |
 | `/teleop/ack` | robot → operator | `teleop_demo_msgs/TeleopAck` |
 | `/teleop/state` | robot → operator | `teleop_demo_msgs/TeleopState` |
-| `/cmd_vel_safe` | safety → jogger | `geometry_msgs/Twist` (tool rate) |
-| `/gripper_safe` | safety → jogger | `std_msgs/Float64` |
-| `/teleop/tool_pose` | jogger → all | `geometry_msgs/PoseStamped` |
+| `/cmd_vel_safe` | safety → servo_bridge | `geometry_msgs/Twist` (tool rate) |
+| `/gripper_safe` | safety → servo_bridge | `std_msgs/Float64` |
+| `/teleop/tool_pose` | servo_bridge → all | `geometry_msgs/PoseStamped` |
+| `/teleop/go_named_pose` | operator → robot | `teleop_demo_msgs/srv/GoNamedPose` |
 | `/joint_states` | Gazebo → all | `sensor_msgs/JointState` |
 
 `/odom` and `/camera/image_raw` are not part of the first target.
@@ -261,6 +263,7 @@ Scripts with clear numbers and logs. No video bandwidth work in this milestone.
 - `./scripts/test_delivery.sh` — 20 Hz / 30 s, loss counters, session reset
 - `./scripts/test_watchdog.sh` — safe stop, no stale replay
 - `./scripts/test_sim.sh` — Gazebo tool pose moves and holds
+- `./scripts/test_named_pose.sh` — fold/home planning, then jog still works
 
 ## 8. Definition of done (first target)
 
@@ -270,11 +273,11 @@ keyboard on this Ubuntu host
   -> ROS 2 / Zenoh over WAN
   -> Jetson (Gazebo or hardware arm)
   -> safety + watchdog
-  -> MoveIt Servo (or current jogger until M7)
+  -> MoveIt Servo
   -> arm motion
   -> pose/ack back
   -> measured latency (M10)
 ```
 
-Local keyboard + Gazebo (M0–M6) is already done. Remaining: M7 Servo/planning,
-M8 Zenoh/Jetson WAN, M9 monitor, M10 benchmarks.
+Local keyboard + Gazebo + Servo (M0–M7) is done. Remaining: M8 Zenoh/Jetson WAN,
+M9 monitor, M10 benchmarks.

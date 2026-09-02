@@ -17,3 +17,8 @@ Keys (hold to jog):
   g / h     gripper open / close
   space     stop
   Ctrl-C    quit
+
+Named poses (separate from keyboard; does not use /teleop/command):
+
+  ./scripts/named_pose.sh fold
+  ./scripts/named_pose.sh home

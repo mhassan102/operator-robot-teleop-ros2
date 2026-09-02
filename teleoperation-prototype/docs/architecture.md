@@ -3,7 +3,7 @@
 Milestone 1 defines two logical services built from a common ROS 2 Humble image:
 
 - `operator`: scripted Cartesian jog, heartbeat, and future keyboard/monitor;
-- `robot`: delivery tracking, safety gateway, Cartesian jogger, and Gazebo arm.
+- `robot`: delivery tracking, safety gateway, MoveIt Servo, named-pose planning, and Gazebo arm.
 
 Both use CycloneDDS on a dedicated Docker bridge with ROS domain ID 42 by
 default.
@@ -22,18 +22,23 @@ operator_command / operator_heartbeat
   -> /cmd_vel_safe     [geometry_msgs/Twist]   Cartesian tool jog, never raw
   -> /gripper_safe     [std_msgs/Float64]
   -> /teleop/state     [TeleopState]
-  -> cartesian_jog (damped Jacobian)
+  -> servo_bridge (Twist -> TwistStamped, gripper, TF pose)
+  -> MoveIt Servo
+  -> /arm_controller/joint_trajectory
   -> Gazebo 6-DOF arm + gripper
   -> /teleop/tool_pose [geometry_msgs/PoseStamped]
 ```
+
+Named poses (`home` / `fold`) use `/teleop/go_named_pose` and `move_group`.
+They are not `TeleopCommand` fields. Servo is stopped for the trajectory, then
+started again.
 
 `Twist` is interpreted as a 6-DOF Cartesian **tool rate** (`linear` m/s,
 `angular` rad/s) in `command_frame` (default `tool0`). It is not a wheeled-base
 velocity. The gripper is not part of Twist.
 
-`/cmd_vel_safe` is the only motion output into the simulator. Raw
-`/teleop/command` never reaches Gazebo. MoveIt Servo can replace the Jacobian
-jogger later without changing the operator wire.
+`/cmd_vel_safe` is the only teleop motion input into Servo. Raw
+`/teleop/command` never reaches Gazebo. The operator wire is unchanged from M6.
 
 ## Safety policy
 
