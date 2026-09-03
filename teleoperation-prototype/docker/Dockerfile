@@ -35,6 +35,7 @@ RUN apt-get update \
         ros-humble-moveit-simple-controller-manager \
         ros-humble-robot-state-publisher \
         ros-humble-rmw-cyclonedds-cpp \
+        ros-humble-rmw-zenoh-cpp \
         ros-humble-ros2-control \
         ros-humble-ros2-controllers \
         ros-humble-rosidl-default-generators \
@@ -50,7 +51,7 @@ RUN apt-get update \
 
 ENV DEBIAN_FRONTEND=
 ENV ROS_DOMAIN_ID=42
-ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ENV RMW_IMPLEMENTATION=rmw_zenoh_cpp
 ENV CYCLONEDDS_URI=file:///teleop/config/cyclonedds.xml
 
 WORKDIR /teleop/ros2_ws

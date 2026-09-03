@@ -70,6 +70,14 @@ Named poses are a separate robot-side service, not a `TeleopCommand` field:
 ./scripts/named_pose.sh home
 ```
 
+Default RMW is `rmw_zenoh_cpp`. The robot container runs `rmw_zenohd` on the
+`ros2_teleop_poc_net` bridge; the operator connects as a client to
+`tcp/robot:7447`. To fall back to CycloneDDS:
+
+```bash
+RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ./scripts/start.sh
+```
+
 The Compose project uses the dedicated `ros2_teleop_poc_net` bridge and does not
 modify unrelated containers. Only the operator container currently receives
 `NET_ADMIN`; this will be used later to apply `tc netem` to that container's

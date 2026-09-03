@@ -5,19 +5,20 @@ Read this file first in a new session. Each milestone has:
 - `status`: `done` or `remaining` (code exists and was verified)
 - `committed`: `done` or `remaining` (on `main`)
 
-## 0. Where we stand (2026-09-02)
+## 0. Where we stand (2026-09-03)
 
 **First target (not finished):** keyboard teleoperation from this Ubuntu machine
 over a **WAN**, using **rmw_zenoh**, to an **NVIDIA Jetson** that runs either
 Gazebo or a hardware 6-DOF arm. Camera/video is out of scope for that target.
 
-**Already working locally (Docker, one host, CycloneDDS):**
+**Already working locally (Docker, one host, M0–M7 on `main` at `4d7e38d`;
+M8 step 1 Zenoh verified, not committed):**
 
 ```text
 keyboard / scripted CLI
   -> operator container
   -> TeleopCommand (Twist + seq + stamp + session + gripper)
-  -> CycloneDDS on ros2_teleop_poc_net
+  -> rmw_zenoh_cpp on ros2_teleop_poc_net (robot rmw_zenohd)
   -> robot safety + 500 ms watchdog
   -> /cmd_vel_safe
   -> MoveIt Servo
@@ -43,8 +44,8 @@ See `teleoperation-prototype/teleop_gui_steps.txt`.
 | 4 | Cartesian Twist, heartbeat, watchdog | done | done | `0faba42` |
 | 5 | Gazebo 6-DOF arm from `/cmd_vel_safe` | done | done | `4ba8c4e` |
 | 6 | Keyboard teleop | done | done | `fe647cd` |
-| 7 | MoveIt Servo / planning | done | remaining | — |
-| 8 | Replace CycloneDDS with Zenoh | remaining | remaining | — |
+| 7 | MoveIt Servo / planning | done | done | `4d7e38d` |
+| 8 | Replace CycloneDDS with Zenoh | remaining (step 1 done) | remaining | — |
 | 9 | Operator monitor / telemetry | remaining | remaining | — |
 | 10 | Benchmarking (local and WAN) | remaining | remaining | — |
 
@@ -88,8 +89,9 @@ Host keyboard + Gazebo GUI
 |   /teleop/heartbeat TeleopHeartbeat           |
 +-----------------------+-----------------------+
                         | ROS 2 Humble
-                        | today: CycloneDDS (rmw_cyclonedds_cpp)
-                        | next:  rmw_zenoh (M8)
+                        | today: rmw_zenoh_cpp (robot rmw_zenohd)
+                        | fallback: rmw_cyclonedds_cpp
+                        | next: WAN / Jetson (M8 steps 2–3)
                         v
 +------------- robot container -----------------+
 | robot_receiver: ack, stats, safety, watchdog  |
@@ -191,8 +193,8 @@ CLI `operator_command` remains for automated tests.
 
 ### Milestone 7: MoveIt Servo / planning
 
-- status: **done** (verified locally; not committed)
-- committed: **remaining**
+- status: **done**
+- committed: **done** (`4d7e38d`)
 
 Replaced the homemade Jacobian jogger with **MoveIt Servo** for Cartesian
 streaming (`/cmd_vel_safe` Twist → `servo_bridge` TwistStamped → Servo →
@@ -204,13 +206,18 @@ in front of Servo.
 
 ### Milestone 8: Replace CycloneDDS with Zenoh
 
-- status: **remaining**
+- status: **remaining** (step 1 done locally; steps 2–3 remaining)
 - committed: **remaining**
 
-Switch RMW from `rmw_cyclonedds_cpp` to **`rmw_zenoh_cpp`** (or equivalent
-Humble Zenoh RMW).
+Switch RMW from `rmw_cyclonedds_cpp` to **`rmw_zenoh_cpp`** (Humble apt
+`ros-humble-rmw-zenoh-cpp` 0.1.9).
 
-1. Same two containers on one host, prove keyboard jog still works.
+1. Same two containers on one host, prove keyboard jog still works. **done**
+   (not committed). Robot runs `rmw_zenohd` on TCP 7447; operator is a Zenoh
+   client to `tcp/robot:7447` on `ros2_teleop_poc_net`. Fall back with
+   `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ./scripts/start.sh`. Verified:
+   `test_basic.sh`, `test_watchdog.sh`, named pose, keyboard jog (`start.sh --gui`
+   + `keyboard_teleop`).
 2. Split operator (this machine) and robot (NVIDIA Jetson) across a WAN.
 3. Robot side: Jetson runs Humble + either Gazebo or the hardware arm driver
    behind the same safety node.
@@ -279,5 +286,6 @@ keyboard on this Ubuntu host
   -> measured latency (M10)
 ```
 
-Local keyboard + Gazebo + Servo (M0–M7) is done. Remaining: M8 Zenoh/Jetson WAN,
-M9 monitor, M10 benchmarks.
+Local keyboard + Gazebo + Servo (M0–M7) is done. M8 step 1 (Zenoh between the
+two local containers) is done, not committed. Remaining: M8 steps 2–3
+Zenoh/Jetson WAN, M9 monitor, M10 benchmarks.

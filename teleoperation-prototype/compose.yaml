@@ -1,5 +1,15 @@
 name: ${COMPOSE_PROJECT_NAME:-ros2_teleop_poc}
 
+x-ros-env: &ros-env
+  ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+  RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_zenoh_cpp}
+  CYCLONEDDS_URI: file:///teleop/config/cyclonedds.xml
+  DISPLAY: ${DISPLAY:-:0}
+  QT_X11_NO_MITSHM: "1"
+  LIBGL_ALWAYS_SOFTWARE: "1"
+  TELEOP_GAZEBO_GUI: ${TELEOP_GAZEBO_GUI:-false}
+  TELEOP_RUN_ZENOH_ROUTER: "0"
+
 x-ros-service: &ros-service
   image: ${TELEOP_IMAGE:-ros2-teleop-poc:humble}
   build:
@@ -7,13 +17,7 @@ x-ros-service: &ros-service
     dockerfile: docker/Dockerfile
   init: true
   environment:
-    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
-    RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
-    CYCLONEDDS_URI: file:///teleop/config/cyclonedds.xml
-    DISPLAY: ${DISPLAY:-:0}
-    QT_X11_NO_MITSHM: "1"
-    LIBGL_ALWAYS_SOFTWARE: "1"
-    TELEOP_GAZEBO_GUI: ${TELEOP_GAZEBO_GUI:-false}
+    <<: *ros-env
   volumes:
     - ./config:/teleop/config:ro
     - ./ros2_ws:/teleop/ros2_ws
@@ -27,6 +31,9 @@ services:
     <<: *ros-service
     container_name: ros2-teleop-operator
     hostname: operator
+    environment:
+      <<: *ros-env
+      ZENOH_CONFIG_OVERRIDE: ${ZENOH_CONFIG_OVERRIDE:-mode="client";connect/endpoints=["tcp/robot:7447"]}
     command: ["sleep", "infinity"]
     cap_add:
       - NET_ADMIN
@@ -41,6 +48,9 @@ services:
     <<: *ros-service
     container_name: ros2-teleop-robot
     hostname: robot
+    environment:
+      <<: *ros-env
+      TELEOP_RUN_ZENOH_ROUTER: "1"
     command:
       [
         "ros2",

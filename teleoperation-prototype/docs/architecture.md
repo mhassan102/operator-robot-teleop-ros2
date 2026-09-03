@@ -5,8 +5,10 @@ Milestone 1 defines two logical services built from a common ROS 2 Humble image:
 - `operator`: scripted Cartesian jog, heartbeat, and future keyboard/monitor;
 - `robot`: delivery tracking, safety gateway, MoveIt Servo, named-pose planning, and Gazebo arm.
 
-Both use CycloneDDS on a dedicated Docker bridge with ROS domain ID 42 by
-default.
+Both use **rmw_zenoh_cpp** on a dedicated Docker bridge with ROS domain ID 42
+by default. The robot container runs `rmw_zenohd`; the operator connects as a
+Zenoh client to `tcp/robot:7447`. CycloneDDS remains in the image as a fallback
+(`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`).
 
 ## Command path
 
@@ -14,7 +16,7 @@ default.
 operator_command / operator_heartbeat
   -> /teleop/command   [TeleopCommand: seq, stamp, frame_id, session, Twist, gripper]
   -> /teleop/heartbeat [TeleopHeartbeat]
-  -> CycloneDDS over ros2_teleop_poc_net
+  -> rmw_zenoh_cpp over ros2_teleop_poc_net (robot rmw_zenohd)
   -> robot_command_receiver
         delivery stats + ack
         safety: validate, clamp, watchdog
