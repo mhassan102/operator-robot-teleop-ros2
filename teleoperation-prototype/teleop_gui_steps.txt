@@ -20,5 +20,18 @@ Keys (hold to jog):
 
 Named poses (separate from keyboard; does not use /teleop/command):
 
-  ./scripts/named_pose.sh fold
   ./scripts/named_pose.sh home
+  ./scripts/named_pose.sh fold
+  ./scripts/named_pose.sh ready
+  ./scripts/named_pose.sh observe
+  ./scripts/named_pose.sh pregrasp
+  ./scripts/named_pose.sh retract
+  ./scripts/named_pose.sh stow
+
+  home      known start
+  fold      compact / safe idle
+  ready     mid-reach, start jogging from here
+  observe   wrist up, looking at the table
+  pregrasp  above a pick spot (g opens gripper)
+  retract   pull back after a grasp, holding height
+  stow      parked for shutdown / transport

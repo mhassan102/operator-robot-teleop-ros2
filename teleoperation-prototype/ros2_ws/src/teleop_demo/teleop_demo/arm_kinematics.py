@@ -31,9 +31,19 @@ JOINT_LIMITS = (
 
 HOME_POSITION = np.array([0.0, 0.55, -1.15, 0.60, 0.0, 0.0])
 FOLD_POSITION = np.array([1.2, 0.35, -1.70, 0.80, 0.0, 0.0])
+READY_POSITION = np.array([0.0, 0.45, -1.35, 0.90, 0.0, 0.0])
+OBSERVE_POSITION = np.array([0.0, -0.20, -0.70, 1.70, 0.0, 0.0])
+PREGRASP_POSITION = np.array([0.10, 0.20, -1.00, 1.40, 0.0, 0.0])
+RETRACT_POSITION = np.array([0.0, 0.20, -1.45, 1.50, 0.0, 0.0])
+STOW_POSITION = np.array([2.50, 0.40, -2.20, 1.40, 0.80, 0.0])
 NAMED_POSES = {
     "home": HOME_POSITION,
     "fold": FOLD_POSITION,
+    "ready": READY_POSITION,
+    "observe": OBSERVE_POSITION,
+    "pregrasp": PREGRASP_POSITION,
+    "retract": RETRACT_POSITION,
+    "stow": STOW_POSITION,
 }
 ARM_JOINT_NAMES = (
     "joint1",

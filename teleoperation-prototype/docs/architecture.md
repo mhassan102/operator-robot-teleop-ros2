@@ -31,9 +31,10 @@ operator_command / operator_heartbeat
   -> /teleop/tool_pose [geometry_msgs/PoseStamped]
 ```
 
-Named poses (`home` / `fold`) use `/teleop/go_named_pose` and `move_group`.
-They are not `TeleopCommand` fields. Servo is stopped for the trajectory, then
-started again.
+Named poses (`home`, `fold`, `ready`, `observe`, `pregrasp`, `retract`, `stow`)
+use `/teleop/go_named_pose` and `move_group`. They are not `TeleopCommand`
+fields. Servo is stopped for the trajectory, then started again. Gripper open /
+close stays on the keyboard (`g` / `h`); named poses set arm joints only.
 
 `Twist` is interpreted as a 6-DOF Cartesian **tool rate** (`linear` m/s,
 `angular` rad/s) in `command_frame` (default `tool0`). It is not a wheeled-base

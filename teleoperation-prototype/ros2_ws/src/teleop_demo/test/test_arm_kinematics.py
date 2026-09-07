@@ -6,6 +6,11 @@ from teleop_demo.arm_kinematics import (
     HOME_POSITION,
     JOINT_LIMITS,
     NAMED_POSES,
+    OBSERVE_POSITION,
+    PREGRASP_POSITION,
+    READY_POSITION,
+    RETRACT_POSITION,
+    STOW_POSITION,
     cartesian_step,
     forward_kinematics,
     gripper_positions,
@@ -61,6 +66,35 @@ def test_fold_joints_within_limits() -> None:
 
 
 def test_named_poses_include_home_and_fold() -> None:
-    assert list(NAMED_POSES) == ["home", "fold"]
+    assert list(NAMED_POSES) == [
+        "home",
+        "fold",
+        "ready",
+        "observe",
+        "pregrasp",
+        "retract",
+        "stow",
+    ]
     assert np.allclose(NAMED_POSES["home"], HOME_POSITION)
     assert np.allclose(NAMED_POSES["fold"], FOLD_POSITION)
+    assert np.allclose(NAMED_POSES["ready"], READY_POSITION)
+    assert np.allclose(NAMED_POSES["observe"], OBSERVE_POSITION)
+    assert np.allclose(NAMED_POSES["pregrasp"], PREGRASP_POSITION)
+    assert np.allclose(NAMED_POSES["retract"], RETRACT_POSITION)
+    assert np.allclose(NAMED_POSES["stow"], STOW_POSITION)
+
+
+def test_all_named_poses_within_limits_and_distinct() -> None:
+    xyz = {}
+    for name, joints in NAMED_POSES.items():
+        for value, (lower, upper) in zip(joints, JOINT_LIMITS):
+            assert lower <= float(value) <= upper, name
+        position, _rotation, _jacobian = forward_kinematics(joints)
+        xyz[name] = position
+        if name != "stow":
+            assert position[2] > 0.10, name
+    assert float(np.linalg.norm(xyz["stow"] - xyz["fold"])) > 0.20
+    assert float(np.linalg.norm(xyz["ready"] - xyz["home"])) > 0.04
+    assert xyz["observe"][2] > xyz["pregrasp"][2]
+    assert xyz["retract"][0] < xyz["pregrasp"][0]
+    assert xyz["stow"][0] < 0.0

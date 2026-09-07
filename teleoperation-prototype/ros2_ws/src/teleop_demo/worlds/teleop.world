@@ -1,6 +1,19 @@
 <?xml version="1.0" ?>
 <sdf version="1.7">
   <world name="teleop_arm_world">
+    <!-- Close orbit on the 0.5 m arm + table workspace (default camera is ~7 m out). -->
+    <gui fullscreen="0">
+      <camera name="gzclient_camera">
+        <pose>0.70 -0.55 0.40 0 0.39 2.22</pose>
+        <view_controller>orbit</view_controller>
+        <projection_type>perspective</projection_type>
+      </camera>
+    </gui>
+    <scene>
+      <ambient>0.5 0.5 0.5 1</ambient>
+      <background>0.72 0.76 0.82 1</background>
+      <shadows>false</shadows>
+    </scene>
     <include>
       <uri>model://ground_plane</uri>
     </include>
@@ -13,18 +26,123 @@
       <real_time_factor>1</real_time_factor>
       <real_time_update_rate>1000</real_time_update_rate>
     </physics>
+
+    <!-- Table under the tool, not the elbow: top 0.22 x 0.30 m, top face z=0.08 m, x=0.29..0.51. -->
     <model name="table">
       <static>true</static>
-      <pose>0.90 0 0.18 0 0 0</pose>
+      <pose>0.40 0 0 0 0 0</pose>
       <link name="top">
+        <pose>0 0 0.07 0 0 0</pose>
         <collision name="collision">
-          <geometry><box><size>0.40 0.40 0.40</size></box></geometry>
+          <geometry><box><size>0.22 0.30 0.02</size></box></geometry>
         </collision>
         <visual name="visual">
-          <geometry><box><size>0.40 0.40 0.40</size></box></geometry>
+          <geometry><box><size>0.22 0.30 0.02</size></box></geometry>
           <material>
             <ambient>0.45 0.32 0.18 1</ambient>
             <diffuse>0.55 0.38 0.20 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <link name="leg_fl">
+        <pose>0.09 0.13 0.03 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.02 0.02 0.06</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.02 0.02 0.06</size></box></geometry>
+          <material>
+            <ambient>0.28 0.20 0.12 1</ambient>
+            <diffuse>0.32 0.22 0.13 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <link name="leg_fr">
+        <pose>0.09 -0.13 0.03 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.02 0.02 0.06</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.02 0.02 0.06</size></box></geometry>
+          <material>
+            <ambient>0.28 0.20 0.12 1</ambient>
+            <diffuse>0.32 0.22 0.13 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <link name="leg_rl">
+        <pose>-0.09 0.13 0.03 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.02 0.02 0.06</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.02 0.02 0.06</size></box></geometry>
+          <material>
+            <ambient>0.28 0.20 0.12 1</ambient>
+            <diffuse>0.32 0.22 0.13 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <link name="leg_rr">
+        <pose>-0.09 -0.13 0.03 0 0 0</pose>
+        <collision name="collision">
+          <geometry><box><size>0.02 0.02 0.06</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.02 0.02 0.06</size></box></geometry>
+          <material>
+            <ambient>0.28 0.20 0.12 1</ambient>
+            <diffuse>0.32 0.22 0.13 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Pick objects on the table, ~2.5 cm, static so they stay put for teleop. -->
+    <model name="block_red">
+      <static>true</static>
+      <pose>0.38 0.06 0.0925 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.025 0.025 0.025</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.025 0.025 0.025</size></box></geometry>
+          <material>
+            <ambient>0.7 0.12 0.12 1</ambient>
+            <diffuse>0.85 0.18 0.18 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="block_green">
+      <static>true</static>
+      <pose>0.44 -0.05 0.0925 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.025 0.025 0.025</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.025 0.025 0.025</size></box></geometry>
+          <material>
+            <ambient>0.12 0.55 0.22 1</ambient>
+            <diffuse>0.18 0.7 0.28 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="cylinder_blue">
+      <static>true</static>
+      <pose>0.34 -0.08 0.10 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.012</radius><length>0.04</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.012</radius><length>0.04</length></cylinder></geometry>
+          <material>
+            <ambient>0.12 0.28 0.65 1</ambient>
+            <diffuse>0.18 0.38 0.82 1</diffuse>
           </material>
         </visual>
       </link>

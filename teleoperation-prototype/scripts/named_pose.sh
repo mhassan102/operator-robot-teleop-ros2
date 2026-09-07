@@ -5,8 +5,9 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${project_dir}"
 
 name="${1:-}"
-if [[ "${name}" != "home" && "${name}" != "fold" ]]; then
-  echo "usage: $0 home|fold" >&2
+allowed="home|fold|ready|observe|pregrasp|retract|stow"
+if [[ ! "${name}" =~ ^(home|fold|ready|observe|pregrasp|retract|stow)$ ]]; then
+  echo "usage: $0 ${allowed}" >&2
   exit 1
 fi
 

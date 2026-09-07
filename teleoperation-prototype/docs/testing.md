@@ -88,11 +88,27 @@ requires a working `DISPLAY`.
 ./scripts/test_named_pose.sh
 ```
 
-The named-pose test plans `fold` then `home` through `/teleop/go_named_pose`
-and checks that a `+x` jog still moves the tool afterwards. Keyboard keys and
+The named-pose test plans `fold` then `home` through `/teleop/go_named_pose`,
+then `ready`, `observe`, `pregrasp`, `retract`, `stow`, and `home` again, and
+checks that a `+x` jog still moves the tool afterwards. Keyboard keys and
 `/teleop/command` are unchanged; named poses are a separate service:
 
 ```bash
 ./scripts/named_pose.sh fold
 ./scripts/named_pose.sh home
+./scripts/named_pose.sh ready
+./scripts/named_pose.sh observe
+./scripts/named_pose.sh pregrasp
+./scripts/named_pose.sh retract
+./scripts/named_pose.sh stow
 ```
+
+| Pose | Meaning |
+| --- | --- |
+| `home` | Known start |
+| `fold` | Compact / safe idle |
+| `ready` | Mid-reach, good pose to start jogging from |
+| `observe` | Wrist up, looking at the table |
+| `pregrasp` | Above a pick spot |
+| `retract` | Pull back after a grasp, still holding height |
+| `stow` | Parked for shutdown / transport |

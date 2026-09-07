@@ -1,4 +1,4 @@
-"""Plan and execute named arm poses (home / fold) through MoveIt move_group.
+"""Plan and execute named arm poses through MoveIt move_group.
 
 Pauses Servo so JointTrajectoryController has a single writer, then starts it
 again. Does not change /teleop/command.
@@ -56,7 +56,8 @@ class NamedPose(Node):
         name = request.name.strip().lower()
         if name not in NAMED_POSES:
             response.success = False
-            response.message = f"unknown pose '{request.name}'; use home or fold"
+            allowed = ", ".join(NAMED_POSES)
+            response.message = f"unknown pose '{request.name}'; use {allowed}"
             return response
         if self._busy:
             response.success = False
@@ -132,12 +133,12 @@ class NamedPose(Node):
 
         self.get_logger().info(f"NAMED POSE planning name={name}")
         send_future = self._move.send_goal_async(goal)
-        handle = self._wait(send_future, 5.0)
+        handle = self._wait(send_future, 15.0)
         if handle is None or not handle.accepted:
             return False, f"move_group rejected {name}"
 
         result_future = handle.get_result_async()
-        wrapped = self._wait(result_future, 30.0)
+        wrapped = self._wait(result_future, 45.0)
         if wrapped is None:
             return False, f"move_group timed out on {name}"
         result = wrapped.result

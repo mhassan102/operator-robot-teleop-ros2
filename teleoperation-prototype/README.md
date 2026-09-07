@@ -2,7 +2,8 @@
 
 This directory contains the incremental local ROS 2 Humble teleoperation proof
 of concept. Milestone 7 drives a 6-DOF Gazebo arm with MoveIt Servo from the
-Cartesian `/cmd_vel_safe` path, plus named-pose planning (`home` / `fold`).
+Cartesian `/cmd_vel_safe` path, plus named-pose planning (`home`, `fold`,
+`ready`, `observe`, `pregrasp`, `retract`, `stow`).
 
 ## Milestone 1 quick start
 
@@ -68,7 +69,22 @@ Named poses are a separate robot-side service, not a `TeleopCommand` field:
 ```bash
 ./scripts/named_pose.sh fold
 ./scripts/named_pose.sh home
+./scripts/named_pose.sh ready
+./scripts/named_pose.sh observe
+./scripts/named_pose.sh pregrasp
+./scripts/named_pose.sh retract
+./scripts/named_pose.sh stow
 ```
+
+| Pose | Meaning |
+| --- | --- |
+| `home` | Known start |
+| `fold` | Compact / safe idle |
+| `ready` | Mid-reach, good pose to start jogging from |
+| `observe` | Wrist up, looking at the table |
+| `pregrasp` | Above a pick spot (open gripper with `g` if needed) |
+| `retract` | Pull back after a grasp, still holding height |
+| `stow` | Parked for shutdown / transport |
 
 Default RMW is `rmw_zenoh_cpp`. The robot container runs `rmw_zenohd` on the
 `ros2_teleop_poc_net` bridge; the operator connects as a client to

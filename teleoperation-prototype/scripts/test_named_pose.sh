@@ -75,21 +75,30 @@ read_pose() {
     /teleop/entrypoint.sh timeout 5 ros2 topic echo /teleop/tool_pose --once || true
 }
 
+go_pose() {
+  local name="$1"
+  local out=""
+  echo "Planning to ${name}..."
+  out="$(docker compose exec -T operator \
+    /teleop/entrypoint.sh ros2 service call /teleop/go_named_pose \
+      teleop_demo_msgs/srv/GoNamedPose "{name: ${name}}")"
+  if grep -qiE 'success(: |=)true' <<<"${out}"; then
+    echo "${name} ok"
+    sleep 1
+    return 0
+  fi
+  echo "ERROR: ${name} named pose failed:" >&2
+  echo "${out}" >&2
+  docker compose logs --no-color --tail=80 robot >&2
+  exit 1
+}
+
+go_pose home
 echo "Recording pose at home..."
 before="$(read_pose)"
 before_xyz="$(pose_xyz "${before}")"
 
-echo "Planning to fold..."
-fold_out="$(docker compose exec -T operator \
-  /teleop/entrypoint.sh ros2 service call /teleop/go_named_pose \
-    teleop_demo_msgs/srv/GoNamedPose '{name: fold}')"
-if ! grep -qiE 'success(: |=)true' <<<"${fold_out}"; then
-  echo "ERROR: fold named pose failed:" >&2
-  echo "${fold_out}" >&2
-  docker compose logs --no-color --tail=80 robot >&2
-  exit 1
-fi
-sleep 1
+go_pose fold
 folded="$(read_pose)"
 folded_xyz="$(pose_xyz "${folded}")"
 
@@ -103,17 +112,7 @@ if delta < 0.04:
 print(f"fold moved tool {delta:.4f} m")
 PY
 
-echo "Planning back to home..."
-home_out="$(docker compose exec -T operator \
-  /teleop/entrypoint.sh ros2 service call /teleop/go_named_pose \
-    teleop_demo_msgs/srv/GoNamedPose '{name: home}')"
-if ! grep -qiE 'success(: |=)true' <<<"${home_out}"; then
-  echo "ERROR: home named pose failed:" >&2
-  echo "${home_out}" >&2
-  docker compose logs --no-color --tail=80 robot >&2
-  exit 1
-fi
-sleep 1
+go_pose home
 after="$(read_pose)"
 after_xyz="$(pose_xyz "${after}")"
 
@@ -126,6 +125,11 @@ if delta > 0.05:
     raise SystemExit(f"home did not return near start: {bx, by, bz} -> {ax, ay, az} (delta={delta})")
 print(f"home returned within {delta:.4f} m")
 PY
+
+echo "Planning remaining named poses..."
+for name in ready observe pregrasp retract stow home; do
+  go_pose "${name}"
+done
 
 echo "Checking Servo still jogs after named pose..."
 pre_jog="$(read_pose)"
