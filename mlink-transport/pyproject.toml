@@ -1,0 +1,13 @@
+[project]
+name = "mlink-transport"
+version = "0.1.0"
+description = "Userspace UDP multi-link transport (v1 protocol library)"
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=5.4"]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

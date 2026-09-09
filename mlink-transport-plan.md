@@ -13,20 +13,31 @@ the planner chat. Implement **one stage**, then stop.
 
 **Git branch:** `mlink-support` (do not merge to `main` unless asked)
 
-**Where we stand:** Stage 0 (design) is **done and committed**. Next
-implementation session is **Stage 1 only**.
+**Where we stand:** Stages 0 and 1 are **done and committed**. Next
+implementation session is **Stage 2 only**.
 
 **Exact prompt for the next implementation session:**
 
 ```text
 Read /home/muhammadhassan/robots/mlink-transport-plan.md from the start.
 You are on git branch mlink-support.
-Stage 0 is done. Implement Stage 1 only.
-Do not start Stage 2 or later. Do not change ROS/WebRTC/Compose.
+Stages 0 and 1 are done and committed. Implement Stage 2 only.
+Do not start Stage 3 or later. Do not change ROS/WebRTC/Compose.
+Do not recable Ethernet. Do not use Tailscale as a data path.
 Do not git commit (planner session will verify and commit).
 Do not re-open locked decisions in this file.
-When the Stage 1 tests pass, update the Stage 1 STATUS line to done
-and leave commit: remaining. Stop and show how to run the tests.
+
+Reuse mlink-transport/proto (MlinkSession, load_config). Do not rewrite
+the protocol library. Add a real localhost UDP SocketFactory — no
+SO_BINDTODEVICE (that is Stage 3).
+
+Stage 2 is two OS processes on THIS PC, two UDP port-pairs pretending
+to be eth and wifi (see mlink-transport/config/loopback.yaml). Build
+mlink-op, mlink-edge, and mlink-ping. Keep `cd mlink-transport &&
+python3 -m pytest` green.
+
+When the loopback demo works, update the Stage 2 STATUS line to done
+and leave commit: remaining. Stop and show the exact commands.
 ```
 
 **Planner session (this architecture conversation):** after an
@@ -61,13 +72,13 @@ Update these two keys when a stage finishes. Values are only
 | Stage | What | STATUS | commit |
 | ----- | ---- | ------ | ------ |
 | 0 | Design (this file) | done | done |
-| 1 | Protocol library + unit tests (fake sockets) | remaining | remaining |
+| 1 | Protocol library + unit tests (fake sockets) | done | done |
 | 2 | Two-process localhost loopback + `mlink-ping` | remaining | remaining |
 | 3 | Two machines, real Ethernet + Wi-Fi, cable-pull | remaining | remaining |
 | 4 | Third link `wwan0` in config only | remaining | remaining |
 | 5 | Zenoh/WebRTC localhost integration | remaining | remaining |
 
-**Next to implement:** Stage 1
+**Next to implement:** Stage 2
 
 ---
 
@@ -244,7 +255,7 @@ Stage 1 may keep library + tests only; CLIs can wait until Stage 2.
 offset  size  field
 0       4     magic = b'MLNK'
 4       1     version = 1
-5       1     flags     bit0=heartbeat  bit1=probe
+5       1     flags     bit0=heartbeat  bit1=probe  bit2=echo
 6       1     traffic_class  0=control  1=media
 7       1     path_id   (index into local path table, 0–255)
 8       4     session_id     u32
@@ -252,18 +263,20 @@ offset  size  field
 16      8     timestamp_us   u64  (sender monotonic microseconds)
 24      2     payload_len    u16
 26      2     reserved       u16 = 0
-28–end        payload (payload_len bytes)
+28      4     pad            = 0
+32–end        payload (payload_len bytes)
 ```
+
+Locked in Stage 1 (`mlink-transport/proto/header.py`). Do not change.
 
 - MTU budget: 1500 − 20 (IP) − 8 (UDP) − 32 = 1440 payload. Do not
   fragment. Reject payloads that would exceed this on a path.
 - Dedup key: `(session_id, seq)` — **not** path_id.
-- Heartbeats use the same header, `flags.heartbeat=1`, empty payload,
-  still carry `path_id`. Heartbeats do **not** consume the data `seq`
-  space (use `seq=0` or a separate counter; pick one and test it).
-  Recommended: data seq only increments for app payloads; heartbeats
-  are not delivered to the app and are not stored in the data dedup
-  window.
+- Data `seq` increments only for app payloads. Heartbeats/probes use a
+  **per-path** counter in `seq`, are not delivered to the app, and are
+  not stored in the data dedup window.
+- `bit2=echo`: reply to a heartbeat/probe, carrying the original
+  timestamp so the sender can measure RTT. Echoes are not re-echoed.
 
 ### 7.0.2 Sockets
 
@@ -356,10 +369,11 @@ Stop after each stage unless told to continue.
 
 ### Stage 1 — Protocol library + unit tests (no real NICs)
 
-- **STATUS:** remaining
-- **commit:** remaining
+- **STATUS:** done
+- **commit:** done
 - **Depends on:** Stage 0 (this file)
 - **Where:** operator PC only. No Orin, no Wi-Fi, no Tailscale, no ROS.
+- **Verify:** `cd mlink-transport && python3 -m pytest` — 27 passed.
 
 **Build:**
 
@@ -386,8 +400,11 @@ Compose, git commit.
 `mlink-transport/` how to run tests; header + config schema documented
 in README or this file (keep them matching).
 
-**Code the next session should read:** this file §7 and §8 Stage 1;
-then new files under `mlink-transport/`.
+**Code the next session should read:** this file §8 Stage 2;
+`mlink-transport/README.md`; `mlink-transport/proto/` (especially
+`session.py`, `sockets.py` `SocketFactory`, `config.py`);
+`mlink-transport/config/loopback.yaml`;
+`mlink-transport/docs/stage1_sequence.md`.
 
 ---
 
@@ -396,23 +413,43 @@ then new files under `mlink-transport/`.
 - **STATUS:** remaining
 - **commit:** remaining
 - **Depends on:** Stage 1 tests green
-- **Where:** operator PC only. Two processes, two UDP port pairs
-  pretending to be eth and wifi (`127.0.0.1`).
+- **Where:** operator PC only. Two OS processes, two UDP port pairs
+  pretending to be eth and wifi (`127.0.0.1`). No Orin, no real NICs.
+
+**Reuse (do not rewrite):**
+
+- `MlinkSession` for send-copies / first-good / heartbeats / probes
+- `load_config` / `MlinkConfig` (add a second YAML for the peer side;
+  `loopback.yaml` is one side only)
+- `SocketFactory` protocol — add a **real UDP** implementation
+- `SystemClock` + a run loop that calls `tick()` / `poll()` / `flush()`
 
 **Build:**
 
-- `mlink-edge` and `mlink-op` CLIs (or one binary, two configs)
-- `mlink-ping` (or equivalent): send 1000 datagrams, kill one “path,”
-  measure delivery and gap
-- README commands
+- Real localhost UDP sockets (`bind` + `sendto` / `recvfrom`, non-blocking
+  or short timeout). **No** `SO_BINDTODEVICE`. `ifname` in YAML is ignored.
+- `mlink-op` and `mlink-edge` CLIs (one module + two configs is fine).
+  Each owns one `MlinkSession`. App face is `listen_app` / `send_app`
+  on `127.0.0.1` (already in YAML).
+- Complementary configs: op binds `41001`/`41002` and peers `42001`/`42002`;
+  edge binds `42001`/`42002` and peers `41001`/`41002`. App ports must
+  not collide.
+- `mlink-ping`: send **1000** datagrams into one daemon’s `listen_app`;
+  the far side echoes (tiny reflector on `send_app`, or `mlink-ping --reflect`).
+  Mid-run, **kill one local path** (close/disable that port-pair in
+  mlink, not iptables). Report delivered count, loss, and max inter-arrival
+  gap. Stream must continue on the other path.
+- README: exact commands to run op, edge, ping, and the kill-path demo.
+- Keep Stage 1 `pytest` green. Add Stage 2 tests if they stay off real
+  NICs (localhost UDP in-process or subprocess is OK).
 
-**Do not build:** real `SO_BINDTODEVICE`, Orin deploy, ROS.
+**Do not build:** `SO_BINDTODEVICE`, Orin deploy, Tailscale peers, FEC,
+ROS, default-route changes, Stage 3 hardware.
 
 **Done means:** documented loopback demo; killing one local path does
-not lose the stream (small gap OK); unit tests still green.
+not lose the 1000-datagram stream (small gap OK); unit tests still green.
 
-**Code the next session should read:** `mlink-transport/` library +
-Stage 1 tests; this file §8 Stage 2.
+**Code the next session should read:** files listed above; this contract.
 
 ---
 
@@ -551,10 +588,18 @@ Read `teleoperation-prototype/` and the teleop implementation plan for
 | Path | Owner stage | Notes |
 | ---- | ----------- | ----- |
 | `mlink-transport-plan.md` | 0 | this file |
-| `mlink-transport/` | 1+ | does not exist yet |
-
-When Stage 1 lands, list the actual modules here so Stage 2 does not
-grep the whole repo.
+| `mlink-transport/README.md` | 1 | header, config schema, how to run tests |
+| `mlink-transport/proto/header.py` | 1 | 32-byte encode/decode, `Packet` |
+| `mlink-transport/proto/config.py` | 1 | YAML load; rejects `tailscale0` / `100.x` |
+| `mlink-transport/proto/clock.py` | 1 | `Clock` / `FakeClock` / `SystemClock` |
+| `mlink-transport/proto/sockets.py` | 1 | `FakeNetwork` / `FakeSocketFactory` (no real NICs) |
+| `mlink-transport/proto/path.py` | 1 | up/down, loss, RTT, last-heard |
+| `mlink-transport/proto/dedupe.py` | 1 | first-good `(session, seq)`; late after window |
+| `mlink-transport/proto/scheduler.py` | 1 | all up paths with loss ≤ threshold |
+| `mlink-transport/proto/session.py` | 1 | `MlinkSession`: send copies, poll, tick HB/probe |
+| `mlink-transport/tests/` | 1 | pytest, fake clock + sockets |
+| `mlink-transport/config/` | 1 | `example.yaml`, `loopback.yaml` (one side) |
+| `mlink-transport/docs/stage1_sequence.md` | 1 | sequence diagrams for the library |
 
 ---
 
