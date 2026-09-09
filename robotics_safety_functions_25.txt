@@ -1,0 +1,257 @@
+The 25 Mandatory and Conditional Safety Functions
+=================================================
+Source: diagram of robotics safety functions classified by zone.
+Tags: [MAND] = Mandatory, [COND] = Conditional.
+Note: The source diagram title says "25" functions. The visible boxes total 23.
+      "Speed & Separation Control" has no [MAND]/[COND] tag in the source diagram.
+
+
+ZONE 1 — Stopping & Restart
+---------------------------
+
+1. Normal Stop                          [MAND]
+   Definition:
+     Controlled stop that finishes the current motion cleanly, then holds.
+   Example:
+     Operator hits “Stop cycle” on a pick-and-place arm; the gripper finishes
+     the place, then the arm parks.
+
+2. Protective Stop                      [MAND]
+   Definition:
+     Faster stop when a safety sensor trips, without cutting all power if
+     possible.
+   Example:
+     Light curtain breaks while a cobot is moving; motion stops immediately
+     but servo power stays so it can resume after clear.
+
+3. E-Stop                               [COND]
+   Definition:
+     Hard, immediate stop (often Category 0/1) from a dedicated button or
+     pendant.
+   Example:
+     Teleoperator slams the red button when the remote arm swings toward a
+     person.
+
+4. Start/Restart Interlock              [MAND]
+   Definition:
+     Robot cannot start or resume until a deliberate, safe start action is
+     given.
+   Example:
+     After a protective stop, the arm will not move until the operator presses
+     “Restart” on the teach pendant.
+
+5. Reset                                [COND]
+   Definition:
+     Clears a latched safety fault only after the hazard is gone and a reset
+     is confirmed.
+   Example:
+     After an E-stop, reset is allowed only when all doors are closed and the
+     E-stop is pulled out.
+
+6. Monitored Stationary Position        [COND]
+   Definition:
+     Confirms the robot is truly stopped and stays in that pose.
+   Example:
+     During a tool change, the controller verifies joint velocities are ~0
+     and holds position while a human is nearby.
+
+
+ZONE 2 — Stability & Locomotion
+-------------------------------
+
+7.  Loss-of-Stability Risk Reduction    [COND]
+    Definition:
+      Limits speed, payload, or lean before the platform can tip.
+    Example:
+      A mobile manipulator slows and lowers its arm when the CoM approaches
+      the support polygon.
+
+8.  Dynamic Stability Control           [COND]
+    Definition:
+      Active balancing while moving (braking, posture, wheel torque).
+    Example:
+      A two-wheel or quadruped robot counters a shove by shifting weight and
+      adjusting gait.
+
+9.  Onset-of-Instability Detection      [COND]
+    Definition:
+      Detects early signs of tipping or slip.
+    Example:
+      IMU + wheel slip show the base starting to pitch; the system flags
+      “instability onset.”
+
+10. Unrecoverable Loss-of-Stability Detection  [COND]
+    Definition:
+      Declares that recovery is no longer possible and forces a safe reaction
+      (stop / drop payload / alarm).
+    Example:
+      A forklift AMR is already past the tip-over point; it dumps the lift
+      command and sounds an alarm rather than trying to “drive out of it.”
+
+11. Elevation-Change Detection          [COND]
+    Definition:
+      Detects ramps, curbs, stairs, drop-offs.
+    Example:
+      Depth camera sees a 20 cm drop; navigation refuses that path.
+
+12. Navigation Risk Reduction           [COND]
+    Definition:
+      Slows, reroutes, or stops when the planned path is hazardous.
+    Example:
+      Corridor is crowded; the AMR reduces speed and keeps extra clearance.
+
+
+ZONE 3 — Perception & Collaboration
+-----------------------------------
+
+13. Speed & Separation Control          (tag not shown in source)
+    Definition:
+      Speed drops as a person gets closer (ISO/TS 15066 style).
+    Example:
+      Cobot runs at 250 mm/s when a human is 1.5 m away, and near-zero when
+      they enter the work cell.
+
+14. Contact-Force Limiting              [COND]
+    Definition:
+      Caps force/torque if contact happens.
+    Example:
+      Teleoperated gripper or elbow hits a table; torque sensors cut force
+      below a bruise threshold.
+
+15. Perception Safeguarding             [COND]
+    Definition:
+      Uses cameras/lidar/safety scanners so the robot only moves if the scene
+      is verified safe.
+    Example:
+      3D camera must see a clear zone before the arm is allowed to enter
+      collaborative mode.
+
+
+ZONE 4 — Power & Interfaces
+---------------------------
+
+16. Hazardous Energy Isolation          [MAND]
+    Definition:
+      Disconnects dangerous energy (electrical, pneumatic, hydraulic) for
+      service.
+    Example:
+      LOTO switch kills 48 V and vents air so a technician can change a
+      gripper.
+
+17. Stored-Energy Control               [MAND]
+    Definition:
+      Bleeds or locks residual energy (springs, capacitors, accumulators,
+      raised axes).
+    Example:
+      After power-off, a vertical axis is braked and a gas-spring is locked
+      so it cannot drop.
+
+18. Loss of Power Protection            [MAND]
+    Definition:
+      Safe reaction if mains or battery dies mid-motion.
+    Example:
+      Power cut; brakes engage and the arm does not free-fall onto a person.
+
+19. Minimum-Charge Interlock            [MAND]
+    Definition:
+      Blocks motion or high-risk modes if battery/charge is too low to finish
+      a safe stop.
+    Example:
+      AMR will not leave the dock if SoC is below the reserve needed to return
+      or stop safely.
+
+
+ZONE 5 — System, Fleet & AI
+---------------------------
+
+20. Mode Selection                      [COND]
+    Definition:
+      Explicit, safe switch between Auto / Manual / Teach / Teleop /
+      Maintenance.
+    Example:
+      Teleop is only enabled when the key-switch is in “Remote” and local
+      E-stop is armed.
+
+21. Fleet Safety Command                [MAND]
+    Definition:
+      Central or supervisor command that can stop or constrain many robots
+      at once.
+    Example:
+      Warehouse fleet manager issues “all units protective stop” when an
+      aisle is blocked.
+
+22. AI-Based Safety Control             [COND]
+    Definition:
+      AI planner/policy is constrained or overridden by a safety layer.
+    Example:
+      LLM/vision planner proposes a fast swing; the safety supervisor rejects
+      it because a person is in the swept volume.
+
+23. Attachment/Payload Stability Check  [COND]
+    Definition:
+      Verifies tool/payload mass, CoG, and latch before motion.
+    Example:
+      Arm refuses to lift until the gripper reports “latched” and payload
+      estimate is within the stability table.
+
+
+----------------------------------------------------------------------
+QUICK INDEX BY REQUIREMENT TYPE
+----------------------------------------------------------------------
+
+MANDATORY [MAND]
+  Zone 1: Normal Stop
+  Zone 1: Protective Stop
+  Zone 1: Start/Restart Interlock
+  Zone 4: Hazardous Energy Isolation
+  Zone 4: Stored-Energy Control
+  Zone 4: Loss of Power Protection
+  Zone 4: Minimum-Charge Interlock
+  Zone 5: Fleet Safety Command
+
+CONDITIONAL [COND]
+  Zone 1: E-Stop
+  Zone 1: Reset
+  Zone 1: Monitored Stationary Position
+  Zone 2: Loss-of-Stability Risk Reduction
+  Zone 2: Dynamic Stability Control
+  Zone 2: Onset-of-Instability Detection
+  Zone 2: Unrecoverable Loss-of-Stability Detection
+  Zone 2: Elevation-Change Detection
+  Zone 2: Navigation Risk Reduction
+  Zone 3: Contact-Force Limiting
+  Zone 3: Perception Safeguarding
+  Zone 5: Mode Selection
+  Zone 5: AI-Based Safety Control
+  Zone 5: Attachment/Payload Stability Check
+
+UNTAGGED IN SOURCE DIAGRAM
+  Zone 3: Speed & Separation Control
+
+
+----------------------------------------------------------------------
+FLAT LIST (for parsing / agent use)
+----------------------------------------------------------------------
+Zone 1 | Stopping & Restart            | Normal Stop                         | MAND | Controlled stop that finishes the current motion cleanly, then holds. | Operator hits “Stop cycle” on a pick-and-place arm; the gripper finishes the place, then the arm parks.
+Zone 1 | Stopping & Restart            | Protective Stop                     | MAND | Faster stop when a safety sensor trips, without cutting all power if possible. | Light curtain breaks while a cobot is moving; motion stops immediately but servo power stays so it can resume after clear.
+Zone 1 | Stopping & Restart            | E-Stop                              | COND | Hard, immediate stop (often Category 0/1) from a dedicated button or pendant. | Teleoperator slams the red button when the remote arm swings toward a person.
+Zone 1 | Stopping & Restart            | Start/Restart Interlock             | MAND | Robot cannot start or resume until a deliberate, safe start action is given. | After a protective stop, the arm will not move until the operator presses “Restart” on the teach pendant.
+Zone 1 | Stopping & Restart            | Reset                               | COND | Clears a latched safety fault only after the hazard is gone and a reset is confirmed. | After an E-stop, reset is allowed only when all doors are closed and the E-stop is pulled out.
+Zone 1 | Stopping & Restart            | Monitored Stationary Position       | COND | Confirms the robot is truly stopped and stays in that pose. | During a tool change, the controller verifies joint velocities are ~0 and holds position while a human is nearby.
+Zone 2 | Stability & Locomotion        | Loss-of-Stability Risk Reduction    | COND | Limits speed, payload, or lean before the platform can tip. | A mobile manipulator slows and lowers its arm when the CoM approaches the support polygon.
+Zone 2 | Stability & Locomotion        | Dynamic Stability Control           | COND | Active balancing while moving (braking, posture, wheel torque). | A two-wheel or quadruped robot counters a shove by shifting weight and adjusting gait.
+Zone 2 | Stability & Locomotion        | Onset-of-Instability Detection      | COND | Detects early signs of tipping or slip. | IMU + wheel slip show the base starting to pitch; the system flags “instability onset.”
+Zone 2 | Stability & Locomotion        | Unrecoverable Loss-of-Stability Detection | COND | Declares that recovery is no longer possible and forces a safe reaction (stop / drop payload / alarm). | A forklift AMR is already past the tip-over point; it dumps the lift command and sounds an alarm rather than trying to “drive out of it.”
+Zone 2 | Stability & Locomotion        | Elevation-Change Detection          | COND | Detects ramps, curbs, stairs, drop-offs. | Depth camera sees a 20 cm drop; navigation refuses that path.
+Zone 2 | Stability & Locomotion        | Navigation Risk Reduction           | COND | Slows, reroutes, or stops when the planned path is hazardous. | Corridor is crowded; the AMR reduces speed and keeps extra clearance.
+Zone 3 | Perception & Collaboration    | Speed & Separation Control          | UNTAGGED | Speed drops as a person gets closer (ISO/TS 15066 style). | Cobot runs at 250 mm/s when a human is 1.5 m away, and near-zero when they enter the work cell.
+Zone 3 | Perception & Collaboration    | Contact-Force Limiting              | COND | Caps force/torque if contact happens. | Teleoperated gripper or elbow hits a table; torque sensors cut force below a bruise threshold.
+Zone 3 | Perception & Collaboration    | Perception Safeguarding             | COND | Uses cameras/lidar/safety scanners so the robot only moves if the scene is verified safe. | 3D camera must see a clear zone before the arm is allowed to enter collaborative mode.
+Zone 4 | Power & Interfaces            | Hazardous Energy Isolation          | MAND | Disconnects dangerous energy (electrical, pneumatic, hydraulic) for service. | LOTO switch kills 48 V and vents air so a technician can change a gripper.
+Zone 4 | Power & Interfaces            | Stored-Energy Control               | MAND | Bleeds or locks residual energy (springs, capacitors, accumulators, raised axes). | After power-off, a vertical axis is braked and a gas-spring is locked so it cannot drop.
+Zone 4 | Power & Interfaces            | Loss of Power Protection            | MAND | Safe reaction if mains or battery dies mid-motion. | Power cut; brakes engage and the arm does not free-fall onto a person.
+Zone 4 | Power & Interfaces            | Minimum-Charge Interlock            | MAND | Blocks motion or high-risk modes if battery/charge is too low to finish a safe stop. | AMR will not leave the dock if SoC is below the reserve needed to return or stop safely.
+Zone 5 | System, Fleet & AI            | Mode Selection                      | COND | Explicit, safe switch between Auto / Manual / Teach / Teleop / Maintenance. | Teleop is only enabled when the key-switch is in “Remote” and local E-stop is armed.
+Zone 5 | System, Fleet & AI            | Fleet Safety Command                | MAND | Central or supervisor command that can stop or constrain many robots at once. | Warehouse fleet manager issues “all units protective stop” when an aisle is blocked.
+Zone 5 | System, Fleet & AI            | AI-Based Safety Control             | COND | AI planner/policy is constrained or overridden by a safety layer. | LLM/vision planner proposes a fast swing; the safety supervisor rejects it because a person is in the swept volume.
+Zone 5 | System, Fleet & AI            | Attachment/Payload Stability Check  | COND | Verifies tool/payload mass, CoG, and latch before motion. | Arm refuses to lift until the gripper reports “latched” and payload estimate is within the stability table.
