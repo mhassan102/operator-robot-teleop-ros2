@@ -616,6 +616,7 @@ Read `teleoperation-prototype/` and the teleop implementation plan for
 | `mlink-transport/tests/` | 1 | pytest, fake clock + sockets |
 | `mlink-transport/config/` | 1+2 | `example.yaml`, `loopback.yaml` (op), `loopback-edge.yaml` |
 | `mlink-transport/docs/stage1_sequence.md` | 1 | sequence diagrams for the library |
+| `mlink-transport/docs/stage2_overview.md` | 2 | processes, port-pairs, ping round-trip |
 | `mlink-transport/daemon.py` | 2 | op/edge run loop, app face, `down <path>` control |
 | `mlink-transport/ping.py` | 2 | `mlink-ping` (1000 datagrams, kill-path, `--reflect`) |
 | `mlink-transport/op/` | 2 | `python3 -m op` |

@@ -56,6 +56,8 @@ python3 -m ping --reflect --bind 127.0.0.1:5504 --target 127.0.0.1:5503
 
 Stop the daemons with Ctrl-C.
 
+Ports, both processes, and the ping round-trip: `docs/stage2_overview.md`.
+
 ## Layout
 
 ```text
@@ -68,6 +70,8 @@ mlink-transport/
   tests/                 # unit + localhost UDP
   config/loopback.yaml       # op side (41001/41002 → 42001/42002)
   config/loopback-edge.yaml  # edge side (42001/42002 → 41001/41002)
+  docs/stage1_sequence.md
+  docs/stage2_overview.md    # processes, ports, ping path
 ```
 
 ## Header (v1, 32 bytes, little-endian)
