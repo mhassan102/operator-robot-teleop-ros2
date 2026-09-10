@@ -48,6 +48,30 @@ def test_rejects_100_x_peer() -> None:
         )
 
 
+def test_loopback_yaml_pair_is_complementary() -> None:
+    root = Path(__file__).resolve().parents[1]
+    op = load_config(root / "config" / "loopback.yaml")
+    edge = load_config(root / "config" / "loopback-edge.yaml")
+    assert op.session_id == edge.session_id == 1
+    app_ports = {op.listen_app, op.send_app, edge.listen_app, edge.send_app}
+    assert app_ports == {
+        "127.0.0.1:5501",
+        "127.0.0.1:5502",
+        "127.0.0.1:5503",
+        "127.0.0.1:5504",
+    }
+    assert [p.name for p in op.paths] == ["eth", "wifi"]
+    assert [p.name for p in edge.paths] == ["eth", "wifi"]
+    assert op.paths[0].bind_port == 41001
+    assert op.paths[0].peer_port == 42001
+    assert edge.paths[0].bind_port == 42001
+    assert edge.paths[0].peer_port == 41001
+    assert op.paths[1].bind_port == 41002
+    assert edge.paths[1].bind_port == 42002
+    assert all(p.ifname is None for p in op.paths)
+    assert all(p.ifname is None for p in edge.paths)
+
+
 def test_third_path_is_config_only() -> None:
     cfg = load_config(
         {

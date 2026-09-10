@@ -13,31 +13,29 @@ the planner chat. Implement **one stage**, then stop.
 
 **Git branch:** `mlink-support` (do not merge to `main` unless asked)
 
-**Where we stand:** Stages 0 and 1 are **done and committed**. Next
-implementation session is **Stage 2 only**.
+**Where we stand:** Stages 0–2 are **done and committed**. Next
+implementation session is **Stage 3 only**.
 
 **Exact prompt for the next implementation session:**
 
 ```text
 Read /home/muhammadhassan/robots/mlink-transport-plan.md from the start.
 You are on git branch mlink-support.
-Stages 0 and 1 are done and committed. Implement Stage 2 only.
-Do not start Stage 3 or later. Do not change ROS/WebRTC/Compose.
-Do not recable Ethernet. Do not use Tailscale as a data path.
+Stages 0, 1, and 2 are done and committed. Implement Stage 3 only.
+Do not start Stage 4 or 5. Do not change ROS/WebRTC/Compose.
+Do not use Tailscale as a data path (SSH only).
+Do not change the Linux default route (keep it on Wi-Fi).
 Do not git commit (planner session will verify and commit).
 Do not re-open locked decisions in this file.
 
-Reuse mlink-transport/proto (MlinkSession, load_config). Do not rewrite
-the protocol library. Add a real localhost UDP SocketFactory — no
-SO_BINDTODEVICE (that is Stage 3).
+Reuse mlink-op / mlink-edge / mlink-ping and MlinkSession.
+Add SO_BINDTODEVICE when ifname is set (UdpSocketFactory).
+Stage 3 is operator PC ↔ Orin nvidia-3 on real eth + wifi.
+See this file §8 Stage 3 and §10 lab inventory.
 
-Stage 2 is two OS processes on THIS PC, two UDP port-pairs pretending
-to be eth and wifi (see mlink-transport/config/loopback.yaml). Build
-mlink-op, mlink-edge, and mlink-ping. Keep `cd mlink-transport &&
-python3 -m pytest` green.
-
-When the loopback demo works, update the Stage 2 STATUS line to done
-and leave commit: remaining. Stop and show the exact commands.
+Keep `cd mlink-transport && python3 -m pytest` green.
+When the two-machine cable-pull demo works, update Stage 3 STATUS
+to done and leave commit: remaining. Stop and show the commands.
 ```
 
 **Planner session (this architecture conversation):** after an
@@ -73,12 +71,12 @@ Update these two keys when a stage finishes. Values are only
 | ----- | ---- | ------ | ------ |
 | 0 | Design (this file) | done | done |
 | 1 | Protocol library + unit tests (fake sockets) | done | done |
-| 2 | Two-process localhost loopback + `mlink-ping` | remaining | remaining |
+| 2 | Two-process localhost loopback + `mlink-ping` | done | done |
 | 3 | Two machines, real Ethernet + Wi-Fi, cable-pull | remaining | remaining |
 | 4 | Third link `wwan0` in config only | remaining | remaining |
 | 5 | Zenoh/WebRTC localhost integration | remaining | remaining |
 
-**Next to implement:** Stage 2
+**Next to implement:** Stage 3
 
 ---
 
@@ -410,9 +408,12 @@ in README or this file (keep them matching).
 
 ### Stage 2 — Two-process local loopback
 
-- **STATUS:** remaining
-- **commit:** remaining
+- **STATUS:** done
+- **commit:** done
 - **Depends on:** Stage 1 tests green
+- **Verify:** `cd mlink-transport && python3 -m pytest` — 34 passed
+  (includes 1000-datagram kill-eth subprocess). Loopback demo
+  commands in `mlink-transport/README.md`.
 - **Where:** operator PC only. Two OS processes, two UDP port pairs
   pretending to be eth and wifi (`127.0.0.1`). No Orin, no real NICs.
 
@@ -449,7 +450,9 @@ ROS, default-route changes, Stage 3 hardware.
 **Done means:** documented loopback demo; killing one local path does
 not lose the 1000-datagram stream (small gap OK); unit tests still green.
 
-**Code the next session should read:** files listed above; this contract.
+**Code the next session should read:** this file §8 Stage 3 and §10;
+`mlink-transport/README.md`; `daemon.py`; `ping.py`; `proto/sockets.py`
+(`UdpSocketFactory`); `config/loopback.yaml` + `loopback-edge.yaml`.
 
 ---
 
@@ -457,10 +460,10 @@ not lose the 1000-datagram stream (small gap OK); unit tests still green.
 
 - **STATUS:** remaining
 - **commit:** remaining
-- **Depends on:** Stage 2 loopback demo
+- **Depends on:** Stage 2 loopback demo (committed)
 - **Where:** operator PC ↔ Orin `nvidia-3`
 
-**Hardware (do not recable before this stage):**
+**Hardware (this stage — recable now):**
 
 ```text
 OPERATOR (pure-dev-muhammadhassan)          ORIN (nvidia-3)
@@ -479,6 +482,20 @@ tailscale0 = SSH only (100.95.150.54 / 100.101.94.5)
 - Bind real ifnames. Proof is `path_id` logs + tcpdump on both NICs +
   cable pull, **not** `ip route`.
 
+**Reuse:** Stage 2 `mlink-op` / `mlink-edge` / `mlink-ping` / `MlinkSession`.
+
+**Build:**
+
+- `UdpSocketFactory`: when `ifname` is set, `SO_BINDTODEVICE` on that
+  socket. Document if `CAP_NET_ADMIN` is required. Leave `ifname` unset
+  → same as Stage 2 (plain bind).
+- Operator YAML (`wlo1` + `enx00e04c681cc3`) and Orin YAML (`wlP1p1s0` +
+  `eno1`) with the IPs above. Not `100.x`, not `tailscale0`.
+- README: assign Ethernet IPs without changing default route; copy
+  `mlink-transport/` to Orin; run op here and edge there; `mlink-ping`
+  + cable pull.
+- Keep pytest green. Localhost tests must still pass without NICs.
+
 **Test:** pull Ethernet cable; ping-tool and a dummy ~1 Mbps stream
 keep going on Wi-Fi with a small gap. Log which path each packet used.
 SSH over Wi-Fi/Tailscale must survive the pull.
@@ -486,8 +503,7 @@ SSH over Wi-Fi/Tailscale must survive the pull.
 **Do not:** bond over Tailscale; put Ethernet on the Guest LAN; change
 default route; start ROS/WebRTC.
 
-**Code the next session should read:** Stage 2 CLIs + config examples;
-this file §8 Stage 3 and §10 lab inventory.
+**Code the next session should read:** Stage 2 CLIs + this contract + §10.
 
 ---
 
@@ -560,7 +576,7 @@ Guest Wi-Fi already pings without Tailscale:
 `192.168.222.107` → `192.168.223.251`. Direct SSH:
 `ssh nvidia@192.168.223.251`.
 
-Do not recable until Stage 3. Stages 1–2 need none of this hardware.
+Stages 1–2 needed none of this hardware. Stage 3 recables Ethernet.
 
 ---
 
@@ -588,18 +604,23 @@ Read `teleoperation-prototype/` and the teleop implementation plan for
 | Path | Owner stage | Notes |
 | ---- | ----------- | ----- |
 | `mlink-transport-plan.md` | 0 | this file |
-| `mlink-transport/README.md` | 1 | header, config schema, how to run tests |
+| `mlink-transport/README.md` | 1+2 | header, tests, Stage 2 loopback commands |
 | `mlink-transport/proto/header.py` | 1 | 32-byte encode/decode, `Packet` |
 | `mlink-transport/proto/config.py` | 1 | YAML load; rejects `tailscale0` / `100.x` |
 | `mlink-transport/proto/clock.py` | 1 | `Clock` / `FakeClock` / `SystemClock` |
-| `mlink-transport/proto/sockets.py` | 1 | `FakeNetwork` / `FakeSocketFactory` (no real NICs) |
+| `mlink-transport/proto/sockets.py` | 1+2 | Fake sockets + `UdpSocketFactory` (no `SO_BINDTODEVICE`) |
 | `mlink-transport/proto/path.py` | 1 | up/down, loss, RTT, last-heard |
 | `mlink-transport/proto/dedupe.py` | 1 | first-good `(session, seq)`; late after window |
 | `mlink-transport/proto/scheduler.py` | 1 | all up paths with loss ≤ threshold |
 | `mlink-transport/proto/session.py` | 1 | `MlinkSession`: send copies, poll, tick HB/probe |
 | `mlink-transport/tests/` | 1 | pytest, fake clock + sockets |
-| `mlink-transport/config/` | 1 | `example.yaml`, `loopback.yaml` (one side) |
+| `mlink-transport/config/` | 1+2 | `example.yaml`, `loopback.yaml` (op), `loopback-edge.yaml` |
 | `mlink-transport/docs/stage1_sequence.md` | 1 | sequence diagrams for the library |
+| `mlink-transport/daemon.py` | 2 | op/edge run loop, app face, `down <path>` control |
+| `mlink-transport/ping.py` | 2 | `mlink-ping` (1000 datagrams, kill-path, `--reflect`) |
+| `mlink-transport/op/` | 2 | `python3 -m op` |
+| `mlink-transport/edge/` | 2 | `python3 -m edge` |
+| `mlink-transport/tests/test_stage2.py` | 2 | localhost UDP + subprocess loopback demo |
 
 ---
 

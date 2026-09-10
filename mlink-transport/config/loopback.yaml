@@ -1,5 +1,6 @@
-# Two port-pairs on localhost. Used conceptually for Stage 2; Stage 1
-# builds equivalent configs in tests without running CLIs.
+# Operator side of the Stage 2 localhost loopback.
+# Complementary peer: config/loopback-edge.yaml
+# eth = 41001↔42001, wifi = 41002↔42002. No ifname (no SO_BINDTODEVICE).
 session_id: 1
 listen_app: "127.0.0.1:5501"
 send_app:   "127.0.0.1:5502"
@@ -12,3 +13,4 @@ paths:
     bind_ip: 127.0.0.1
     bind_port: 41002
     peer: 127.0.0.1:42002
+

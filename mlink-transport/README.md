@@ -5,7 +5,9 @@ every live path. The receiver keeps the first good copy and drops the
 rest. No Linux default-route failover, no Tailscale data path.
 
 Stage 1 is the **protocol library and unit tests** (fake clock, fake
-sockets). No real NICs, no CLI daemons, no ROS.
+sockets). Stage 2 is **two OS processes on localhost** (`mlink-op` /
+`mlink-edge`) plus `mlink-ping`. Real UDP, no real NICs, no
+`SO_BINDTODEVICE`.
 
 ## Run tests
 
@@ -17,15 +19,55 @@ cd mlink-transport
 python3 -m pytest
 ```
 
+## Stage 2 loopback demo
+
+Two processes on this PC. Two UDP port-pairs pretend to be eth and wifi
+(`config/loopback.yaml` + `config/loopback-edge.yaml`). No Orin, no
+recable, no Tailscale data path.
+
+From this directory, three terminals:
+
+```bash
+# 1. operator daemon — binds 41001/41002, app 127.0.0.1:5501/5502
+python3 -m op --config config/loopback.yaml --control 127.0.0.1:5510
+```
+
+```bash
+# 2. edge daemon — binds 42001/42002; --reflect echoes payloads back
+python3 -m edge --config config/loopback-edge.yaml --reflect
+```
+
+```bash
+# 3. 1000 datagrams into op listen_app; kill the local eth path mid-run
+python3 -m ping --count 1000 --kill-after 400 --kill-path eth --control 127.0.0.1:5510
+```
+
+`mlink-ping` prints `sent=… delivered=… loss=… max_gap_ms=…` and a JSON
+line. Killing eth closes that localhost port-pair **inside mlink** (not
+iptables). The stream continues on wifi.
+
+To exercise the edge app face instead of `--reflect` on the daemon, in
+place of terminal 2 run edge without `--reflect` and add a reflector:
+
+```bash
+python3 -m edge --config config/loopback-edge.yaml
+python3 -m ping --reflect --bind 127.0.0.1:5504 --target 127.0.0.1:5503
+```
+
+Stop the daemons with Ctrl-C.
+
 ## Layout
 
 ```text
 mlink-transport/
-  proto/          # header, config, dedupe, path table, scheduler, session
-  tests/          # unit tests (fake sockets)
-  config/         # example link lists
-  edge/           # mlink-edge CLI (Stage 2+)
-  op/             # mlink-op CLI (Stage 2+)
+  proto/                 # header, config, dedupe, path table, scheduler, session
+  daemon.py              # shared op/edge run loop (tick / poll / app face)
+  ping.py                # mlink-ping
+  op/                    # python3 -m op
+  edge/                  # python3 -m edge
+  tests/                 # unit + localhost UDP
+  config/loopback.yaml       # op side (41001/41002 → 42001/42002)
+  config/loopback-edge.yaml  # edge side (42001/42002 → 41001/41002)
 ```
 
 ## Header (v1, 32 bytes, little-endian)
@@ -59,11 +101,11 @@ offset  size  field
 
 ```yaml
 session_id: 1
-listen_app: "127.0.0.1:5501"   # from local apps (Stage 2+)
-send_app:   "127.0.0.1:5502"   # to local apps (Stage 2+)
+listen_app: "127.0.0.1:5501"   # from local apps
+send_app:   "127.0.0.1:5502"   # to local apps
 paths:
   - name: eth
-    ifname: enx00e04c681cc3    # optional; ignored until real sockets
+    ifname: enx00e04c681cc3    # optional; ignored until Stage 3
     bind_ip: 192.168.10.1
     bind_port: 46000           # optional; defaults to peer port
     peer: 192.168.10.2:46000
@@ -80,7 +122,10 @@ Defaults (overridable in YAML): heartbeat 100 ms, down after 300 ms
 silence, probe at 1 Hz while down, exclude a path from **data** when
 inbound heartbeat loss > 20% over the last 20 heartbeats.
 
-## Stage 1 behavior
+Stage 2 loopback uses `127.0.0.1` and two port-pairs, no `ifname`. App
+ports on op and edge must not collide.
+
+## Behavior
 
 - Send: increment data seq, copy on every **up** path with loss ≤
   threshold. Down / too-lossy paths are not given data copies.
@@ -90,11 +135,13 @@ inbound heartbeat loss > 20% over the last 20 heartbeats.
   is marked down and probed at 1 Hz until it is heard again.
 - Control and media are separate queues; flush always drains control
   first so media cannot block it.
-- `SO_BINDTODEVICE` / real UDP is Stage 2–3. Stage 1 injects
-  `FakeClock` and `FakeNetwork`. Binding a real `ifname` may need
-  `CAP_NET_ADMIN` (sometimes documented as `CAP_NET_RAW`); that is not
-  required for these tests.
+- Stage 2: real localhost UDP (`UdpSocketFactory`). `ifname` is ignored.
+  Kill a path with UDP text `down <name>` on `--control` (closes that
+  socket; does not use iptables).
+- `SO_BINDTODEVICE` / real NICs are Stage 3. Binding a real `ifname` may
+  need `CAP_NET_ADMIN` (sometimes documented as `CAP_NET_RAW`).
 
-## Not in Stage 1
+## Not in Stage 2
 
-CLI daemons (`mlink-edge` / `mlink-op`), real NICs, FEC, ROS, Compose.
+`SO_BINDTODEVICE`, Orin deploy, Tailscale peers, FEC, ROS, Compose,
+default-route changes.

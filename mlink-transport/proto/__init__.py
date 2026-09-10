@@ -22,7 +22,13 @@ from proto.header import (
 from proto.path import Path
 from proto.scheduler import eligible_paths
 from proto.session import MlinkSession
-from proto.sockets import FakeNetwork, FakeSocketFactory, drop_heartbeats, spaced_drop
+from proto.sockets import (
+    FakeNetwork,
+    FakeSocketFactory,
+    UdpSocketFactory,
+    drop_heartbeats,
+    spaced_drop,
+)
 
 __all__ = [
     "FLAG_ECHO",
@@ -47,6 +53,7 @@ __all__ = [
     "PathConfig",
     "PayloadTooLarge",
     "SystemClock",
+    "UdpSocketFactory",
     "decode",
     "drop_heartbeats",
     "eligible_paths",

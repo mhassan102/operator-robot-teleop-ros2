@@ -1,7 +1,11 @@
-"""Fake UDP sockets and an in-memory network for Stage 1 tests."""
+"""UDP sockets: fake in-memory (Stage 1) and real localhost (Stage 2).
+
+Stage 2 binds + sendto/recvfrom. `ifname` is ignored; SO_BINDTODEVICE is Stage 3.
+"""
 
 from __future__ import annotations
 
+import socket
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
@@ -171,3 +175,79 @@ class FakeSocketFactory:
     def create(self, path: PathConfig) -> FakeSocket:
         port = path.bind_port if path.bind_port is not None else path.peer_port
         return self.network.bind(path.bind_ip, port, path.name)
+
+
+class UdpSocket:
+    """Non-blocking real UDP. No SO_BINDTODEVICE."""
+
+    def __init__(
+        self,
+        sock: socket.socket,
+        *,
+        bind_addr: tuple[str, int],
+        link: str,
+    ) -> None:
+        self._sock = sock
+        self.bind_addr = bind_addr
+        self.link = link
+        self._closed = False
+
+    def sendto(self, data: bytes, addr: tuple[str, int]) -> int:
+        if self._closed:
+            return 0
+        try:
+            return self._sock.sendto(data, addr)
+        except OSError:
+            # ICMP port-unreachable after a peer close, or a closed fd.
+            return 0
+
+    def recvfrom(self) -> tuple[bytes, tuple[str, int]] | None:
+        if self._closed:
+            return None
+        try:
+            data, addr = self._sock.recvfrom(65535)
+        except BlockingIOError:
+            return None
+        except OSError:
+            return None
+        return data, (addr[0], int(addr[1]))
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+    def fileno(self) -> int:
+        if self._closed:
+            return -1
+        try:
+            return self._sock.fileno()
+        except OSError:
+            return -1
+
+
+class UdpSocketFactory:
+    """Real UDP SocketFactory. Stage 2: localhost only; ifname is ignored."""
+
+    def __init__(self) -> None:
+        self._created: list[UdpSocket] = []
+
+    def create(self, path: PathConfig) -> UdpSocket:
+        port = path.bind_port if path.bind_port is not None else path.peer_port
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Stage 3 will SO_BINDTODEVICE when ifname is set. Not here.
+        sock.bind((path.bind_ip, port))
+        sock.setblocking(False)
+        udp = UdpSocket(sock, bind_addr=(path.bind_ip, port), link=path.name)
+        self._created.append(udp)
+        return udp
+
+    def close(self) -> None:
+        for sock in self._created:
+            sock.close()
+        self._created.clear()

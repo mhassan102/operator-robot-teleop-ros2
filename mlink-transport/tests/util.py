@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import socket
+
 from proto.clock import FakeClock
 from proto.config import MlinkConfig, PathConfig
 from proto.session import MlinkSession
@@ -65,6 +67,22 @@ def settle(*nodes: MlinkSession) -> dict[int, list[bytes]]:
         for n in nodes:
             got[id(n)].extend(n.poll())
     return got
+
+
+def reserve_udp_ports(n: int) -> list[int]:
+    """Pick `n` free localhost UDP ports (best-effort; tiny bind race)."""
+    socks: list[socket.socket] = []
+    ports: list[int] = []
+    try:
+        for _ in range(n):
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.bind(("127.0.0.1", 0))
+            ports.append(int(s.getsockname()[1]))
+            socks.append(s)
+    finally:
+        for s in socks:
+            s.close()
+    return ports
 
 
 def pump(

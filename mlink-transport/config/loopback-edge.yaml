@@ -1,0 +1,14 @@
+# Edge side of the Stage 2 localhost loopback (peer of loopback.yaml).
+# App ports do not collide with the operator side.
+session_id: 1
+listen_app: "127.0.0.1:5503"
+send_app:   "127.0.0.1:5504"
+paths:
+  - name: eth
+    bind_ip: 127.0.0.1
+    bind_port: 42001
+    peer: 127.0.0.1:41001
+  - name: wifi
+    bind_ip: 127.0.0.1
+    bind_port: 42002
+    peer: 127.0.0.1:41002
