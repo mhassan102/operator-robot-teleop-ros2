@@ -104,6 +104,24 @@ def run_reflect(bind: tuple[str, int], target: tuple[str, int]) -> int:
         sock.close()
 
 
+def _print_progress(
+    sent: int,
+    arrivals: dict[int, float],
+    times: list[float],
+    t0: float,
+) -> None:
+    delivered = sum(1 for s in range(1, sent + 1) if s in arrivals)
+    loss = 0.0 if sent == 0 else 1.0 - (delivered / sent)
+    gaps = [t1 - t0_ for t0_, t1 in zip(times, times[1:])]
+    max_gap_ms = (max(gaps) * 1000.0) if gaps else 0.0
+    elapsed_s = time.monotonic() - t0
+    print(
+        f"… sent={sent} delivered={delivered} loss={loss:.4f} "
+        f"max_gap_ms={max_gap_ms:.3f} elapsed_s={elapsed_s:.1f}",
+        flush=True,
+    )
+
+
 def run_ping(
     *,
     bind: tuple[str, int],
@@ -142,24 +160,39 @@ def run_ping(
 
         kill_reply = None
         t0 = time.monotonic()
-        for seq in range(1, count + 1):
-            sock.sendto(_payload(seq, payload_size), target)
-            if kill_after is not None and seq == kill_after and kill_path and control:
-                kill_reply = _send_kill(control, kill_path)
-            _recv_until(sock, 0.0, on_data)
-            if interval_s > 0:
-                _recv_until(sock, interval_s, on_data)
+        last_status = t0
+        sent = 0
+        try:
+            seq = 0
+            while True:
+                seq += 1
+                sock.sendto(_payload(seq, payload_size), target)
+                sent = seq
+                if kill_after is not None and seq == kill_after and kill_path and control:
+                    kill_reply = _send_kill(control, kill_path)
+                _recv_until(sock, 0.0, on_data)
+                if interval_s > 0:
+                    _recv_until(sock, interval_s, on_data)
+                if count > 0 and seq >= count:
+                    break
+                if count == 0:
+                    now = time.monotonic()
+                    if now - last_status >= 1.0:
+                        last_status = now
+                        _print_progress(sent, arrivals, times, t0)
+        except KeyboardInterrupt:
+            print("mlink-ping: stopped (Ctrl-C)", flush=True)
         _recv_until(sock, wait_s, on_data)
         elapsed_s = time.monotonic() - t0
     finally:
         sock.close()
 
-    delivered = sum(1 for s in range(1, count + 1) if s in arrivals)
-    loss = 0.0 if count == 0 else 1.0 - (delivered / count)
+    delivered = sum(1 for s in range(1, sent + 1) if s in arrivals)
+    loss = 0.0 if sent == 0 else 1.0 - (delivered / sent)
     gaps = [t1 - t0_ for t0_, t1 in zip(times, times[1:])]
     max_gap_ms = (max(gaps) * 1000.0) if gaps else 0.0
     report = {
-        "sent": count,
+        "sent": sent,
         "delivered": delivered,
         "loss": round(loss, 6),
         "max_gap_ms": round(max_gap_ms, 3),
@@ -169,7 +202,7 @@ def run_ping(
         "kill_reply": kill_reply,
     }
     print(
-        f"sent={count} delivered={delivered} loss={loss:.4f} "
+        f"sent={sent} delivered={delivered} loss={loss:.4f} "
         f"max_gap_ms={max_gap_ms:.3f}"
         + (
             f" kill={kill_path} after={kill_after} reply={kill_reply}"
@@ -194,7 +227,12 @@ def main(argv: list[str] | None = None) -> int:
         default="127.0.0.1:5501",
         help="daemon listen_app (op by default; edge listen_app with --reflect)",
     )
-    parser.add_argument("--count", type=int, default=1000)
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=1000,
+        help="datagrams to send; 0 = run until Ctrl-C",
+    )
     parser.add_argument("--interval-ms", type=float, default=1.0)
     parser.add_argument("--payload-size", type=int, default=16)
     parser.add_argument("--wait-ms", type=float, default=500.0)
@@ -222,8 +260,8 @@ def main(argv: list[str] | None = None) -> int:
     target = parse_addr(args.target)
     if args.reflect:
         return run_reflect(bind, target)
-    if args.count < 1:
-        parser.error("--count must be >= 1")
+    if args.count < 0:
+        parser.error("--count must be >= 0 (0 = until Ctrl-C)")
     if args.payload_size < 4:
         parser.error("--payload-size must be >= 4")
     if args.kill_path and not args.control:

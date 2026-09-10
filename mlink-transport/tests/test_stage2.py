@@ -101,7 +101,7 @@ def _pump_until(a: MlinkSession, b: MlinkSession, timeout: float) -> list[bytes]
     return got
 
 
-def test_udp_factory_ignores_ifname() -> None:
+def test_udp_factory_ifname_none_is_plain_bind() -> None:
     port = reserve_udp_ports(1)[0]
     cfg = PathConfig(
         name="eth",
@@ -109,13 +109,15 @@ def test_udp_factory_ignores_ifname() -> None:
         bind_port=port,
         peer_ip="127.0.0.1",
         peer_port=1,
-        ifname="this_iface_does_not_exist",
+        ifname=None,
     )
     factory = UdpSocketFactory()
     try:
         sock = factory.create(cfg)
         assert sock.bind_addr == ("127.0.0.1", port)
+        assert sock.ifname is None
         assert sock.fileno() >= 0
+        assert sock.bound_device() in (None, "")
     finally:
         factory.close()
 

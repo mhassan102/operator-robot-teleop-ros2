@@ -54,6 +54,9 @@ class MlinkSession:
         self._seq = 0
         self._q_control: deque[tuple[bytes, int]] = deque()
         self._q_media: deque[tuple[bytes, int]] = deque()
+        # First-good winners this poll: (path_name, path_id, seq)
+        self.last_poll_winners: list[tuple[str, int, int]] = []
+        self.delivered_by_path: dict[str, int] = {p.name: 0 for p in self.paths}
 
     @property
     def session_id(self) -> int:
@@ -170,6 +173,7 @@ class MlinkSession:
             by_seq[pkt.seq].append((path, pkt))
 
         delivered: list[bytes] = []
+        self.last_poll_winners = []
         # Preserve first-seen order of seqs in this poll.
         for seq, copies in by_seq.items():
             got_ids = {p.path_id for p, _ in copies}
@@ -178,7 +182,12 @@ class MlinkSession:
                     path.observe_data_outcome(path.path_id in got_ids)
             first_pkt = copies[0][1]
             if self.dedupe.observe(seq) == "deliver":
+                winner = copies[0][0]
                 delivered.append(first_pkt.payload)
+                self.last_poll_winners.append((winner.name, winner.path_id, seq))
+                self.delivered_by_path[winner.name] = (
+                    self.delivered_by_path.get(winner.name, 0) + 1
+                )
         return delivered
 
     def _emit(self, payload: bytes, traffic_class: int) -> int:

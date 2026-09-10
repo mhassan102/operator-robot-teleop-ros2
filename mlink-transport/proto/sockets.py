@@ -1,10 +1,12 @@
-"""UDP sockets: fake in-memory (Stage 1) and real localhost (Stage 2).
+"""UDP sockets: fake in-memory (Stage 1) and real UDP (Stage 2–3).
 
-Stage 2 binds + sendto/recvfrom. `ifname` is ignored; SO_BINDTODEVICE is Stage 3.
+Stage 2: bind + sendto/recvfrom; `ifname` unset → plain bind.
+Stage 3: when `ifname` is set, SO_BINDTODEVICE on that socket.
 """
 
 from __future__ import annotations
 
+import errno
 import socket
 from collections import deque
 from dataclasses import dataclass, field
@@ -177,8 +179,55 @@ class FakeSocketFactory:
         return self.network.bind(path.bind_ip, port, path.name)
 
 
+def bind_to_device(sock: socket.socket, ifname: str) -> None:
+    """SO_BINDTODEVICE so this socket cannot leave `ifname`.
+
+    Leave `ifname` unset in YAML to skip this (Stage 2 localhost).
+    May need CAP_NET_ADMIN (or CAP_NET_RAW on older kernels). This lab's
+    Ubuntu/Orin allow it unprivileged; EPERM means grant those caps, e.g.
+    `sudo setcap cap_net_admin,cap_net_raw+ep $(readlink -f $(command -v python3))`.
+    """
+    if not ifname:
+        return
+    opt = getattr(socket, "SO_BINDTODEVICE", None)
+    if opt is None:
+        raise OSError(
+            getattr(errno, "EOPNOTSUPP", errno.ENOTSUP),
+            "SO_BINDTODEVICE is not available; leave ifname unset for plain bind",
+        )
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, opt, ifname.encode("ascii"))
+    except OSError as exc:
+        extra = ""
+        if exc.errno == errno.EPERM:
+            extra = (
+                " Need CAP_NET_ADMIN (CAP_NET_RAW on older kernels). "
+                "Grant with setcap on python3 or run with those capabilities. "
+                "Leave ifname unset to skip (Stage 2 bind)."
+            )
+        elif exc.errno == errno.ENODEV:
+            extra = f" Interface {ifname!r} does not exist."
+        raise OSError(
+            exc.errno,
+            f"SO_BINDTODEVICE {ifname!r} failed: {exc.strerror}.{extra}",
+        ) from exc
+
+
+def bound_device_name(sock: socket.socket) -> str | None:
+    """Interface name this UDP socket is bound to, or None."""
+    opt = getattr(socket, "SO_BINDTODEVICE", None)
+    if opt is None:
+        return None
+    try:
+        raw = sock.getsockopt(socket.SOL_SOCKET, opt, 16)
+    except OSError:
+        return None
+    name = raw.split(b"\0", 1)[0].decode("ascii", errors="replace")
+    return name or None
+
+
 class UdpSocket:
-    """Non-blocking real UDP. No SO_BINDTODEVICE."""
+    """Non-blocking real UDP. SO_BINDTODEVICE when factory was given ifname."""
 
     def __init__(
         self,
@@ -186,10 +235,12 @@ class UdpSocket:
         *,
         bind_addr: tuple[str, int],
         link: str,
+        ifname: str | None = None,
     ) -> None:
         self._sock = sock
         self.bind_addr = bind_addr
         self.link = link
+        self.ifname = ifname
         self._closed = False
 
     def sendto(self, data: bytes, addr: tuple[str, int]) -> int:
@@ -229,9 +280,14 @@ class UdpSocket:
         except OSError:
             return -1
 
+    def bound_device(self) -> str | None:
+        if self._closed:
+            return None
+        return bound_device_name(self._sock)
+
 
 class UdpSocketFactory:
-    """Real UDP SocketFactory. Stage 2: localhost only; ifname is ignored."""
+    """Real UDP SocketFactory. SO_BINDTODEVICE when path.ifname is set."""
 
     def __init__(self) -> None:
         self._created: list[UdpSocket] = []
@@ -239,11 +295,30 @@ class UdpSocketFactory:
     def create(self, path: PathConfig) -> UdpSocket:
         port = path.bind_port if path.bind_port is not None else path.peer_port
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        # Stage 3 will SO_BINDTODEVICE when ifname is set. Not here.
-        sock.bind((path.bind_ip, port))
-        sock.setblocking(False)
-        udp = UdpSocket(sock, bind_addr=(path.bind_ip, port), link=path.name)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if path.ifname:
+                bind_to_device(sock, path.ifname)
+            sock.bind((path.bind_ip, port))
+            sock.setblocking(False)
+        except OSError as exc:
+            sock.close()
+            if exc.errno == errno.EADDRNOTAVAIL:
+                iface = f" on {path.ifname}" if path.ifname else ""
+                raise OSError(
+                    exc.errno,
+                    f"Cannot bind {path.bind_ip}:{port}{iface}: that address "
+                    f"is not assigned on this machine. Run `ip -br addr` and "
+                    f"set bind_ip in this YAML (and the peer's `peer:` for "
+                    f"this path) to the live address.",
+                ) from exc
+            raise
+        udp = UdpSocket(
+            sock,
+            bind_addr=(path.bind_ip, port),
+            link=path.name,
+            ifname=path.ifname,
+        )
         self._created.append(udp)
         return udp
 

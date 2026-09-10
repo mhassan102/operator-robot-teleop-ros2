@@ -1,0 +1,18 @@
+# Operator PC (pure-dev-muhammadhassan) — Stage 3 real NICs.
+# Complementary peer: config/lab-edge.yaml (Orin nvidia-3).
+# IPs must match `ip -br addr` on this machine. Not 100.x, not tailscale0.
+# Default route stays on Wi-Fi (wlo1). Ethernet is a /24 on the USB dongle only.
+session_id: 1
+listen_app: "127.0.0.1:5501"
+send_app:   "127.0.0.1:5502"
+paths:
+  - name: eth
+    ifname: enx00e04c681cc3
+    bind_ip: 192.168.108.1
+    bind_port: 46000
+    peer: 192.168.108.120:46000
+  - name: wifi
+    ifname: wlo1
+    bind_ip: 192.168.222.139
+    bind_port: 46000
+    peer: 192.168.223.44:46000

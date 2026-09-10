@@ -13,29 +13,29 @@ the planner chat. Implement **one stage**, then stop.
 
 **Git branch:** `mlink-support` (do not merge to `main` unless asked)
 
-**Where we stand:** Stages 0–2 are **done and committed**. Next
-implementation session is **Stage 3 only**.
+**Where we stand:** Stages 0–3 are **done and committed**. Next
+implementation session is **Stage 4 only**.
 
 **Exact prompt for the next implementation session:**
 
 ```text
 Read /home/muhammadhassan/robots/mlink-transport-plan.md from the start.
 You are on git branch mlink-support.
-Stages 0, 1, and 2 are done and committed. Implement Stage 3 only.
-Do not start Stage 4 or 5. Do not change ROS/WebRTC/Compose.
+Stages 0, 1, 2, and 3 are done and committed. Implement Stage 4 only.
+Do not start Stage 5. Do not change ROS/WebRTC/Compose.
 Do not use Tailscale as a data path (SSH only).
 Do not change the Linux default route (keep it on Wi-Fi).
 Do not git commit (planner session will verify and commit).
 Do not re-open locked decisions in this file.
 
-Reuse mlink-op / mlink-edge / mlink-ping and MlinkSession.
-Add SO_BINDTODEVICE when ifname is set (UdpSocketFactory).
-Stage 3 is operator PC ↔ Orin nvidia-3 on real eth + wifi.
-See this file §8 Stage 3 and §10 lab inventory.
+Reuse mlink-op / mlink-edge / mlink-ping and SO_BINDTODEVICE.
+Stage 4 is a third path in YAML only (USB 5G / wwan0 on the Orin).
+See this file §8 Stage 4 and §10 lab inventory. Match live IPs from
+config/lab-op.yaml and config/lab-edge.yaml (or ip -br addr).
 
 Keep `cd mlink-transport && python3 -m pytest` green.
-When the two-machine cable-pull demo works, update Stage 3 STATUS
-to done and leave commit: remaining. Stop and show the commands.
+When the three-path cable-pull / path-down demo works, update Stage 4
+STATUS to done and leave commit: remaining. Stop and show the commands.
 ```
 
 **Planner session (this architecture conversation):** after an
@@ -72,11 +72,11 @@ Update these two keys when a stage finishes. Values are only
 | 0 | Design (this file) | done | done |
 | 1 | Protocol library + unit tests (fake sockets) | done | done |
 | 2 | Two-process localhost loopback + `mlink-ping` | done | done |
-| 3 | Two machines, real Ethernet + Wi-Fi, cable-pull | remaining | remaining |
+| 3 | Two machines, real Ethernet + Wi-Fi, cable-pull | done | done |
 | 4 | Third link `wwan0` in config only | remaining | remaining |
 | 5 | Zenoh/WebRTC localhost integration | remaining | remaining |
 
-**Next to implement:** Stage 3
+**Next to implement:** Stage 4
 
 ---
 
@@ -458,27 +458,37 @@ not lose the 1000-datagram stream (small gap OK); unit tests still green.
 
 ### Stage 3 — Two machines, Ethernet + Wi-Fi
 
-- **STATUS:** remaining
-- **commit:** remaining
+- **STATUS:** done
+- **commit:** done
 - **Depends on:** Stage 2 loopback demo (committed)
+- **Verify:** `cd mlink-transport && python3 -m pytest` — 40 passed.
+  Cable-pull analog (`nmcli device disconnect enx00e04c681cc3`): 2000/2000
+  delivered, loss 0, max_gap_ms 262; `eth` down, stream continued on
+  `wifi`; default route stayed on `wlo1`; SSH
+  `nvidia@192.168.223.44` survived. Live bind/peer IPs are in
+  `config/lab-op.yaml` and `config/lab-edge.yaml` (match `ip -br addr`;
+  Guest DHCP and the USB-eth `/24` are not the snapshot in §10).
 - **Where:** operator PC ↔ Orin `nvidia-3`
 
 **Hardware (this stage — recable now):**
 
 ```text
 OPERATOR (pure-dev-muhammadhassan)          ORIN (nvidia-3)
-wlo1  192.168.222.107  -- Guest Wi-Fi --    wlP1p1s0  192.168.223.251
-USB-eth enx00e04c681cc3 192.168.10.1 --cable-- eno1  192.168.10.2
+wlo1  192.168.222.139  -- Guest Wi-Fi --    wlP1p1s0  192.168.223.44
+USB-eth enx00e04c681cc3 192.168.108.1 --cable-- eno1  192.168.108.120
 tailscale0 = SSH only (100.95.150.54 / 100.101.94.5)
 ```
 
+Live YAML: `config/lab-op.yaml` / `config/lab-edge.yaml` (re-check
+`ip -br addr` if DHCP moved).
+
 - Plug USB-Ethernet dongle on this PC into Orin `eno1`.
-- Static `/24` on that cable (`192.168.10.0/24`). **Not** the Guest
-  subnet `192.168.222.0/23`.
-- Linux default route **stays on Wi-Fi**. Do not make `192.168.10.0/24`
+- Static `/24` on that cable (`192.168.108.0/24` in this lab). **Not**
+  the Guest subnet `192.168.222.0/23`.
+- Linux default route **stays on Wi-Fi**. Do not make `192.168.108.0/24`
   the default.
 - Keep Tailscale up for `ssh nvidia@nvidia-3`. Also keep
-  `ssh nvidia@192.168.223.251` as a second SSH path.
+  `ssh nvidia@192.168.223.44` as a second SSH path.
 - Bind real ifnames. Proof is `path_id` logs + tcpdump on both NICs +
   cable pull, **not** `ip route`.
 
@@ -503,7 +513,9 @@ SSH over Wi-Fi/Tailscale must survive the pull.
 **Do not:** bond over Tailscale; put Ethernet on the Guest LAN; change
 default route; start ROS/WebRTC.
 
-**Code the next session should read:** Stage 2 CLIs + this contract + §10.
+**Code the next session should read:** this file §8 Stage 4 and §10;
+`config/lab-op.yaml` / `lab-edge.yaml`; `proto/sockets.py`;
+`docs/stage3_overview.md`; `mlink-transport/README.md` Stage 3 section.
 
 ---
 
@@ -511,11 +523,13 @@ default route; start ROS/WebRTC.
 
 - **STATUS:** remaining
 - **commit:** remaining
-- **Depends on:** Stage 3 cable-pull pass
+- **Depends on:** Stage 3 cable-pull pass (committed)
 - **Where:** USB 5G dongle on the **Orin**, interface `wwan0` (name
   may vary). Operator does not need a dongle.
 
-Add the path **in config only**. Repeat cable-pull / path-down tests.
+Add the path **in config only** (no protocol change). Repeat cable-pull
+/ path-down tests: eth down and/or wifi down, stream continues on the
+remaining path(s) including LTE.
 
 Do **not** start ROS/WebRTC integration in this stage.
 
@@ -554,29 +568,29 @@ session.
 
 ## 10. Lab inventory (checked in planner session)
 
-Operator PC `pure-dev-muhammadhassan`:
+Operator PC `pure-dev-muhammadhassan` (Stage 3 lab, live YAML):
 
 | If | Addr | Role |
 | -- | ---- | ---- |
-| `wlo1` | `192.168.222.107/23` Guest | mlink wifi path (Stage 3); Linux default route; SSH underlay |
-| `enx00e04c681cc3` | down, no carrier | USB Ethernet; Stage 3 cable to Orin `eno1` |
+| `wlo1` | `192.168.222.139` Guest | mlink wifi path; Linux default route; SSH underlay |
+| `enx00e04c681cc3` | `192.168.108.1/24` | USB Ethernet cable to Orin `eno1` |
 | `tailscale0` | `100.95.150.54` | SSH only |
 
 Orin `nvidia-3`:
 
 | If | Addr | Role |
 | -- | ---- | ---- |
-| `wlP1p1s0` | `192.168.223.251/23` Guest | mlink wifi path |
-| `eno1` | down, no carrier | Stage 3 Ethernet |
+| `wlP1p1s0` | `192.168.223.44` Guest | mlink wifi path |
+| `eno1` | `192.168.108.120/24` | Stage 3 Ethernet |
 | `tailscale0` | `100.101.94.5` | SSH only (`ssh nvidia@nvidia-3`) |
 | `wwan0` | absent | Stage 4 dongle (not installed) |
 | `usb0`/`usb1` | gadget ports | **not** a modem |
 
-Guest Wi-Fi already pings without Tailscale:
-`192.168.222.107` → `192.168.223.251`. Direct SSH:
-`ssh nvidia@192.168.223.251`.
+Guest DHCP and the USB-eth `/24` can change; **authoritative live
+peers** are `config/lab-op.yaml` and `config/lab-edge.yaml`. Direct SSH:
+`ssh nvidia@192.168.223.44`. Re-check `ip -br addr` before Stage 4.
 
-Stages 1–2 needed none of this hardware. Stage 3 recables Ethernet.
+Default route stays on Wi-Fi. Ethernet is link-local `/24` only.
 
 ---
 
@@ -604,17 +618,17 @@ Read `teleoperation-prototype/` and the teleop implementation plan for
 | Path | Owner stage | Notes |
 | ---- | ----------- | ----- |
 | `mlink-transport-plan.md` | 0 | this file |
-| `mlink-transport/README.md` | 1+2 | header, tests, Stage 2 loopback commands |
+| `mlink-transport/README.md` | 1+2+3 | tests, loopback demo, two-machine cable-pull |
 | `mlink-transport/proto/header.py` | 1 | 32-byte encode/decode, `Packet` |
 | `mlink-transport/proto/config.py` | 1 | YAML load; rejects `tailscale0` / `100.x` |
 | `mlink-transport/proto/clock.py` | 1 | `Clock` / `FakeClock` / `SystemClock` |
-| `mlink-transport/proto/sockets.py` | 1+2 | Fake sockets + `UdpSocketFactory` (no `SO_BINDTODEVICE`) |
+| `mlink-transport/proto/sockets.py` | 1+2+3 | Fake sockets + `UdpSocketFactory`; `SO_BINDTODEVICE` when `ifname` set |
 | `mlink-transport/proto/path.py` | 1 | up/down, loss, RTT, last-heard |
 | `mlink-transport/proto/dedupe.py` | 1 | first-good `(session, seq)`; late after window |
 | `mlink-transport/proto/scheduler.py` | 1 | all up paths with loss ≤ threshold |
 | `mlink-transport/proto/session.py` | 1 | `MlinkSession`: send copies, poll, tick HB/probe |
 | `mlink-transport/tests/` | 1 | pytest, fake clock + sockets |
-| `mlink-transport/config/` | 1+2 | `example.yaml`, `loopback.yaml` (op), `loopback-edge.yaml` |
+| `mlink-transport/config/` | 1+2+3 | `example.yaml`, loopback pair, `lab-op.yaml`, `lab-edge.yaml` |
 | `mlink-transport/docs/stage1_sequence.md` | 1 | sequence diagrams for the library |
 | `mlink-transport/docs/stage2_overview.md` | 2 | processes, port-pairs, ping round-trip |
 | `mlink-transport/daemon.py` | 2 | op/edge run loop, app face, `down <path>` control |
@@ -622,6 +636,10 @@ Read `teleoperation-prototype/` and the teleop implementation plan for
 | `mlink-transport/op/` | 2 | `python3 -m op` |
 | `mlink-transport/edge/` | 2 | `python3 -m edge` |
 | `mlink-transport/tests/test_stage2.py` | 2 | localhost UDP + subprocess loopback demo |
+| `mlink-transport/tests/test_stage3.py` | 3 | `SO_BINDTODEVICE` (`lo` / missing iface); lab YAML pair |
+| `mlink-transport/docs/stage3_overview.md` | 3 | two machines, bind-to-device, cable pull |
+| `mlink-transport/config/lab-op.yaml` | 3 | operator `wlo1` + `enx00e04c681cc3` |
+| `mlink-transport/config/lab-edge.yaml` | 3 | Orin `wlP1p1s0` + `eno1` |
 
 ---
 

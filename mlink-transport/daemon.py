@@ -133,7 +133,8 @@ def run(
         config.send_app,
         reflect,
         ", ".join(
-            f"{p.name} {p.bind_ip}:{p.bind_port}->{p.peer_ip}:{p.peer_port}"
+            f"{p.name} if={p.ifname or '-'} "
+            f"{p.bind_ip}:{p.bind_port}->{p.peer_ip}:{p.peer_port}"
             for p in session.paths
         ),
     )
@@ -180,7 +181,15 @@ def run(
 
             session.tick()
             delivered = session.poll()
-            for payload in delivered:
+            for payload, winner in zip(delivered, session.last_poll_winners):
+                name, path_id, seq = winner
+                log.debug(
+                    "first-good seq=%s path=%s path_id=%s bytes=%s",
+                    seq,
+                    name,
+                    path_id,
+                    len(payload),
+                )
                 if reflect:
                     try:
                         session.send(payload)
@@ -210,9 +219,10 @@ def run(
                 bits = []
                 for p in session.paths:
                     rtt = "n/a" if p.rtt_us is None else f"{p.rtt_us / 1000:.2f}ms"
+                    wins = session.delivered_by_path.get(p.name, 0)
                     bits.append(
                         f"{p.name}={'up' if p.up else 'down'} "
-                        f"loss={p.loss():.2f} rtt={rtt}"
+                        f"loss={p.loss():.2f} rtt={rtt} win={wins}"
                     )
                 log.info("stats %s", " ".join(bits))
     finally:
