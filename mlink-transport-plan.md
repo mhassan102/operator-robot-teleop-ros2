@@ -11,31 +11,44 @@ the planner chat. Implement **one stage**, then stop.
 
 ## Session handoff (read this first)
 
-**Git branch:** `mlink-support` (do not merge to `main` unless asked)
+**Git branch:** `mlink-support` (merged to `main` when this pause landed).
 
-**Where we stand:** Stages 0–3 are **done and committed**. Next
-implementation session is **Stage 4 only**.
+**Where we stand:** Stages 0–3 are **done**. **Do not start Stage 4 or
+Stage 5.** Both are blocked. A new session that is not explicitly
+unblocking one of them must stop after reading this file.
 
-**Exact prompt for the next implementation session:**
+| Stage | Blocked on | Resume when |
+| ----- | ---------- | ----------- |
+| 4 | USB 4G/5G dongle not received | Dongle is on the Orin and has an address |
+| 5 | Operator service redesign | Backend daemon + web console/video shape is decided |
+
+**Do not implement a blocked stage.** No code, no YAML third path, no
+ROS/WebRTC wiring, no “while we wait” extras.
+
+**Resume prompts (use only after the blocker is gone):**
+
+Stage 4 — dongle arrived:
 
 ```text
 Read /home/muhammadhassan/robots/mlink-transport-plan.md from the start.
-You are on git branch mlink-support.
-Stages 0, 1, 2, and 3 are done and committed. Implement Stage 4 only.
-Do not start Stage 5. Do not change ROS/WebRTC/Compose.
-Do not use Tailscale as a data path (SSH only).
-Do not change the Linux default route (keep it on Wi-Fi).
-Do not git commit (planner session will verify and commit).
-Do not re-open locked decisions in this file.
+Stages 0–3 are done. Stage 4 is unblocked: USB 5G/4G dongle is on the Orin.
+Implement Stage 4 only. Do not start Stage 5.
+Do not change ROS/WebRTC/Compose. Tailscale is SSH only.
+Do not change the Linux default route. Do not git commit unless asked.
+Reuse mlink-op / mlink-edge / mlink-ping. Add wwan0 (or the real ifname)
+in YAML only. Repeat path-down tests. Keep pytest green.
+When done: STATUS done, commit remaining. Stop and show commands.
+```
 
-Reuse mlink-op / mlink-edge / mlink-ping and SO_BINDTODEVICE.
-Stage 4 is a third path in YAML only (USB 5G / wwan0 on the Orin).
-See this file §8 Stage 4 and §10 lab inventory. Match live IPs from
-config/lab-op.yaml and config/lab-edge.yaml (or ip -br addr).
+Stage 5 — operator service design is decided:
 
-Keep `cd mlink-transport && python3 -m pytest` green.
-When the three-path cable-pull / path-down demo works, update Stage 4
-STATUS to done and leave commit: remaining. Stop and show the commands.
+```text
+Read /home/muhammadhassan/robots/mlink-transport-plan.md from the start.
+Stages 0–3 are done. Stage 4 may still be blocked; skip it if still blocked.
+Stage 5 is unblocked: operator service design is decided
+(backend daemon + web console with video). Implement Stage 5 only
+against that design. Apps talk to mlink on 127.0.0.1. Do not rewrite
+mlink. Do not git commit unless asked. Stop after Stage 5.
 ```
 
 **Planner session (this architecture conversation):** after an
@@ -59,13 +72,15 @@ implementation session finishes a stage, come back here to:
   `commit: remaining`, list files changed, list test commands, stop.
 - If a previous stage’s code is missing or tests fail, **stop** and
   report that. Do not silently redo earlier stages.
+- If Stage 4 or 5 is **blocked**, do not implement it. Wait for the
+  resume prompt above.
 
 ---
 
 ## Status board
 
-Update these two keys when a stage finishes. Values are only
-`remaining` or `done`.
+Update STATUS when a stage finishes or is paused. Values: `remaining`,
+`done`, or `blocked`.
 
 | Stage | What | STATUS | commit |
 | ----- | ---- | ------ | ------ |
@@ -73,10 +88,11 @@ Update these two keys when a stage finishes. Values are only
 | 1 | Protocol library + unit tests (fake sockets) | done | done |
 | 2 | Two-process localhost loopback + `mlink-ping` | done | done |
 | 3 | Two machines, real Ethernet + Wi-Fi, cable-pull | done | done |
-| 4 | Third link `wwan0` in config only | remaining | remaining |
-| 5 | Zenoh/WebRTC localhost integration | remaining | remaining |
+| 4 | Third link `wwan0` in config only | blocked (no dongle) | remaining |
+| 5 | Operator apps on localhost in front of mlink | blocked (operator service redesign) | remaining |
 
-**Next to implement:** Stage 4
+**Next to implement:** nothing until a blocker is lifted. Do not start
+Stage 4 or 5 in a new session.
 
 ---
 
@@ -521,31 +537,49 @@ default route; start ROS/WebRTC.
 
 ### Stage 4 — Third link
 
-- **STATUS:** remaining
+- **STATUS:** blocked (USB 4G/5G dongle not received)
 - **commit:** remaining
-- **Depends on:** Stage 3 cable-pull pass (committed)
-- **Where:** USB 5G dongle on the **Orin**, interface `wwan0` (name
+- **Depends on:** Stage 3 cable-pull pass (committed) **and** a modem
+  on the Orin
+- **Where:** USB 5G/4G dongle on the **Orin**, interface `wwan0` (name
   may vary). Operator does not need a dongle.
 
-Add the path **in config only** (no protocol change). Repeat cable-pull
-/ path-down tests: eth down and/or wifi down, stream continues on the
-remaining path(s) including LTE.
+**Why blocked:** no radio in the lab. Path C is already tested in
+Stage 1. This stage is plug dongle → put `ifname` + IPs in YAML →
+re-test path-down. No protocol rewrite.
 
-Do **not** start ROS/WebRTC integration in this stage.
+**When unblocked:** add the path **in config only**. Repeat cable-pull
+/ path-down: eth down and/or wifi down, stream continues on the
+remaining path(s) including LTE. 5G is often CGNAT — the operator may
+need a reachable address (or a relay). That is config/ops, not a new
+library.
+
+Do **not** start ROS/WebRTC / operator-app integration in this stage.
 
 ---
 
-### Stage 5 — Integration (later, separate approval)
+### Stage 5 — Integration (blocked on operator service design)
 
-- **STATUS:** remaining
+- **STATUS:** blocked (operator service redesign)
 - **commit:** remaining
-- **Depends on:** Stages 1–4 pass **and** explicit user approval
+- **Depends on:** Stages 1–3 (Stage 4 optional if still no dongle)
+  **and** a decided operator app shape **and** explicit user approval
 
-Localhost ports in front of Zenoh and WebRTC. Robot container unchanged
-except “send to mlink localhost.”
+**Why blocked:** operator side may become a backend daemon plus a web
+console with video. Wiring today’s ROS/Zenoh/WebRTC layout into mlink
+now would couple the transport to a structure that will change.
 
-This stage does **not** require 5G. Do not start it in a Stage 4
-session.
+mlink’s contract stays: apps send/recv opaque UDP on `127.0.0.1`. It
+does not care whether that app is the current Compose stack or a later
+backend + browser.
+
+**When unblocked:** put those localhost ports in front of mlink. Do not
+rewrite `mlink-transport/` except app-facing ports/docs. Robot container
+unchanged except “send to mlink localhost.” Stage 4 (5G) is **not**
+required for this if the dongle is still missing.
+
+Do not start this stage in a Stage 4 session, or while the operator
+service design is still open.
 
 ---
 
@@ -560,9 +594,11 @@ session.
 
 **Stage 3:** cable pull on real eth+wifi; stream continues; SSH stays up.
 
-**Stage 4:** third path from config; no Compose changes.
+**Stage 4:** blocked until dongle; then third path from config; no
+Compose changes.
 
-**Stage 5:** only after written approval.
+**Stage 5:** blocked until operator service design (backend + web
+console/video) is decided, then written approval.
 
 ---
 
