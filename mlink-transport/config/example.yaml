@@ -1,0 +1,19 @@
+# Operator-side example (Stage 3 hardware). Stage 1 tests use fake sockets
+# and do not bind these interfaces.
+session_id: 1
+listen_app: "127.0.0.1:5501"   # from local apps (Stage 2+)
+send_app:   "127.0.0.1:5502"   # to local apps (Stage 2+)
+paths:
+  - name: eth
+    ifname: enx00e04c681cc3    # operator; Orin uses eno1
+    bind_ip: 192.168.10.1
+    peer: 192.168.10.2:46000
+  - name: wifi
+    ifname: wlo1
+    bind_ip: 192.168.222.107
+    peer: 192.168.223.251:46000
+  # Stage 4:
+  # - name: lte
+  #   ifname: wwan0
+  #   bind_ip: ...
+  #   peer: ...

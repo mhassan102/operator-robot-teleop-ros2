@@ -1,0 +1,17 @@
+# Orin nvidia-3 — Stage 3 real NICs. Peer of config/lab-op.yaml.
+# Copy mlink-transport/ here (e.g. /home/nvidia/hassan/mlink-transport).
+# IPs must match `ip -br addr` on the Orin. Not 100.x, not tailscale0.
+session_id: 1
+listen_app: "127.0.0.1:5503"
+send_app:   "127.0.0.1:5504"
+paths:
+  - name: eth
+    ifname: eno1
+    bind_ip: 192.168.108.120
+    bind_port: 46000
+    peer: 192.168.108.1:46000
+  - name: wifi
+    ifname: wlP1p1s0
+    bind_ip: 192.168.223.44
+    bind_port: 46000
+    peer: 192.168.222.139:46000
