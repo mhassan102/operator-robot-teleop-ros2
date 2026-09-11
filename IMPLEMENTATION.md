@@ -74,7 +74,7 @@ robots/
   teleoperation-prototype/  # ROS 2 operator + robot (Compose, Gazebo, Servo)
     docs/                   # architecture, POC plan, GUI steps, tests
   mlink-transport/          # userspace UDP bonding
-    docs/plan.md            # stage 0–5 contracts
+    README.md               # stage 0–5 contracts (default doc)
   safety/                   # 25-function coverage; Zone 1 plan (on hold)
   video/                    # lab WebRTC notes; encoder tree not in git yet
 ```
@@ -305,7 +305,7 @@ plane is mlink in F8, not Zenoh-across-the-internet).
 
 Protocol library, loopback daemons, real eth+wifi, cable-pull.
 
-**Read:** `mlink-transport/README.md`, `mlink-transport/docs/plan.md`.
+**Read:** `mlink-transport/README.md` (plan), `mlink-transport/docs/usage.md` (how to run).
 **Verify:** `cd mlink-transport && python3 -m pytest`.
 
 Do not change the protocol header or locked mlink decisions.
@@ -540,10 +540,10 @@ browser → backend (HTTP/WS, local WebRTC)
 and (if F6 is in) video continue on Wi-Fi; SSH over Wi-Fi/Tailscale
 still works; pytest still green.
 
-**Read:** `mlink-transport/docs/plan.md` Stage 5; this section; F5
+**Read:** `mlink-transport/README.md` Stage 5; this section; F5
 backend listen ports.
 
-**Resume only with the Stage 5 prompt in `mlink-transport/docs/plan.md`
+**Resume only with the Stage 5 prompt in `mlink-transport/README.md`
 plus this F8 section.**
 
 ---
@@ -553,7 +553,7 @@ plus this F8 section.**
 Config-only third path on the Orin (`wwan0` or the real ifname).
 No protocol change. No ROS/WebRTC work in that session.
 
-**Read / resume:** `mlink-transport/docs/plan.md` Stage 4.
+**Read / resume:** `mlink-transport/README.md` Stage 4.
 
 ---
 
@@ -780,13 +780,13 @@ asked.
 
 ### F8 — mlink Stage 5
 
-Use the Stage 5 prompt in `mlink-transport/docs/plan.md` **and**
+Use the Stage 5 prompt in `mlink-transport/README.md` **and**
 read F8 in this file (localhost UDP control/media, no Zenoh-through-
 mlink, no mlink rewrite).
 
 ### F9 — 5G dongle
 
-Use the Stage 4 prompt in `mlink-transport/docs/plan.md`.
+Use the Stage 4 prompt in `mlink-transport/README.md`.
 
 ### F10 — Safety-A (only after user unblocks)
 

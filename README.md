@@ -17,7 +17,7 @@ board, target architecture, feature contracts, and session prompts.
 | ---- | ---- |
 | [`IMPLEMENTATION.md`](IMPLEMENTATION.md) | Product plan (root, this is the high-level doc) |
 | [`teleoperation-prototype/`](teleoperation-prototype/) | ROS 2 Humble Compose: operator + robot, MoveIt Servo, Gazebo, keyboard teleop |
-| [`mlink-transport/`](mlink-transport/) | Userspace UDP bonding (`mlink-op` / `mlink-edge`), stages 0–3 done |
+| [`mlink-transport/`](mlink-transport/) | Userspace UDP bonding (`mlink-op` / `mlink-edge`), stages 0–3 done. Default doc: [`mlink-transport/README.md`](mlink-transport/README.md) |
 | [`safety/`](safety/) | 25-function coverage + Zone 1 plan (Safety-A integration on hold) |
 | [`video/`](video/) | Lab WebRTC / NVENC notes (code still on the Orin, not in git) |
 
