@@ -1,6 +1,9 @@
 # Implementation Plan: ROS 2 Remote Teleoperation Prototype
 
-Read this file first in a new session. Each milestone has:
+> Feature-level document for the Compose / ROS 2 / Gazebo POC.
+> Product roadmap and session order: [`../../IMPLEMENTATION.md`](../../IMPLEMENTATION.md).
+
+Read this file first in a teleop-only session. Each milestone has:
 
 - `status`: `done` or `remaining` (code exists and was verified)
 - `committed`: `done` or `remaining` (on `main`)
@@ -33,7 +36,7 @@ cd teleoperation-prototype
 ./scripts/keyboard_teleop.sh
 ```
 
-See `teleoperation-prototype/teleop_gui_steps.txt`.
+See [`teleop_gui_steps.txt`](teleop_gui_steps.txt).
 
 | Milestone | Title | status | committed | git |
 |---|---|---|---|---|
@@ -45,9 +48,13 @@ See `teleoperation-prototype/teleop_gui_steps.txt`.
 | 5 | Gazebo 6-DOF arm from `/cmd_vel_safe` | done | done | `4ba8c4e` |
 | 6 | Keyboard teleop | done | done | `fe647cd` |
 | 7 | MoveIt Servo / planning | done | done | `4d7e38d` |
-| 8 | Replace CycloneDDS with Zenoh | remaining (step 1 done) | remaining | — |
-| 9 | Operator monitor / telemetry | remaining | remaining | — |
-| 10 | Benchmarking (local and WAN) | remaining | remaining | — |
+| 8 | Replace CycloneDDS with Zenoh | remaining (step 1 done; local Zenoh is in use) | remaining (WAN is product F8/F12) | `c3830cd` local |
+| 9 | Operator monitor / telemetry | remaining | remaining | product F5.3 |
+| 10 | Benchmarking (local and WAN) | remaining | remaining | product F19 |
+
+M8 step 1 (local Zenoh) is in daily use. M8 WAN, M9, and M10 are
+tracked as product features in [`../../IMPLEMENTATION.md`](../../IMPLEMENTATION.md)
+(F5, F8, F12, F19). Do not start them from this file.
 
 Dropped from the original plan (not needed for the first WAN/Jetson target):
 
@@ -59,7 +66,7 @@ Dropped from the original plan (not needed for the first WAN/Jetson target):
 ## 1. Purpose
 
 Implement the prototype in
-`task1_ros_local_remote_teleoperation_protoype.md` as gated milestones.
+[`prototype.md`](prototype.md) as gated milestones.
 
 The **local** POC is a 6-DOF arm (not a mobile base). Operator and robot are
 separate Humble containers. Commands are Cartesian tool jogs (`geometry_msgs/Twist`
@@ -114,8 +121,7 @@ teleoperation-prototype/
 ├── compose.yaml
 ├── config/{cyclonedds.xml,teleop.yaml}
 ├── docker/{Dockerfile,entrypoint.sh}
-├── docs/{architecture.md,networking.md,testing.md}
-├── teleop_gui_steps.txt
+├── docs/{architecture.md,networking.md,testing.md,prototype.md,implementation-plan.md,teleop_gui_steps.txt}
 ├── ros2_ws/src/
 │   ├── teleop_demo/          # nodes, launch, urdf, tests
 │   └── teleop_demo_msgs/     # TeleopCommand, Ack, Heartbeat, State

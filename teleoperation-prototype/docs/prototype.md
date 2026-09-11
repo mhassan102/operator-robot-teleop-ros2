@@ -1,8 +1,10 @@
 # Task: ROS 2 Remote Teleoperation Prototype (6-DOF arm)
 
 **Living status:** see
-`task1_ros_local_remote_teleoperation_implementation_plan.md`
-(milestones with `status` / `committed`). This file is the product intent.
+[`implementation-plan.md`](implementation-plan.md)
+(milestones with `status` / `committed`). Product roadmap:
+[`../../IMPLEMENTATION.md`](../../IMPLEMENTATION.md). This file is the
+original teleop product intent.
 The original wheeled-robot + netem + camera wording below is **superseded**
 where it conflicts with the first target.
 
@@ -82,7 +84,7 @@ are MoveIt goals via `./scripts/named_pose.sh`, not reverse jogs.
 ```
 
 `w/s` +x/x-, `a/d` +y/y-, `r/f` +z/z-, `j/l` yaw, `u/o` roll, `i/k` pitch,
-`g/h` gripper, space stop. See `teleoperation-prototype/teleop_gui_steps.txt`.
+`g/h` gripper, space stop. See [`teleop_gui_steps.txt`](teleop_gui_steps.txt).
 
 ## Safety (done)
 
@@ -92,10 +94,14 @@ stale Twist.
 
 ## Remaining product work
 
-1. **MoveIt Servo / planning** — done (not committed).
-2. **Zenoh** — replace CycloneDDS; then operator host ↔ Jetson over WAN.
-3. **Monitor** — pose, latency, watchdog (no camera).
-4. **Benchmarking** — local vs WAN latency, loss, watchdog timing.
+Tracked in [`../../IMPLEMENTATION.md`](../../IMPLEMENTATION.md), not
+here:
+
+1. **MoveIt Servo / planning** — done (in this tree).
+2. **Operator web console (F5)** — remaining; next product feature.
+3. **WAN** — mlink Stage 5 (F8) + Jetson split (F12), not Zenoh-across-the-internet.
+4. **Monitor** — console telemetry (F5.3).
+5. **Benchmarking** — F19.
 
 ## Original task notes (historical)
 

@@ -1,6 +1,11 @@
 # Zone 1 — Stopping & Restart: findings and implementation plan
 
-Zone 1 is the six stop/restart functions from `robotics_safety_functions_25.txt`. This file is the Zone 1 follow-on to `finding_and_analysis_of_25_saftey_function_covergage_on_poc.md`. It is a plan only: no code in this step.
+Zone 1 is the six stop/restart functions from
+[`robotics_safety_functions_25.txt`](robotics_safety_functions_25.txt).
+This file is the Zone 1 follow-on to
+[`coverage-analysis.md`](coverage-analysis.md). It is a plan only: no
+code in this step. Product roadmap:
+[`../IMPLEMENTATION.md`](../IMPLEMENTATION.md) (Feature F4 / F11).
 
 **POC context.** Fixed-base 6-DOF Gazebo arm. Operator and robot are two Humble containers. Jog goes through `robot_receiver` → `/cmd_vel_safe` → `servo_bridge` → MoveIt Servo. Named poses go through `/teleop/go_named_pose` and **bypass** that gateway.
 

@@ -1,5 +1,8 @@
 # Multi-link transport (LLTP-like) — implementation plan
 
+> Feature-level document. Product roadmap: [`../../IMPLEMENTATION.md`](../../IMPLEMENTATION.md)
+> (Features F3 / F8 / F9).
+
 Read this file before writing code. **Protocol + unit tests first.**
 Do not change ROS 2 teleop Compose, MoveIt, watchdog, or the WebRTC
 camera service until Stage 5 is explicitly approved.
@@ -30,7 +33,8 @@ ROS/WebRTC wiring, no “while we wait” extras.
 Stage 4 — dongle arrived:
 
 ```text
-Read /home/muhammadhassan/robots/mlink-transport-plan.md from the start.
+Read /home/muhammadhassan/robots/mlink-transport/docs/plan.md from the start.
+Also read /home/muhammadhassan/robots/IMPLEMENTATION.md (Feature F9).
 Stages 0–3 are done. Stage 4 is unblocked: USB 5G/4G dongle is on the Orin.
 Implement Stage 4 only. Do not start Stage 5.
 Do not change ROS/WebRTC/Compose. Tailscale is SSH only.
@@ -43,7 +47,8 @@ When done: STATUS done, commit remaining. Stop and show commands.
 Stage 5 — operator service design is decided:
 
 ```text
-Read /home/muhammadhassan/robots/mlink-transport-plan.md from the start.
+Read /home/muhammadhassan/robots/mlink-transport/docs/plan.md from the start.
+Also read /home/muhammadhassan/robots/IMPLEMENTATION.md (Feature F8).
 Stages 0–3 are done. Stage 4 may still be blocked; skip it if still blocked.
 Stage 5 is unblocked: operator service design is decided
 (backend daemon + web console with video). Implement Stage 5 only
@@ -644,8 +649,10 @@ Default route stays on Wi-Fi. Ethernet is link-local `/24` only.
 
 ## 12. Context (read-only)
 
-Read `teleoperation-prototype/` and the teleop implementation plan for
-**context only**. Do not change that Compose stack until Stage 5.
+Read `teleoperation-prototype/` and
+`teleoperation-prototype/docs/implementation-plan.md` for **context
+only**. Product roadmap: `IMPLEMENTATION.md` at the repo root
+(Feature F8). Do not change that Compose stack until Stage 5.
 
 ---
 
@@ -653,7 +660,7 @@ Read `teleoperation-prototype/` and the teleop implementation plan for
 
 | Path | Owner stage | Notes |
 | ---- | ----------- | ----- |
-| `mlink-transport-plan.md` | 0 | this file |
+| `mlink-transport/docs/plan.md` | 0 | this file |
 | `mlink-transport/README.md` | 1+2+3 | tests, loopback demo, two-machine cable-pull |
 | `mlink-transport/proto/header.py` | 1 | 32-byte encode/decode, `Packet` |
 | `mlink-transport/proto/config.py` | 1 | YAML load; rejects `tailscale0` / `100.x` |

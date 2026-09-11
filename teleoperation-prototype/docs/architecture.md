@@ -1,5 +1,7 @@
 # Architecture
 
+Product roadmap: [`../../IMPLEMENTATION.md`](../../IMPLEMENTATION.md).
+
 Milestone 1 defines two logical services built from a common ROS 2 Humble image:
 
 - `operator`: scripted Cartesian jog, heartbeat, and future keyboard/monitor;

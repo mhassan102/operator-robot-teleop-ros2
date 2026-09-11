@@ -1,5 +1,9 @@
 # Finding and analysis: 25 safety-function coverage on the teleop POC
 
+> Feature-level document. Product roadmap: [`../IMPLEMENTATION.md`](../IMPLEMENTATION.md)
+> (Feature F4 / F11). Consultant list: [`robotics_safety_functions_25.txt`](robotics_safety_functions_25.txt).
+> Zone 1 follow-on: [`zone1-implementation-plan.md`](zone1-implementation-plan.md).
+
 Scope is the robot-side safety path that already exists on `main` (M0–M7 plus local Zenoh). No WAN/Jetson work, no new nodes, no implementation in this document.
 
 Command path today:

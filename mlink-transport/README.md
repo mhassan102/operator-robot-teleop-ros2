@@ -4,6 +4,9 @@ Userspace UDP bonding (LLTP-like). v1 sends a copy of each datagram on
 every live path. The receiver keeps the first good copy and drops the
 rest. No Linux default-route failover, no Tailscale data path.
 
+Stage plan and session handoff: [`docs/plan.md`](docs/plan.md).
+Product roadmap: [`../IMPLEMENTATION.md`](../IMPLEMENTATION.md).
+
 Stage 1 is the **protocol library and unit tests** (fake clock, fake
 sockets). Stage 2 is **two OS processes on localhost** (`mlink-op` /
 `mlink-edge`) plus `mlink-ping`. Stage 3 is the same daemons on **real
@@ -185,9 +188,11 @@ mlink-transport/
   config/loopback-edge.yaml  # edge side (42001/42002 → 41001/41002)
   config/lab-op.yaml         # Stage 3 operator (wlo1 + USB-eth)
   config/lab-edge.yaml       # Stage 3 Orin (wlP1p1s0 + eno1)
+  docs/plan.md               # stages 0–5, session handoff
   docs/stage1_sequence.md
   docs/stage2_overview.md    # processes, ports, ping path
   docs/stage3_overview.md    # two machines, SO_BINDTODEVICE, cable pull
+  docs/latency_comparison.md
 ```
 
 ## Header (v1, 32 bytes, little-endian)

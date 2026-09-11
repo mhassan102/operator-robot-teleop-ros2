@@ -5,6 +5,10 @@ of concept. Milestone 7 drives a 6-DOF Gazebo arm with MoveIt Servo from the
 Cartesian `/cmd_vel_safe` path, plus named-pose planning (`home`, `fold`,
 `ready`, `observe`, `pregrasp`, `retract`, `stow`).
 
+Product roadmap: [`../IMPLEMENTATION.md`](../IMPLEMENTATION.md).
+Feature docs: [`docs/`](docs/) (`architecture.md`, `implementation-plan.md`,
+`prototype.md`, keyboard steps in `teleop_gui_steps.txt`).
+
 ## Milestone 1 quick start
 
 ```bash
