@@ -640,6 +640,7 @@ Read `teleoperation-prototype/` and the teleop implementation plan for
 | `mlink-transport/docs/stage3_overview.md` | 3 | two machines, bind-to-device, cable pull |
 | `mlink-transport/config/lab-op.yaml` | 3 | operator `wlo1` + `enx00e04c681cc3` |
 | `mlink-transport/config/lab-edge.yaml` | 3 | Orin `wlP1p1s0` + `eno1` |
+| `mlink-transport/docs/latency_comparison.md` | 3 | lab RTT: eth / wifi / Tailscale; WAN estimates |
 
 ---
 
