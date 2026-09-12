@@ -1,7 +1,6 @@
-"""Operator backend: ROS 2 node plus localhost HTTP console (F5.1).
+"""Operator backend: ROS 2 node plus localhost HTTP/WebSocket console (F5.2).
 
-F5.2 will add a WebSocket session that publishes /teleop/command and
-/teleop/heartbeat. This file must not open a socket or those topics yet.
+Heartbeat and /teleop/command publish only while a /ws/session socket is open.
 """
 
 from __future__ import annotations
@@ -9,15 +8,26 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import threading
+import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlparse
 
+from teleop_demo_msgs.msg import TeleopCommand, TeleopHeartbeat
 import rclpy
 from rclpy.node import Node
 
+from teleop_demo.commands import COMMANDS, KEY_BINDINGS, fill_twist
 from teleop_demo.parameters import declare_teleop_parameters
+from teleop_demo.qos import command_qos
+from teleop_demo.wsproto import (
+    WsConnection,
+    handshake_accept,
+    is_websocket_upgrade,
+)
 
 WEB_ROOT = Path(os.environ.get("TELEOP_WEB_ROOT", "/teleop/web"))
 HTTP_HOST = "0.0.0.0"
@@ -31,15 +41,159 @@ class OperatorBackend(Node):
     def __init__(self) -> None:
         super().__init__(NODE_NAME)
         declare_teleop_parameters(self)
-        # F5.2: create command/heartbeat publishers only while a WS session is open.
+        self.frame_id = str(self.get_parameter("command_frame").value)
+        qos = command_qos()
+        self.command_pub = self.create_publisher(
+            TeleopCommand, "/teleop/command", qos
+        )
+        self.heartbeat_pub = self.create_publisher(
+            TeleopHeartbeat, "/teleop/heartbeat", qos
+        )
+        self._lock = threading.Lock()
+        self._connection: Optional[WsConnection] = None
+        self.session_id = ""
+        self.command_sequence = 0
+        self.heartbeat_sequence = 0
+        self._motion = COMMANDS["stop"][:6]
+        self._gripper = 0.0
+        self._label = "stop"
+        self._active_key: Optional[str] = None
+        command_rate = float(self.get_parameter("command_rate_hz").value)
+        heartbeat_rate = float(self.get_parameter("heartbeat_rate_hz").value)
+        self.create_timer(1.0 / command_rate, self._publish_command)
+        self.create_timer(1.0 / heartbeat_rate, self._publish_heartbeat)
         _node_ready.set()
         self.get_logger().info(
             f"HTTP {HTTP_HOST}:{HTTP_PORT} serving {WEB_ROOT}"
         )
 
+    def attach_session(self, connection: WsConnection) -> str:
+        with self._lock:
+            old = self._end_locked()
+            session_id = self._begin_locked(connection)
+        if old is not None:
+            old.close()
+        self.get_logger().info(f"SESSION OPEN session={session_id}")
+        return session_id
+
+    def detach_session(self, connection: WsConnection) -> None:
+        with self._lock:
+            if self._connection is not connection:
+                return
+            old = self._end_locked()
+        if old is not None:
+            old.close()
+        self.get_logger().info("SESSION CLOSE")
+
+    def shutdown_session(self) -> None:
+        with self._lock:
+            old = self._end_locked()
+        if old is not None:
+            old.close()
+
+    def handle_client_message(self, data: dict) -> None:
+        if data.get("type") != "key":
+            return
+        key = data.get("key")
+        down = data.get("down")
+        if not isinstance(key, str) or not isinstance(down, bool):
+            return
+        self.apply_key(key, down)
+
+    def apply_key(self, key: str, down: bool) -> None:
+        direction = KEY_BINDINGS.get(key)
+        if direction is None:
+            return
+        values = COMMANDS[direction]
+        with self._lock:
+            if self._connection is None:
+                return
+            if direction in ("open", "close"):
+                if down:
+                    self._gripper = values[6]
+                    self._label = direction
+            elif direction == "stop":
+                if down:
+                    self._motion = values[:6]
+                    self._label = "stop"
+                    self._active_key = None
+            elif down:
+                self._motion = values[:6]
+                self._label = direction
+                self._active_key = key
+            elif self._active_key == key:
+                self._motion = COMMANDS["stop"][:6]
+                self._label = "stop"
+                self._active_key = None
+        if down or direction not in ("open", "close", "stop"):
+            self.get_logger().info(f"KEY {direction} down={down}")
+
+    def _begin_locked(self, connection: WsConnection) -> str:
+        self._connection = connection
+        self.session_id = uuid.uuid4().hex[:12]
+        self.command_sequence = 0
+        self.heartbeat_sequence = 0
+        self._motion = COMMANDS["stop"][:6]
+        self._gripper = 0.0
+        self._label = "stop"
+        self._active_key = None
+        self._publish_heartbeat_locked()
+        return self.session_id
+
+    def _end_locked(self) -> Optional[WsConnection]:
+        old = self._connection
+        if old is None:
+            return None
+        self._connection = None
+        self._motion = COMMANDS["stop"][:6]
+        self._label = "stop"
+        self._active_key = None
+        self._publish_stop_locked()
+        self.session_id = ""
+        return old
+
+    def _publish_command(self) -> None:
+        with self._lock:
+            if self._connection is None:
+                return
+            self.command_sequence += 1
+            message = self._command_message_locked()
+            self.command_pub.publish(message)
+
+    def _publish_heartbeat(self) -> None:
+        with self._lock:
+            if self._connection is None:
+                return
+            self._publish_heartbeat_locked()
+
+    def _publish_heartbeat_locked(self) -> None:
+        self.heartbeat_sequence += 1
+        message = TeleopHeartbeat()
+        message.sequence = self.heartbeat_sequence
+        message.stamp = self.get_clock().now().to_msg()
+        message.session_id = self.session_id
+        self.heartbeat_pub.publish(message)
+
+    def _publish_stop_locked(self) -> None:
+        self.command_sequence += 1
+        message = self._command_message_locked()
+        self.command_pub.publish(message)
+
+    def _command_message_locked(self) -> TeleopCommand:
+        message = TeleopCommand()
+        message.sequence = self.command_sequence
+        message.stamp = self.get_clock().now().to_msg()
+        message.frame_id = self.frame_id
+        message.session_id = self.session_id
+        fill_twist(message.twist, self._motion)
+        message.gripper = self._gripper
+        return message
+
 
 class ConsoleHandler(SimpleHTTPRequestHandler):
-    """Static operate-console plus /api/health. F5.2 can add /ws/session here."""
+    """Static operate-console, /api/health, and /ws/session."""
+
+    protocol_version = "HTTP/1.1"
 
     def __init__(self, request, client_address, server) -> None:
         super().__init__(
@@ -48,12 +202,15 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args) -> None:
         path = urlparse(self.path).path
-        if path == "/api/health":
+        if path in ("/api/health", "/ws/session"):
             return
         super().log_message(fmt, *args)
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        if path == "/ws/session":
+            self._handle_websocket()
+            return
         if path == "/api/health":
             self._send_health()
             return
@@ -61,6 +218,46 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             self._send_file(WEB_ROOT / "index.html", "text/html; charset=utf-8")
             return
         super().do_GET()
+
+    def _handle_websocket(self) -> None:
+        node = getattr(self.server, "operator_node", None)
+        if node is None or not _node_ready.is_set() or not rclpy.ok():
+            self.send_error(503, "backend not ready")
+            return
+        if not is_websocket_upgrade(self.headers):
+            self.send_error(400, "expected WebSocket upgrade")
+            return
+        key = self.headers.get("Sec-WebSocket-Key", "").strip()
+        accept = handshake_accept(key)
+        self.close_connection = True
+        try:
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.connection.settimeout(None)
+        except OSError:
+            pass
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+        try:
+            self.wfile.flush()
+        except OSError:
+            return
+        conn = WsConnection(self.connection)
+        session_id = node.attach_session(conn)
+        try:
+            try:
+                conn.send_json({"type": "session", "session_id": session_id})
+            except OSError:
+                return
+            while not conn.closed and rclpy.ok():
+                message = conn.read_json()
+                if message is None:
+                    break
+                node.handle_client_message(message)
+        finally:
+            node.detach_session(conn)
 
     def _send_health(self) -> None:
         if _node_ready.is_set() and rclpy.ok():
@@ -92,7 +289,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def _start_http() -> ThreadingHTTPServer:
+def _start_http(node: OperatorBackend) -> ThreadingHTTPServer:
     if not WEB_ROOT.is_dir():
         raise SystemExit(f"web root missing: {WEB_ROOT}")
     try:
@@ -101,6 +298,7 @@ def _start_http() -> ThreadingHTTPServer:
         raise SystemExit(
             f"failed to bind HTTP {HTTP_HOST}:{HTTP_PORT}: {exc}"
         ) from exc
+    httpd.operator_node = node
     httpd.daemon_threads = True
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -109,8 +307,8 @@ def _start_http() -> ThreadingHTTPServer:
 
 def main(args=None) -> None:
     rclpy.init(args=args)
-    httpd = _start_http()
     node = OperatorBackend()
+    httpd = _start_http(node)
 
     def _request_shutdown(*_args) -> None:
         if rclpy.ok():
@@ -123,6 +321,7 @@ def main(args=None) -> None:
         pass
     finally:
         _node_ready.clear()
+        node.shutdown_session()
         httpd.shutdown()
         httpd.server_close()
         node.destroy_node()

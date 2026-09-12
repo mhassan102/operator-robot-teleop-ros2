@@ -97,7 +97,7 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | F2 | Local Zenoh | done | Two containers, `rmw_zenoh_cpp`, robot runs `rmw_zenohd` |
 | F3 | mlink stages 0–3 | done | Protocol, localhost loopback, eth+wifi cable-pull |
 | F4 | Safety v0 (jog watchdog) | done | 500 ms gateway on `/cmd_vel_safe` only; named pose bypasses |
-| F5 | Operator backend + web console | **partial (F5.1 done)** | F5.2 keys+heartbeat next; camera still a stub |
+| F5 | Operator backend + web console | **partial (F5.1–F5.2 done)** | F5.3 telemetry next; camera still a stub |
 | F6 | Video into this repo + console embed | remaining | Lab preview exists on Orin, not in git |
 | F7 | Orin HW encode verify / efficiency | partial | Lab gst already uses `nvv4l2h264enc`; not proven in-product |
 | F8 | mlink Stage 5 (apps on 127.0.0.1) | blocked | Blocked on F5 shape; Stage 4 not required |
@@ -119,9 +119,9 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | — | VR | deferred | |
 | — | SOC2 / IEC / ISO 10218 cert | deferred | |
 
-**Next to implement:** F5.2 (WebSocket keys + heartbeat while the
-socket is open). Do not start F5.3/F5.4 in the same session. Do not
-start F8 until F5.2 is running. Do not start F10 unless the user
+**Next to implement:** F5.3 (HUD from `/teleop/state` and
+`/teleop/tool_pose`). Do not start F5.4 in the same session. Do not
+start F8 until F5.2+ is running. Do not start F10 unless the user
 unblocks Safety-A. Do not start fleet.
 
 ---
@@ -332,7 +332,7 @@ from `TIMEOUT` can also move. Those are F10.
 
 ---
 
-### F5 — Operator backend + web console — STATUS: partial (F5.1 done; F5.2 next)
+### F5 — Operator backend + web console — STATUS: partial (F5.1–F5.2 done; F5.3 next)
 
 **Goal.** The human uses **one browser tab** on the operator PC.
 The existing operator Compose service becomes a **backend**: HTTP +
@@ -443,7 +443,7 @@ in F5. If a pip package is required, pin it in the Dockerfile.
 | Substage | What | Acceptance |
 | -------- | ---- | ---------- |
 | F5.1 | HTTP + ROS backend process + operate-shell page, `127.0.0.1:8090`, health | **done** — Chrome loads the dark operate page; `GET /api/health` is 200; robot Compose unchanged; `test_basic.sh` still passes via CLI. No keys, no WS, no heartbeat |
-| F5.2 | WS keys → `/teleop/command` + heartbeat while WS open | Hold `w` in the page, Gazebo tool +x; release zeros; close tab → watchdog `TIMEOUT` |
+| F5.2 | WS keys → `/teleop/command` + heartbeat while WS open | **done** — Hold `w` jogs +x; release zeros; close WS → `SAFETY STATE=TIMEOUT` (~600 ms). `test_console_session.sh` green |
 | F5.3 | Telemetry from `/teleop/state` and `/teleop/tool_pose` | Page shows CONNECTED / TIMEOUT / pose; killing WS shows TIMEOUT without using the TTY keyboard |
 | F5.4 | Named-pose buttons | Click `fold` / `home` matches `named_pose.sh`; jog still works after |
 
@@ -1011,9 +1011,107 @@ When done: print how to open the page and jog, list files changed,
 and stop. Do not implement F5.3.
 ```
 
-### F5.3 / F5.4
+### F5.3 — Telemetry HUD
 
-Same pattern: read this file, implement only that substage, stop.
+Paste the block below into a **new** implementation session. F5.1–F5.2
+are committed on `f5-operator-console`. The planner session verifies
+and commits; this session does not `git commit`.
+
+```text
+Read /home/muhammadhassan/robots/IMPLEMENTATION.md from the start, then
+only F5 (Look diagram, F5.3 row) and the files listed below. F5.1 and
+F5.2 are done. Implement Feature F5.3 only. Stop when F5.3 acceptance
+passes. Do not start F5.4.
+
+Goal
+- Bottom HUD shows live robot safety state and tool pose.
+- Display only: telemetry must not sit on the safety path (no extra
+  motion, no second watchdog, no heartbeat just to push HUD).
+- Killing the console WebSocket shows TIMEOUT on the page without
+  using the TTY keyboard.
+
+Must read
+- IMPLEMENTATION.md F5 contract, F5.3 row, API sketch
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/operator_backend.py
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/robot_receiver.py
+  (_publish_state / TeleopState fields)
+- teleoperation-prototype/ros2_ws/src/teleop_demo_msgs/msg/TeleopState.msg
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/servo_bridge.py
+  (/teleop/tool_pose)
+- teleoperation-prototype/web/index.html
+- teleoperation-prototype/web/operate.js
+- teleoperation-prototype/scripts/test_console_session.sh
+
+Backend
+- Keep F5.2 behavior: heartbeat and commands only while /ws/session
+  is open; close still Normal Stop + stop heartbeat.
+- Subscribe to /teleop/state (teleop_demo_msgs/TeleopState) and
+  /teleop/tool_pose (geometry_msgs/PoseStamped). Same command_qos
+  as today unless the existing publishers force a match.
+- Telemetry is display-only. Do not publish command/heartbeat from
+  state callbacks. Do not gate jog on HUD freshness (that is F14).
+- While a session WS is open, send JSON on that same socket, e.g.
+  {type:"state",
+   connection_state, watchdog_state, session_id,
+   pose:{x,y,z, qx,qy,qz,qw} or compact xyz,
+   last_disposition?}
+  Rate: on change or at telemetry_rate_hz from teleop.yaml (10 Hz).
+  Do not add a second WebSocket.
+- Optional but useful for tests: GET /api/state returns the latest
+  snapshot as JSON even with no WS (still display-only). 200 if the
+  node is up; fields may be empty until the first ROS message.
+- Do not call /teleop/go_named_pose. Leave pose buttons disabled.
+
+Page
+- Keep the F5.1/F5.2 layout. Fill the existing HUD chips:
+  - connection ← TeleopState.connection_state
+    (CONNECTED / TIMEOUT / RESTORED)
+  - watchdog  ← TeleopState.watchdog_state
+    (OK / SAFE STOP ACTIVATED)
+  - session   ← already from F5.2 {type:"session"}; may also echo
+    state.session_id
+  - pose      ← /teleop/tool_pose, compact (e.g. x y z in metres,
+    3 decimals). Show "—" if none yet.
+- On WS close/error: set connection HUD to TIMEOUT (heartbeat has
+  stopped). Do not reconnect in a loop that would keep the watchdog
+  alive. A manual refresh may open a new session (F5.2 replacement
+  rules still apply).
+- Do not apply keys unless focused (F5.2). Do not enable named poses.
+
+Tests
+- Extend test_console_session.sh (keep the F5.2 cases):
+  1. After WS open + key w, a state payload (WS and/or GET /api/state)
+     shows connection_state CONNECTED or RESTORED (not TIMEOUT).
+  2. After socket close, GET /api/state (or robot logs + a still-open
+     page contract) shows TIMEOUT / SAFE STOP ACTIVATED. Robot logs
+     must still contain SAFETY STATE=TIMEOUT as today.
+- Keep test_basic.sh green. Do not delete test_watchdog.sh.
+
+Do not
+- F5.4 named-pose POST / enabled pose buttons
+- F6 camera, mlink, Orin, Safety-A, auth, TLS, gamepad
+- Expose 8090 on 0.0.0.0 on the host
+- Change /teleop/command fields or the robot container
+- Put HUD on the safety path
+- git commit (planner session will verify and commit)
+- git push
+
+Acceptance (prove all of these, then stop)
+1. start.sh healthy; curl /api/health 200; keys still jog.
+2. With WS open and a jog, HUD/API shows CONNECTED (or RESTORED)
+   and a changing tool pose (not stuck at —).
+3. Close WS → HUD or GET /api/state shows TIMEOUT; robot still logs
+   SAFETY STATE=TIMEOUT within 500 ms + slack.
+4. Named-pose buttons still disabled. Camera still “not wired (F6)”.
+5. ./scripts/test_console_session.sh and ./scripts/test_basic.sh pass.
+
+When done: print how to read the HUD, list files changed, and stop.
+Do not implement F5.4.
+```
+
+### F5.4 — Named-pose buttons
+
+Same pattern after F5.3: read this file, implement only F5.4, stop.
 
 ### F6 — video in repo + embed
 

@@ -36,16 +36,16 @@ that is on hold. Only the product roadmap stays at the repo root.
 
 ## What is next
 
-F5.2: wire the localhost console so browser keys jog the arm and a
-closed tab trips the 500 ms watchdog. See `IMPLEMENTATION.md` Feature
-F5. Camera is still a placeholder (F6).
+F5.3: fill the console HUD from `/teleop/state` and `/teleop/tool_pose`
+(CONNECTED / TIMEOUT / pose). See `IMPLEMENTATION.md` Feature F5.
+Camera is still a placeholder (F6).
 
 ## Quick run (local teleop)
 
 ```bash
 cd teleoperation-prototype
 ./scripts/start.sh --gui
-# console (F5.1 shell; keys in F5.2): http://127.0.0.1:8090/
+# console (keys + heartbeat; HUD in F5.3): http://127.0.0.1:8090/
 ./scripts/keyboard_teleop.sh   # TTY fallback
 ```
 

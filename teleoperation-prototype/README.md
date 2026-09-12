@@ -34,6 +34,7 @@ rebuild it explicitly while the project is stopped:
 ./scripts/test_basic.sh
 ./scripts/test_delivery.sh
 ./scripts/test_watchdog.sh
+./scripts/test_console_session.sh
 ./scripts/test_sim.sh
 ./scripts/test_named_pose.sh
 ```
@@ -44,8 +45,8 @@ Headless Gazebo is the default. For an interactive window (needs X11):
 ./scripts/start.sh --gui
 ```
 
-Open the operator console at `http://127.0.0.1:8090/` (F5.1: dark
-operate shell + health; keys and heartbeat land in F5.2). TTY fallback:
+Open the operator console at `http://127.0.0.1:8090/` (F5.2: keys and
+heartbeat while the tab is open; HUD telemetry is F5.3). TTY fallback:
 
 ```bash
 ./scripts/keyboard_teleop.sh

@@ -155,6 +155,7 @@ kbd {
   border-color: #3a2222;
   text-align: center;
   letter-spacing: 0.04em;
+  cursor: pointer;
 }
 
 .legend ul {
