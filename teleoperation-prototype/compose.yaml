@@ -34,11 +34,33 @@ services:
     environment:
       <<: *ros-env
       ZENOH_CONFIG_OVERRIDE: ${ZENOH_CONFIG_OVERRIDE:-mode="client";connect/endpoints=["tcp/robot:7447"]}
-    command: ["sleep", "infinity"]
+    volumes:
+      - ./config:/teleop/config:ro
+      - ./ros2_ws:/teleop/ros2_ws
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./web:/teleop/web:ro
+    ports:
+      - "127.0.0.1:8090:8090"
+    command:
+      [
+        "ros2",
+        "run",
+        "teleop_demo",
+        "operator_backend",
+        "--ros-args",
+        "--params-file",
+        "/teleop/config/teleop.yaml",
+      ]
     cap_add:
       - NET_ADMIN
     healthcheck:
-      test: ["CMD", "bash", "-c", "source /opt/ros/humble/setup.bash && ros2 pkg list >/dev/null"]
+      test:
+        [
+          "CMD",
+          "bash",
+          "-c",
+          "source /opt/ros/humble/setup.bash && ros2 pkg list >/dev/null && python3 -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8090/api/health', timeout=3)\"",
+        ]
       interval: 5s
       timeout: 5s
       retries: 12

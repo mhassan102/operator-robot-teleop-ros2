@@ -97,7 +97,7 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | F2 | Local Zenoh | done | Two containers, `rmw_zenoh_cpp`, robot runs `rmw_zenohd` |
 | F3 | mlink stages 0–3 | done | Protocol, localhost loopback, eth+wifi cable-pull |
 | F4 | Safety v0 (jog watchdog) | done | 500 ms gateway on `/cmd_vel_safe` only; named pose bypasses |
-| F5 | Operator backend + web console | **remaining (next)** | Localhost first; keyboard + telemetry; camera panel may stub |
+| F5 | Operator backend + web console | **partial (F5.1 done)** | F5.2 keys+heartbeat next; camera still a stub |
 | F6 | Video into this repo + console embed | remaining | Lab preview exists on Orin, not in git |
 | F7 | Orin HW encode verify / efficiency | partial | Lab gst already uses `nvv4l2h264enc`; not proven in-product |
 | F8 | mlink Stage 5 (apps on 127.0.0.1) | blocked | Blocked on F5 shape; Stage 4 not required |
@@ -119,9 +119,10 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | — | VR | deferred | |
 | — | SOC2 / IEC / ISO 10218 cert | deferred | |
 
-**Next to implement:** F5 (operator backend + web console), localhost.
-Do not start F8 until F5’s shape is running. Do not start F10 unless
-the user unblocks Safety-A. Do not start fleet.
+**Next to implement:** F5.2 (WebSocket keys + heartbeat while the
+socket is open). Do not start F5.3/F5.4 in the same session. Do not
+start F8 until F5.2 is running. Do not start F10 unless the user
+unblocks Safety-A. Do not start fleet.
 
 ---
 
@@ -268,6 +269,12 @@ pipe. Safety stays on the **robot**, in front of `ros2_control`.
     key being held. Closing the browser must stop heartbeats so the
     500 ms watchdog trips. Blurring the tab zeros jog but may keep
     heartbeat (see F5).
+17. **F5 console looks like Adamo’s single-robot operate page, not
+    their fleet grid, and not a form.** Dark full-viewport shell:
+    large camera stage, right rail (poses + stop), bottom HUD.
+    No left nav, no robot-card grid, no Replay/Map/Stats, no Adamo
+    branding. Still static HTML/CSS/JS (decision 15). Visual chrome
+    in F5.1; keys / telemetry / poses wire in F5.2–F5.4.
 
 ---
 
@@ -325,13 +332,36 @@ from `TIMEOUT` can also move. Those are F10.
 
 ---
 
-### F5 — Operator backend + web console — STATUS: remaining (next)
+### F5 — Operator backend + web console — STATUS: partial (F5.1 done; F5.2 next)
 
 **Goal.** The human uses **one browser tab** on the operator PC.
 The existing operator Compose service becomes a **backend**: HTTP +
 WebSocket + the ROS 2 nodes that already publish `/teleop/command`
 and `/teleop/heartbeat`. First prove on **localhost**. Camera in the
-page can be a labeled placeholder until F6.
+page is a labeled placeholder until F6.
+
+**Look (locked).** Match the *operate-one-robot* screen on
+`operate.adamohq.com` (docs: teleoperation view), not the fleet grid
+that is their first login page. Our v1 is one lab arm.
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  header: name · this robot · localhost                      │
+├──────────────────────────────────────────┬──────────────────┤
+│                                          │  Named poses     │
+│  CAMERA STAGE                            │  (F5.4 wires)    │
+│  “camera: not wired (F6)”                │                  │
+│                                          │  Normal Stop     │
+│                                          │  (F5.2 wires)    │
+│                                          │                  │
+│                                          │  Key legend      │
+├──────────────────────────────────────────┴──────────────────┤
+│  HUD: connection · watchdog · session · pose  (F5.3 wires)  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Dark near-black background, muted labels, one accent for live/stop.
+Not a pixel clone. Do not scaffold fleet, replay, map, org settings.
 
 **Why this is first.** It is the product UI (Adamo’s dashboard is
 the thing operators actually use). It unblocks mlink Stage 5 (F8),
@@ -412,7 +442,7 @@ in F5. If a pip package is required, pin it in the Dockerfile.
 
 | Substage | What | Acceptance |
 | -------- | ---- | ---------- |
-| F5.1 | HTTP server + static page in operator container, `127.0.0.1:8090`, health | Chrome on this PC loads the page; Compose still starts robot as today; `test_basic.sh` still passes via CLI |
+| F5.1 | HTTP + ROS backend process + operate-shell page, `127.0.0.1:8090`, health | **done** — Chrome loads the dark operate page; `GET /api/health` is 200; robot Compose unchanged; `test_basic.sh` still passes via CLI. No keys, no WS, no heartbeat |
 | F5.2 | WS keys → `/teleop/command` + heartbeat while WS open | Hold `w` in the page, Gazebo tool +x; release zeros; close tab → watchdog `TIMEOUT` |
 | F5.3 | Telemetry from `/teleop/state` and `/teleop/tool_pose` | Page shows CONNECTED / TIMEOUT / pose; killing WS shows TIMEOUT without using the TTY keyboard |
 | F5.4 | Named-pose buttons | Click `fold` / `home` matches `named_pose.sh`; jog still works after |
@@ -740,27 +770,245 @@ F5 is the only feature a new session should start without asking.
 
 ### F5.1 — HTTP page in the operator container
 
+Paste the block below into a **new** implementation session. The
+planner session verifies and commits; this session does not `git commit`.
+
 ```text
-Read /home/muhammadhassan/robots/IMPLEMENTATION.md from the start.
-Implement Feature F5.1 only (HTTP server + static console page in the
-existing operator Compose service, localhost 127.0.0.1:8090, health).
-Do not implement F5.2 keys, camera, mlink, or Safety-A.
-Do not add rosbridge, Node, or React.
-Keep keyboard_teleop.sh and existing test_*.sh working.
-Do not git commit unless asked. Stop after F5.1 and show how to open
-the page.
+Read /home/muhammadhassan/robots/IMPLEMENTATION.md from the start, then
+only F5 (including the Look diagram and decision 17) and the files
+listed below. Implement Feature F5.1 only. Stop when F5.1 acceptance
+passes. Do not start F5.2.
+
+Goal
+- Existing operator Compose service becomes a ROS 2 backend that
+  serves a static operate-console on localhost.
+- Chrome on this PC opens http://127.0.0.1:8090/ and sees the dark
+  single-robot operate shell (Adamo teleop view, not their fleet grid).
+- GET /api/health returns 200 when the ROS node is up.
+
+Must read
+- IMPLEMENTATION.md §3, §7, F5 contract, F5.1 row
+- teleoperation-prototype/compose.yaml
+- teleoperation-prototype/docker/entrypoint.sh
+- teleoperation-prototype/scripts/start.sh
+- teleoperation-prototype/scripts/test_basic.sh
+- teleoperation-prototype/scripts/keyboard_teleop.sh
+- teleoperation-prototype/ros2_ws/src/teleop_demo/setup.py
+- teleoperation-prototype/ros2_ws/src/teleop_demo/package.xml
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/keyboard_teleop.py
+- teleoperation-prototype/docs/architecture.md
+
+Where code goes
+- teleoperation-prototype/web/          static HTML/CSS/JS (new)
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/operator_backend.py
+- teleoperation-prototype/compose.yaml  operator command + port + web volume
+- teleoperation-prototype/ros2_ws/src/teleop_demo/setup.py  console_scripts entry
+- docker/Dockerfile only if a Python dep is required (prefer none in F5.1)
+
+Compose / process
+- Replace operator `command: ["sleep", "infinity"]` with
+  `ros2 run teleop_demo operator_backend` and the same
+  `--ros-args --params-file /teleop/config/teleop.yaml` pattern
+  keyboard_teleop.sh already uses.
+- Publish host port `127.0.0.1:8090:8090` (not 0.0.0.0 on the host).
+- Bind HTTP inside the container on 0.0.0.0:8090.
+- Volume-mount `./web` read-only (e.g. `./web:/teleop/web:ro`) so
+  the backend can serve files without baking them into the image.
+- Keep the robot service and its launch command unchanged.
+- Keep operator healthcheck working so `./scripts/start.sh` still
+  waits successfully. Prefer also proving HTTP: healthcheck may
+  curl/python-open `http://127.0.0.1:8090/api/health` in addition
+  to the existing ROS check. Do not break start.sh’s 240s wait.
+- Rebuild the workspace (`./scripts/build_workspace.sh` or
+  start.sh’s existing build path) so the new console_script exists.
+
+Backend (F5.1 only)
+- One rclpy node in the operator container. Main process is this
+  node, not sleep.
+- GET / serves the static console (index.html + css/js).
+- GET /api/health → 200 + small JSON if the node is spinning
+  (e.g. {"ok": true, "node": "operator_backend"}). Non-200 if not.
+- HTTP via stdlib (ThreadingHTTPServer or equivalent) in a thread
+  next to rclpy. Do not add pip/Node for F5.1. Structure the file
+  so F5.2 can add WebSocket without rewriting the page.
+- Do NOT publish /teleop/command or /teleop/heartbeat yet.
+  Heartbeat-only-while-WS-open is F5.2; starting heartbeat now
+  would fight that contract.
+- Do NOT open a WebSocket in F5.1.
+- Do NOT call /teleop/go_named_pose.
+
+Page (F5.1 look, controls inert)
+- Static HTML/CSS/JS only. No Node, no React, no rosbridge, no roslib.
+- Dark full-viewport operate shell as in IMPLEMENTATION.md F5 Look:
+  header (product name, robot label, localhost), large camera stage
+  with text “camera: not wired (F6)”, right rail with named-pose
+  names from named_pose.sh (home, fold, ready, observe, pregrasp,
+  retract, stow) disabled, Normal Stop disabled, key legend matching
+  keyboard_teleop (w/s x, a/d y, r/f z, j/l yaw, u/o roll, i/k
+  pitch, g/h gripper, space stop), bottom HUD placeholders for
+  connection / watchdog / session / pose.
+- No left fleet nav, no robot-card grid, no Replay/Map/Stats,
+  no Adamo name/logo.
+- Buttons and keys must not send network calls yet. JS may exist
+  as stubs; do not capture keys into ROS.
+- Page must be usable at ~1280px desktop. Mobile is not a goal.
+
+Keep working
+- ./scripts/keyboard_teleop.sh (docker exec fallback)
+- ./scripts/test_basic.sh and the other test_*.sh via CLI
+- Robot container, topics, SafetyController, named_pose node
+
+Do not
+- F5.2 keys / WS / heartbeat
+- F5.3 live telemetry
+- F5.4 working pose POSTs
+- F6 camera, mlink, Orin, Safety-A, auth, TLS
+- Expose 8090 on 0.0.0.0 on the host
+- Change /teleop/command fields or the robot container
+- git commit (planner session will verify and commit)
+- git push
+
+Acceptance (prove all of these, then stop)
+1. ./scripts/start.sh (or start.sh --gui) brings operator+robot healthy.
+2. curl -sf http://127.0.0.1:8090/api/health is HTTP 200.
+3. curl -sf http://127.0.0.1:8090/ returns the HTML shell.
+4. Browser or a screenshot/fetch shows the dark operate layout
+   (camera placeholder + right rail + HUD), not a blank “ok” page.
+5. ./scripts/test_basic.sh still passes (CLI operator_command path).
+6. keyboard_teleop.sh is unchanged in behavior (still docker exec).
+7. No /teleop/heartbeat from operator_backend (ros2 topic info /
+   node info: backend must not be publishing command/heartbeat yet).
+
+When done: print how to start and open the page, list files changed,
+and stop. Do not implement F5.2.
 ```
 
 ### F5.2 — Browser keys + heartbeat
 
+Paste the block below into a **new** implementation session. F5.1 is
+committed on `f5-operator-console`. The planner session verifies and
+commits; this session does not `git commit`.
+
 ```text
-Read /home/muhammadhassan/robots/IMPLEMENTATION.md from the start.
-F5.1 is done. Implement F5.2 only: WebSocket keys -> /teleop/command
-and heartbeat while the socket is open. Same key map as keyboard_teleop.
-Close tab must stop heartbeat so the 500 ms watchdog trips. Blur zeros
-jog but keeps heartbeat.
-Do not do named poses, telemetry polish, camera, mlink, or Safety-A.
-Keep CLI tests green. Do not git commit unless asked.
+Read /home/muhammadhassan/robots/IMPLEMENTATION.md from the start, then
+only F5 (Look diagram, decisions 15–17, F5.2 row) and the files listed
+below. F5.1 is done. Implement Feature F5.2 only. Stop when F5.2
+acceptance passes. Do not start F5.3 or F5.4.
+
+Goal
+- One WebSocket session from the F5.1 operate page.
+- While that socket is open, publish /teleop/heartbeat at the YAML rate
+  and map browser keys to /teleop/command using the same bindings and
+  Twist values as keyboard_teleop.
+- Close tab / socket close: stop heartbeat immediately, publish one
+  zero TeleopCommand (Normal Stop). Robot watchdog must reach TIMEOUT
+  within 500 ms + slack.
+- Blur / tab hidden: zero jog, keep heartbeat and the socket.
+
+Must read
+- IMPLEMENTATION.md §7, F5 contract, F5.2 row
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/operator_backend.py
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/keyboard_teleop.py
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/commands.py
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/qos.py
+- teleoperation-prototype/config/teleop.yaml
+- teleoperation-prototype/web/index.html
+- teleoperation-prototype/web/operate.js
+- teleoperation-prototype/scripts/test_watchdog.sh
+
+Reuse, do not fork
+- KEY_BINDINGS and COMMANDS from teleop_demo.commands
+- fill_twist, command_qos(), declare_teleop_parameters
+- TeleopCommand / TeleopHeartbeat fields as keyboard_teleop fills them
+  (sequence, stamp, frame_id, session_id, twist, gripper)
+- Jog rates already in COMMANDS (0.05 m/s, 0.2 rad/s). Do not invent
+  a second scale. Safety still clamps on the robot.
+
+Backend
+- Keep the existing operator_backend process, port, and GET /
+  GET /api/health. Extend it; do not add a third container.
+- WS path /ws/session on the same 8090 server.
+- Heartbeat publishes ONLY while a session socket is open. F5.1
+  correctly publishes neither command nor heartbeat; do not start
+  heartbeat at process boot.
+- One session_id per live socket, shared by command and heartbeat
+  (uuid hex like keyboard_teleop). New socket → new session_id.
+- One live session: a second WS replaces the first (close the old
+  socket, Normal Stop + stop its heartbeat, then serve the new one).
+- Command timer at command_rate_hz, heartbeat timer at
+  heartbeat_rate_hz, only while the session is live.
+- On socket close or error: stop both timers immediately, publish
+  exactly one zero-Twist TeleopCommand (label stop; do not change
+  gripper — hold, matching keyboard_teleop space), then stop
+  heartbeat. Do not keep a stale last Twist.
+- Key message: {type:"key", key:"w", down:true|false}. Unknown keys
+  ignored. key is the same character as KEY_BINDINGS (space is " ").
+- Motion: last directional keydown wins (same as TTY). keyup of the
+  active directional key zeros motion immediately (do not wait 0.3 s).
+  g/h set gripper on keydown and leave it set on keyup. Space / Normal
+  Stop zeros motion only.
+- Enable the Normal Stop button; it sends the same stop as space.
+- Leave named-pose buttons disabled (F5.4).
+- Do not subscribe to /teleop/state for HUD polish (F5.3). Optional:
+  send {type:"session", session_id} on connect so the HUD session
+  chip can show the id. Do not require live CONNECTED/TIMEOUT/pose.
+- If a pip WS library is required, pin it in docker/Dockerfile.
+  Prefer extending the stdlib HTTP server. No Node, no React, no
+  rosbridge. Rebuild the image only if you added a package; otherwise
+  rebuild the workspace as today.
+
+Page
+- Keep the F5.1 dark operate layout. Do not add fleet nav.
+- On load, open ws://127.0.0.1:8090/ws/session (same host as the page).
+- keydown/keyup on bound keys → WS messages. preventDefault so space
+  does not scroll. Ignore key repeat extras if you already have down
+  for that key (keydown.repeat).
+- Do not apply keys unless the page is focused.
+- visibilitychange hidden or window blur: send stop (zero Twist),
+  keep the WebSocket and heartbeat.
+- Closing the tab is socket close, not blur.
+- Show a simple “session open/closed” hint if easy; do not build the
+  F5.3 telemetry panel.
+
+Tests to add
+- teleoperation-prototype/scripts/test_console_session.sh (or pytest
+  invoked by that script). From the host against 127.0.0.1:8090:
+  1. Open WS, send key w down, assert robot logs see +X / COMMAND
+     RECEIVED (or /cmd_vel_safe linear.x ~ 0.05).
+  2. Send key w up, assert jog zeros.
+  3. Drop the socket; within 500 ms + slack robot logs
+     SAFETY STATE=TIMEOUT (same string as test_watchdog.sh).
+- Do not delete keyboard_teleop.sh or test_basic.sh / test_watchdog.sh.
+  Keep those green.
+
+Keep working
+- http://127.0.0.1:8090/ shell and /api/health
+- ./scripts/keyboard_teleop.sh as docker exec fallback
+- Robot container, SafetyController, named_pose CLI
+
+Do not
+- F5.3 HUD from /teleop/state or /teleop/tool_pose
+- F5.4 named-pose POST
+- F6 camera, mlink, Orin, Safety-A, auth, TLS, gamepad
+- Expose 8090 on 0.0.0.0 on the host
+- Change /teleop/command fields or the robot container
+- Publish heartbeat with no WS open
+- git commit (planner session will verify and commit)
+- git push
+
+Acceptance (prove all of these, then stop)
+1. start.sh still brings operator+robot healthy; curl /api/health 200.
+2. Hold w in the page (or the test client) jogs +x; release zeros.
+3. Normal Stop / space zeros motion while heartbeat continues.
+4. Close WS → robot SAFETY STATE=TIMEOUT without using TTY keyboard.
+5. Blur/hidden zeros jog but does not by itself cause TIMEOUT
+   (heartbeat still flowing). Prove with a short note or test if cheap.
+6. ./scripts/test_basic.sh still passes.
+7. New test_console_session.sh (or equivalent) passes.
+8. keyboard_teleop.sh still works as fallback.
+
+When done: print how to open the page and jog, list files changed,
+and stop. Do not implement F5.3.
 ```
 
 ### F5.3 / F5.4
@@ -816,6 +1064,7 @@ cases. Do not git commit unless asked.
 | Safety-A on hold but gated before WAN | User paused integration; WAN still must not ship the named-pose bypass |
 | NVENC already in lab gst | F7 is verify + JPEG-decode cost, not “add HW encode from zero” |
 | Fleet / recording / VR / cert deferred | v1 is one operator, one arm, one console |
+| F5 look = Adamo operate-one-robot, not fleet grid | Product UI; still static HTML; fleet remains deferred |
 
 ---
 

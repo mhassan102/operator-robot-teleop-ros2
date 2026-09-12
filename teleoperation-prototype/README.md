@@ -42,6 +42,12 @@ Headless Gazebo is the default. For an interactive window (needs X11):
 
 ```bash
 ./scripts/start.sh --gui
+```
+
+Open the operator console at `http://127.0.0.1:8090/` (F5.1: dark
+operate shell + health; keys and heartbeat land in F5.2). TTY fallback:
+
+```bash
 ./scripts/keyboard_teleop.sh
 ```
 

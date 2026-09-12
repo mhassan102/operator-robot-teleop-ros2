@@ -34,6 +34,7 @@ setup(
         "console_scripts": [
             "operator_command = teleop_demo.operator_command:main",
             "operator_heartbeat = teleop_demo.operator_heartbeat:main",
+            "operator_backend = teleop_demo.operator_backend:main",
             "keyboard_teleop = teleop_demo.keyboard_teleop:main",
             "robot_receiver = teleop_demo.robot_receiver:main",
             "servo_bridge = teleop_demo.servo_bridge:main",

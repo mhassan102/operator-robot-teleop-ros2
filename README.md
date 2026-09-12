@@ -36,16 +36,17 @@ that is on hold. Only the product roadmap stays at the repo root.
 
 ## What is next
 
-Operator **backend + web console** (keyboard + later camera in one
-page, localhost first). That unblocks mlink Stage 5. See
-`IMPLEMENTATION.md` Feature F5.
+F5.2: wire the localhost console so browser keys jog the arm and a
+closed tab trips the 500 ms watchdog. See `IMPLEMENTATION.md` Feature
+F5. Camera is still a placeholder (F6).
 
 ## Quick run (local teleop)
 
 ```bash
 cd teleoperation-prototype
 ./scripts/start.sh --gui
-./scripts/keyboard_teleop.sh
+# console (F5.1 shell; keys in F5.2): http://127.0.0.1:8090/
+./scripts/keyboard_teleop.sh   # TTY fallback
 ```
 
 mlink tests: `cd mlink-transport && python3 -m pytest`.

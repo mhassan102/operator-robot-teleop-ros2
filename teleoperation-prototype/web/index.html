@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1280">
+  <title>Teleop · lab-arm · localhost</title>
+  <link rel="stylesheet" href="/operate.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="header">
+      <div class="brand">
+        <span class="product">Teleop</span>
+        <span class="dot" aria-hidden="true"></span>
+        <span class="robot">lab-arm</span>
+      </div>
+      <div class="meta">
+        <span class="pill">localhost</span>
+      </div>
+    </header>
+
+    <main class="stage">
+      <section class="camera" aria-label="Camera">
+        <div class="camera-frame">
+          <p class="camera-msg">camera: not wired (F6)</p>
+        </div>
+      </section>
+
+      <aside class="rail" aria-label="Controls">
+        <section class="rail-block">
+          <h2>Named poses</h2>
+          <div class="pose-list">
+            <button type="button" disabled>home</button>
+            <button type="button" disabled>fold</button>
+            <button type="button" disabled>ready</button>
+            <button type="button" disabled>observe</button>
+            <button type="button" disabled>pregrasp</button>
+            <button type="button" disabled>retract</button>
+            <button type="button" disabled>stow</button>
+          </div>
+        </section>
+
+        <section class="rail-block">
+          <h2>Stop</h2>
+          <button type="button" class="stop" disabled>Normal Stop</button>
+        </section>
+
+        <section class="rail-block legend">
+          <h2>Keys</h2>
+          <ul>
+            <li><kbd>w</kbd>/<kbd>s</kbd> <span>x</span></li>
+            <li><kbd>a</kbd>/<kbd>d</kbd> <span>y</span></li>
+            <li><kbd>r</kbd>/<kbd>f</kbd> <span>z</span></li>
+            <li><kbd>j</kbd>/<kbd>l</kbd> <span>yaw</span></li>
+            <li><kbd>u</kbd>/<kbd>o</kbd> <span>roll</span></li>
+            <li><kbd>i</kbd>/<kbd>k</kbd> <span>pitch</span></li>
+            <li><kbd>g</kbd>/<kbd>h</kbd> <span>gripper</span></li>
+            <li><kbd>space</kbd> <span>stop</span></li>
+          </ul>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="hud">
+      <div class="hud-item">
+        <span class="hud-label">connection</span>
+        <span class="hud-value" id="hud-connection">—</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">watchdog</span>
+        <span class="hud-value" id="hud-watchdog">—</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">session</span>
+        <span class="hud-value" id="hud-session">—</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">pose</span>
+        <span class="hud-value" id="hud-pose">—</span>
+      </div>
+    </footer>
+  </div>
+  <script src="/operate.js"></script>
+</body>
+</html>
