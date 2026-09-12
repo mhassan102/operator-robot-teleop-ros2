@@ -1,4 +1,4 @@
-/* F5.2: WebSocket keys + heartbeat while the session socket is open. */
+/* F5.3: session keys + display-only HUD from /teleop/state and /teleop/tool_pose. */
 const SESSION_PATH = "/ws/session";
 
 const KEY_BINDINGS = {
@@ -29,6 +29,26 @@ function setHud(id, text) {
   }
 }
 
+function formatPose(pose) {
+  if (!pose || typeof pose.x !== "number" || typeof pose.y !== "number" || typeof pose.z !== "number") {
+    return "—";
+  }
+  return `${pose.x.toFixed(3)} ${pose.y.toFixed(3)} ${pose.z.toFixed(3)}`;
+}
+
+function applyState(msg) {
+  if (msg.connection_state) {
+    setHud("hud-connection", msg.connection_state);
+  }
+  if (msg.watchdog_state) {
+    setHud("hud-watchdog", msg.watchdog_state);
+  }
+  if (msg.session_id) {
+    setHud("hud-session", msg.session_id);
+  }
+  setHud("hud-pose", formatPose(msg.pose));
+}
+
 function pageIsLive() {
   return document.visibilityState === "visible" && document.hasFocus();
 }
@@ -49,26 +69,25 @@ function boundKey(event) {
 function connectSession() {
   const proto = location.protocol === "https:" ? "wss://" : "ws://";
   socket = new WebSocket(proto + location.host + SESSION_PATH);
-  socket.addEventListener("open", () => {
-    setHud("hud-connection", "open");
-  });
   socket.addEventListener("message", (event) => {
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === "session" && msg.session_id) {
         setHud("hud-session", msg.session_id);
       }
+      if (msg.type === "state") {
+        applyState(msg);
+      }
     } catch (_err) {
       /* ignore non-JSON */
     }
   });
   socket.addEventListener("close", () => {
-    setHud("hud-connection", "closed");
-    setHud("hud-session", "—");
+    setHud("hud-connection", "TIMEOUT");
     socket = null;
   });
   socket.addEventListener("error", () => {
-    setHud("hud-connection", "closed");
+    setHud("hud-connection", "TIMEOUT");
   });
 }
 
@@ -121,7 +140,6 @@ function postNamedPose(_name) {
   // F5.4: POST /api/named_pose
 }
 
-setHud("hud-connection", "closed");
 connectSession();
 
 document.addEventListener("keydown", onKeyDown);

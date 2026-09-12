@@ -1,6 +1,7 @@
-"""Operator backend: ROS 2 node plus localhost HTTP/WebSocket console (F5.2).
+"""Operator backend: ROS 2 node plus localhost HTTP/WebSocket console (F5.3).
 
 Heartbeat and /teleop/command publish only while a /ws/session socket is open.
+Telemetry from /teleop/state and /teleop/tool_pose is display-only.
 """
 
 from __future__ import annotations
@@ -16,7 +17,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from teleop_demo_msgs.msg import TeleopCommand, TeleopHeartbeat
+from geometry_msgs.msg import PoseStamped
+from teleop_demo_msgs.msg import TeleopCommand, TeleopHeartbeat, TeleopState
 import rclpy
 from rclpy.node import Node
 
@@ -58,10 +60,23 @@ class OperatorBackend(Node):
         self._gripper = 0.0
         self._label = "stop"
         self._active_key: Optional[str] = None
+        self._state_connection = ""
+        self._state_watchdog = ""
+        self._state_session_id = ""
+        self._state_disposition = ""
+        self._pose: Optional[dict] = None
+        self.create_subscription(
+            TeleopState, "/teleop/state", self._on_state, qos
+        )
+        self.create_subscription(
+            PoseStamped, "/teleop/tool_pose", self._on_pose, qos
+        )
         command_rate = float(self.get_parameter("command_rate_hz").value)
         heartbeat_rate = float(self.get_parameter("heartbeat_rate_hz").value)
+        telemetry_rate = float(self.get_parameter("telemetry_rate_hz").value)
         self.create_timer(1.0 / command_rate, self._publish_command)
         self.create_timer(1.0 / heartbeat_rate, self._publish_heartbeat)
+        self.create_timer(1.0 / telemetry_rate, self._publish_telemetry)
         _node_ready.set()
         self.get_logger().info(
             f"HTTP {HTTP_HOST}:{HTTP_PORT} serving {WEB_ROOT}"
@@ -189,9 +204,70 @@ class OperatorBackend(Node):
         message.gripper = self._gripper
         return message
 
+    def latest_state(self) -> dict:
+        with self._lock:
+            return self._state_payload_locked()
+
+    def _on_state(self, message: TeleopState) -> None:
+        with self._lock:
+            changed = (
+                message.connection_state != self._state_connection
+                or message.watchdog_state != self._state_watchdog
+            )
+            self._state_connection = message.connection_state
+            self._state_watchdog = message.watchdog_state
+            self._state_session_id = message.session_id
+            self._state_disposition = message.last_disposition
+            conn = self._connection if changed else None
+            payload = self._state_payload_locked() if conn is not None else None
+        if conn is not None and payload is not None:
+            self._emit_state(conn, payload)
+
+    def _on_pose(self, message: PoseStamped) -> None:
+        position = message.pose.position
+        orientation = message.pose.orientation
+        with self._lock:
+            self._pose = {
+                "x": float(position.x),
+                "y": float(position.y),
+                "z": float(position.z),
+                "qx": float(orientation.x),
+                "qy": float(orientation.y),
+                "qz": float(orientation.z),
+                "qw": float(orientation.w),
+                "stamp_sec": int(message.header.stamp.sec),
+                "stamp_nanosec": int(message.header.stamp.nanosec),
+            }
+
+    def _publish_telemetry(self) -> None:
+        with self._lock:
+            conn = self._connection
+            if conn is None:
+                return
+            payload = self._state_payload_locked()
+        self._emit_state(conn, payload)
+
+    def _state_payload_locked(self) -> dict:
+        pose = None if self._pose is None else dict(self._pose)
+        return {
+            "type": "state",
+            "connection_state": self._state_connection,
+            "watchdog_state": self._state_watchdog,
+            "session_id": self._state_session_id or self.session_id,
+            "last_disposition": self._state_disposition,
+            "pose": pose,
+        }
+
+    @staticmethod
+    def _emit_state(conn: WsConnection, payload: dict) -> None:
+        try:
+            conn.send_json(payload)
+        except OSError:
+            pass
+
 
 class ConsoleHandler(SimpleHTTPRequestHandler):
-    """Static operate-console, /api/health, and /ws/session."""
+    """Static operate-console, /api/health, /api/state, and /ws/session."""
 
     protocol_version = "HTTP/1.1"
 
@@ -202,7 +278,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args) -> None:
         path = urlparse(self.path).path
-        if path in ("/api/health", "/ws/session"):
+        if path in ("/api/health", "/api/state", "/ws/session"):
             return
         super().log_message(fmt, *args)
 
@@ -213,6 +289,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/health":
             self._send_health()
+            return
+        if path == "/api/state":
+            self._send_state()
             return
         if path in ("/", "/index.html"):
             self._send_file(WEB_ROOT / "index.html", "text/html; charset=utf-8")
@@ -249,6 +328,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         try:
             try:
                 conn.send_json({"type": "session", "session_id": session_id})
+                conn.send_json(node.latest_state())
             except OSError:
                 return
             while not conn.closed and rclpy.ok():
@@ -265,6 +345,13 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             self._send_json(200, payload)
             return
         self._send_json(503, {"ok": False, "node": NODE_NAME})
+
+    def _send_state(self) -> None:
+        node = getattr(self.server, "operator_node", None)
+        if node is None or not _node_ready.is_set() or not rclpy.ok():
+            self._send_json(503, {"ok": False, "node": NODE_NAME})
+            return
+        self._send_json(200, node.latest_state())
 
     def _send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")

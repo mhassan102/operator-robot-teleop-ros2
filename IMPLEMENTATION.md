@@ -97,7 +97,7 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | F2 | Local Zenoh | done | Two containers, `rmw_zenoh_cpp`, robot runs `rmw_zenohd` |
 | F3 | mlink stages 0–3 | done | Protocol, localhost loopback, eth+wifi cable-pull |
 | F4 | Safety v0 (jog watchdog) | done | 500 ms gateway on `/cmd_vel_safe` only; named pose bypasses |
-| F5 | Operator backend + web console | **partial (F5.1–F5.2 done)** | F5.3 telemetry next; camera still a stub |
+| F5 | Operator backend + web console | **partial (F5.1–F5.3 done)** | F5.4 named-pose buttons next; camera still a stub |
 | F6 | Video into this repo + console embed | remaining | Lab preview exists on Orin, not in git |
 | F7 | Orin HW encode verify / efficiency | partial | Lab gst already uses `nvv4l2h264enc`; not proven in-product |
 | F8 | mlink Stage 5 (apps on 127.0.0.1) | blocked | Blocked on F5 shape; Stage 4 not required |
@@ -119,10 +119,10 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | — | VR | deferred | |
 | — | SOC2 / IEC / ISO 10218 cert | deferred | |
 
-**Next to implement:** F5.3 (HUD from `/teleop/state` and
-`/teleop/tool_pose`). Do not start F5.4 in the same session. Do not
-start F8 until F5.2+ is running. Do not start F10 unless the user
-unblocks Safety-A. Do not start fleet.
+**Next to implement:** F5.4 (named-pose buttons →
+`/teleop/go_named_pose`). That finishes F5 except the camera stub
+(F6). Do not start F6/F8 in the F5.4 session. Do not start F10 unless
+the user unblocks Safety-A. Do not start fleet.
 
 ---
 
@@ -332,7 +332,7 @@ from `TIMEOUT` can also move. Those are F10.
 
 ---
 
-### F5 — Operator backend + web console — STATUS: partial (F5.1–F5.2 done; F5.3 next)
+### F5 — Operator backend + web console — STATUS: partial (F5.1–F5.3 done; F5.4 next)
 
 **Goal.** The human uses **one browser tab** on the operator PC.
 The existing operator Compose service becomes a **backend**: HTTP +
@@ -444,7 +444,7 @@ in F5. If a pip package is required, pin it in the Dockerfile.
 | -------- | ---- | ---------- |
 | F5.1 | HTTP + ROS backend process + operate-shell page, `127.0.0.1:8090`, health | **done** — Chrome loads the dark operate page; `GET /api/health` is 200; robot Compose unchanged; `test_basic.sh` still passes via CLI. No keys, no WS, no heartbeat |
 | F5.2 | WS keys → `/teleop/command` + heartbeat while WS open | **done** — Hold `w` jogs +x; release zeros; close WS → `SAFETY STATE=TIMEOUT` (~600 ms). `test_console_session.sh` green |
-| F5.3 | Telemetry from `/teleop/state` and `/teleop/tool_pose` | Page shows CONNECTED / TIMEOUT / pose; killing WS shows TIMEOUT without using the TTY keyboard |
+| F5.3 | Telemetry from `/teleop/state` and `/teleop/tool_pose` | **done** — HUD/API CONNECTED + live pose while jogging; close WS → TIMEOUT / SAFE STOP. `test_console_session.sh` green |
 | F5.4 | Named-pose buttons | Click `fold` / `home` matches `named_pose.sh`; jog still works after |
 
 **Tests to add (F5.2+):** a script or pytest that opens the WS (or
@@ -1111,7 +1111,95 @@ Do not implement F5.4.
 
 ### F5.4 — Named-pose buttons
 
-Same pattern after F5.3: read this file, implement only F5.4, stop.
+Paste the block below into a **new** implementation session. F5.1–F5.3
+are committed on `f5-operator-console`. The planner session verifies
+and commits; this session does not `git commit`.
+
+```text
+Read /home/muhammadhassan/robots/IMPLEMENTATION.md from the start, then
+only F5 (Look diagram, F5.4 row) and the files listed below. F5.1–F5.3
+are done. Implement Feature F5.4 only. Stop when F5.4 acceptance
+passes. Do not start F6.
+
+Goal
+- Right-rail named-pose buttons work. Click fold / home / … calls the
+  same /teleop/go_named_pose service as named_pose.sh.
+- Show success/failure text on the page.
+- Jog (F5.2) and HUD (F5.3) still work after a pose.
+- Until F10, named poses still bypass the 500 ms watchdog. Do not
+  pretend otherwise in the UI (a short note is enough).
+
+Must read
+- IMPLEMENTATION.md F5 contract, F5.4 row, API sketch
+- teleoperation-prototype/scripts/named_pose.sh
+- teleoperation-prototype/scripts/test_named_pose.sh
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/named_pose.py
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/arm_kinematics.py
+  (NAMED_POSES names)
+- teleoperation-prototype/ros2_ws/src/teleop_demo_msgs/srv/GoNamedPose.srv
+- teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/operator_backend.py
+- teleoperation-prototype/web/index.html
+- teleoperation-prototype/web/operate.js
+
+Backend
+- Keep F5.2/F5.3: heartbeat only while /ws/session is open; HUD
+  display-only; GET /api/health and GET /api/state unchanged in spirit.
+- POST /api/named_pose  {"name":"fold"}
+  Body JSON, name is one of: home, fold, ready, observe, pregrasp,
+  retract, stow (same as named_pose.sh). Unknown name → 400.
+- Operator backend is a rclpy client of /teleop/go_named_pose
+  (teleop_demo_msgs/srv/GoNamedPose). Do not reimplement MoveIt.
+  Do not add a second writer around the safety gateway.
+- Response JSON e.g. {"ok": true|false, "name":"fold", "message":"..." }
+  matching the service success/message fields. HTTP 200 on handled
+  calls (including robot-side failure); 4xx only for bad input;
+  503 if the service is missing.
+- Calls can take several seconds (planning). Do not block the HTTP
+  server’s other clients: run the service call off the request
+  thread (future/executor) so /api/health and WS keys still work.
+- Space / Normal Stop does not cancel an in-flight pose (that is
+  F10). Do not add that here.
+- Do not require a held key. Page load already opens WS.
+
+Page
+- Enable the existing pose buttons (remove disabled). Same seven
+  names, same dark rail. Do not add fleet chrome or new pages.
+- Click → POST /api/named_pose. Disable buttons (or ignore clicks)
+  while a pose is in flight; re-enable when the response arrives.
+- Show the service message as success/failure text near the rail.
+- Short note that named poses bypass the jog watchdog until F10.
+- Camera stays “camera: not wired (F6)”.
+
+Tests
+- Keep test_named_pose.sh green (CLI path).
+- Add or extend a console test (test_console_session.sh or a small
+  test_console_named_pose.sh) that POSTs {"name":"fold"} (or home)
+  to /api/named_pose from the host, asserts ok true (or waits like
+  test_named_pose.sh for tool pose to move), then a WS key w still
+  jogs after.
+- Keep test_console_session.sh F5.2/F5.3 cases and test_basic.sh.
+
+Do not
+- F6 camera, mlink, Orin, Safety-A, auth, TLS, gamepad
+- Cancel pose on TIMEOUT or space (F10)
+- Expose 8090 on 0.0.0.0 on the host
+- Change /teleop/command fields or the robot container
+- git commit (planner session will verify and commit)
+- git push
+
+Acceptance (prove all of these, then stop)
+1. start.sh healthy; curl /api/health 200.
+2. Click fold (or POST /api/named_pose) moves the Gazebo arm like
+   ./scripts/named_pose.sh fold; page shows success text.
+3. Click a bad name is rejected; unknown pose does not hang.
+4. After a named pose, hold w in the page still jogs.
+5. HUD still updates. Close WS still trips TIMEOUT.
+6. ./scripts/test_named_pose.sh and ./scripts/test_console_session.sh
+   (and the new POST test) pass.
+
+When done: print how to click a pose, list files changed, and stop.
+Do not implement F6.
+```
 
 ### F6 — video in repo + embed
 
