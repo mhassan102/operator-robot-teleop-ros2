@@ -54,6 +54,17 @@ if (( SECONDS >= svc_deadline )); then
   exit 1
 fi
 
+# rmw_zenoh can drop the first MoveIt action while the graph is still busy.
+echo "Waiting for move_group to finish coming up..."
+mg_deadline=$((SECONDS + 60))
+while (( SECONDS < mg_deadline )); do
+  if docker compose logs --no-color --since 2m robot 2>/dev/null | grep -q 'You can start planning now'; then
+    break
+  fi
+  sleep 2
+done
+sleep 15
+
 echo "Waiting for /teleop/tool_pose..."
 pose_deadline=$((SECONDS + 60))
 while (( SECONDS < pose_deadline )); do
@@ -78,15 +89,20 @@ read_pose() {
 go_pose() {
   local name="$1"
   local out=""
+  local attempt
   echo "Planning to ${name}..."
-  out="$(docker compose exec -T operator \
-    /teleop/entrypoint.sh ros2 service call /teleop/go_named_pose \
-      teleop_demo_msgs/srv/GoNamedPose "{name: ${name}}")"
-  if grep -qiE 'success(: |=)true' <<<"${out}"; then
-    echo "${name} ok"
-    sleep 1
-    return 0
-  fi
+  for attempt in 1 2 3; do
+    out="$(docker compose exec -T operator \
+      /teleop/entrypoint.sh ros2 service call /teleop/go_named_pose \
+        teleop_demo_msgs/srv/GoNamedPose "{name: ${name}}")"
+    if grep -qiE 'success(: |=)true' <<<"${out}"; then
+      echo "${name} ok"
+      sleep 1
+      return 0
+    fi
+    echo "${name} attempt ${attempt} failed: ${out}"
+    sleep 2
+  done
   echo "ERROR: ${name} named pose failed:" >&2
   echo "${out}" >&2
   docker compose logs --no-color --tail=80 robot >&2

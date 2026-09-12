@@ -30,14 +30,16 @@
         <section class="rail-block">
           <h2>Named poses</h2>
           <div class="pose-list">
-            <button type="button" disabled>home</button>
-            <button type="button" disabled>fold</button>
-            <button type="button" disabled>ready</button>
-            <button type="button" disabled>observe</button>
-            <button type="button" disabled>pregrasp</button>
-            <button type="button" disabled>retract</button>
-            <button type="button" disabled>stow</button>
+            <button type="button" data-pose="home">home</button>
+            <button type="button" data-pose="fold">fold</button>
+            <button type="button" data-pose="ready">ready</button>
+            <button type="button" data-pose="observe">observe</button>
+            <button type="button" data-pose="pregrasp">pregrasp</button>
+            <button type="button" data-pose="retract">retract</button>
+            <button type="button" data-pose="stow">stow</button>
           </div>
+          <p class="pose-status" id="pose-status" aria-live="polite"></p>
+          <p class="pose-note">Named poses bypass the 500 ms jog watchdog until F10.</p>
         </section>
 
         <section class="rail-block">

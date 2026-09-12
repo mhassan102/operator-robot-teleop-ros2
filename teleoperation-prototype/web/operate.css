@@ -142,6 +142,29 @@ kbd {
   border: 1px solid var(--line);
   border-radius: 6px;
   text-align: left;
+  cursor: pointer;
+}
+
+.pose-status {
+  min-height: 2.4em;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pose-status.ok {
+  color: #7dcea0;
+}
+
+.pose-status.fail {
+  color: var(--stop);
+}
+
+.pose-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .rail button:disabled {

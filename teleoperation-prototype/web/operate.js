@@ -1,4 +1,4 @@
-/* F5.3: session keys + display-only HUD from /teleop/state and /teleop/tool_pose. */
+/* F5.4: session keys, display-only HUD, named-pose POST. */
 const SESSION_PATH = "/ws/session";
 
 const KEY_BINDINGS = {
@@ -21,6 +21,7 @@ const KEY_BINDINGS = {
 
 const held = new Set();
 let socket = null;
+let poseInFlight = false;
 
 function setHud(id, text) {
   const el = document.getElementById(id);
@@ -136,8 +137,52 @@ function onBlurOrHide() {
   sendStop();
 }
 
-function postNamedPose(_name) {
-  // F5.4: POST /api/named_pose
+function poseButtons() {
+  return document.querySelectorAll(".pose-list button[data-pose]");
+}
+
+function setPoseBusy(busy) {
+  poseInFlight = busy;
+  poseButtons().forEach((btn) => {
+    btn.disabled = busy;
+  });
+}
+
+function setPoseStatus(ok, message) {
+  const el = document.getElementById("pose-status");
+  if (!el) {
+    return;
+  }
+  el.textContent = message || "";
+  el.classList.toggle("ok", ok === true);
+  el.classList.toggle("fail", ok === false);
+}
+
+async function postNamedPose(name) {
+  if (poseInFlight) {
+    return;
+  }
+  setPoseBusy(true);
+  setPoseStatus(null, "planning " + name + "…");
+  try {
+    const res = await fetch("/api/named_pose", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (_err) {
+      data = {};
+    }
+    const message = data.message || ("HTTP " + res.status);
+    setPoseStatus(Boolean(data.ok), message);
+  } catch (err) {
+    setPoseStatus(false, String(err));
+  } finally {
+    setPoseBusy(false);
+  }
 }
 
 connectSession();
@@ -158,4 +203,11 @@ if (stopButton) {
   });
 }
 
-void postNamedPose;
+poseButtons().forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const name = btn.getAttribute("data-pose");
+    if (name) {
+      postNamedPose(name);
+    }
+  });
+});

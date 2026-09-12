@@ -322,8 +322,12 @@ if ! grep -q 'camera: not wired (F6)' <<<"${page}"; then
   echo "ERROR: camera placeholder missing from console page." >&2
   exit 1
 fi
-if ! grep -q 'disabled>home</button>' <<<"${page}"; then
-  echo "ERROR: named-pose buttons are not disabled." >&2
+if ! grep -q 'data-pose="home"' <<<"${page}"; then
+  echo "ERROR: named-pose buttons missing from console page." >&2
+  exit 1
+fi
+if grep -qE 'disabled[^>]*>home</button>' <<<"${page}"; then
+  echo "ERROR: named-pose home button is still disabled." >&2
   exit 1
 fi
 

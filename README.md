@@ -36,15 +36,15 @@ that is on hold. Only the product roadmap stays at the repo root.
 
 ## What is next
 
-F5.4: enable named-pose buttons on the console (`home` / `fold` / …).
-See `IMPLEMENTATION.md` Feature F5. Camera is still a placeholder (F6).
+F6: camera into this repo and the same console tab. See
+`IMPLEMENTATION.md` Feature F6. F5 localhost console is done.
 
 ## Quick run (local teleop)
 
 ```bash
 cd teleoperation-prototype
 ./scripts/start.sh --gui
-# console (keys + HUD; named poses in F5.4): http://127.0.0.1:8090/
+# console: http://127.0.0.1:8090/
 ./scripts/keyboard_teleop.sh   # TTY fallback
 ```
 

@@ -97,10 +97,10 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | F2 | Local Zenoh | done | Two containers, `rmw_zenoh_cpp`, robot runs `rmw_zenohd` |
 | F3 | mlink stages 0–3 | done | Protocol, localhost loopback, eth+wifi cable-pull |
 | F4 | Safety v0 (jog watchdog) | done | 500 ms gateway on `/cmd_vel_safe` only; named pose bypasses |
-| F5 | Operator backend + web console | **partial (F5.1–F5.3 done)** | F5.4 named-pose buttons next; camera still a stub |
+| F5 | Operator backend + web console | **done** | Localhost operate page: keys, heartbeat, HUD, named poses. Camera still a stub (F6) |
 | F6 | Video into this repo + console embed | remaining | Lab preview exists on Orin, not in git |
 | F7 | Orin HW encode verify / efficiency | partial | Lab gst already uses `nvv4l2h264enc`; not proven in-product |
-| F8 | mlink Stage 5 (apps on 127.0.0.1) | blocked | Blocked on F5 shape; Stage 4 not required |
+| F8 | mlink Stage 5 (apps on 127.0.0.1) | remaining | F5 shape is done; session order still does F6 first. Stage 4 not required |
 | F9 | mlink Stage 4 (5G / `wwan0`) | blocked | USB dongle not on the Orin |
 | F10 | Safety-A local harden | **on hold** | Required before WAN / real arm; do not start until unblocked |
 | F11 | Safety-B WAN | remaining | After F10; `heartbeat_only`, E-stop, Reset |
@@ -119,10 +119,9 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | — | VR | deferred | |
 | — | SOC2 / IEC / ISO 10218 cert | deferred | |
 
-**Next to implement:** F5.4 (named-pose buttons →
-`/teleop/go_named_pose`). That finishes F5 except the camera stub
-(F6). Do not start F6/F8 in the F5.4 session. Do not start F10 unless
-the user unblocks Safety-A. Do not start fleet.
+**Next to implement:** F6 (video into this repo + console embed).
+Do not start F8 until after F6 in session order. Do not start F10
+unless the user unblocks Safety-A. Do not start fleet.
 
 ---
 
@@ -332,7 +331,7 @@ from `TIMEOUT` can also move. Those are F10.
 
 ---
 
-### F5 — Operator backend + web console — STATUS: partial (F5.1–F5.3 done; F5.4 next)
+### F5 — Operator backend + web console — STATUS: done
 
 **Goal.** The human uses **one browser tab** on the operator PC.
 The existing operator Compose service becomes a **backend**: HTTP +
@@ -445,7 +444,7 @@ in F5. If a pip package is required, pin it in the Dockerfile.
 | F5.1 | HTTP + ROS backend process + operate-shell page, `127.0.0.1:8090`, health | **done** — Chrome loads the dark operate page; `GET /api/health` is 200; robot Compose unchanged; `test_basic.sh` still passes via CLI. No keys, no WS, no heartbeat |
 | F5.2 | WS keys → `/teleop/command` + heartbeat while WS open | **done** — Hold `w` jogs +x; release zeros; close WS → `SAFETY STATE=TIMEOUT` (~600 ms). `test_console_session.sh` green |
 | F5.3 | Telemetry from `/teleop/state` and `/teleop/tool_pose` | **done** — HUD/API CONNECTED + live pose while jogging; close WS → TIMEOUT / SAFE STOP. `test_console_session.sh` green |
-| F5.4 | Named-pose buttons | Click `fold` / `home` matches `named_pose.sh`; jog still works after |
+| F5.4 | Named-pose buttons | **done** — POST `/api/named_pose` fold/home; unknown name 400; jog + HUD after; close still TIMEOUT. `test_console_named_pose.sh` green |
 
 **Tests to add (F5.2+):** a script or pytest that opens the WS (or
 calls a small backend helper), sends `+x`, asserts robot logs /

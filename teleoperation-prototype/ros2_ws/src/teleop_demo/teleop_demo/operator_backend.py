@@ -1,7 +1,8 @@
-"""Operator backend: ROS 2 node plus localhost HTTP/WebSocket console (F5.3).
+"""Operator backend: ROS 2 node plus localhost HTTP/WebSocket console (F5.4).
 
 Heartbeat and /teleop/command publish only while a /ws/session socket is open.
 Telemetry from /teleop/state and /teleop/tool_pose is display-only.
+Named poses are a rclpy client of /teleop/go_named_pose (not a second writer).
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import os
 import signal
 import socket
 import threading
+import time
 import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,9 +21,11 @@ from urllib.parse import urlparse
 
 from geometry_msgs.msg import PoseStamped
 from teleop_demo_msgs.msg import TeleopCommand, TeleopHeartbeat, TeleopState
+from teleop_demo_msgs.srv import GoNamedPose
 import rclpy
 from rclpy.node import Node
 
+from teleop_demo.arm_kinematics import NAMED_POSES
 from teleop_demo.commands import COMMANDS, KEY_BINDINGS, fill_twist
 from teleop_demo.parameters import declare_teleop_parameters
 from teleop_demo.qos import command_qos
@@ -35,6 +39,11 @@ WEB_ROOT = Path(os.environ.get("TELEOP_WEB_ROOT", "/teleop/web"))
 HTTP_HOST = "0.0.0.0"
 HTTP_PORT = 8090
 NODE_NAME = "operator_backend"
+NAMED_POSE_SERVICE = "/teleop/go_named_pose"
+NAMED_POSE_NAMES = frozenset(NAMED_POSES)
+NAMED_POSE_WAIT_SEC = 2.0
+NAMED_POSE_CALL_SEC = 90.0
+MAX_JSON_BODY = 4096
 
 _node_ready = threading.Event()
 
@@ -71,6 +80,7 @@ class OperatorBackend(Node):
         self.create_subscription(
             PoseStamped, "/teleop/tool_pose", self._on_pose, qos
         )
+        self._named_pose = self.create_client(GoNamedPose, NAMED_POSE_SERVICE)
         command_rate = float(self.get_parameter("command_rate_hz").value)
         heartbeat_rate = float(self.get_parameter("heartbeat_rate_hz").value)
         telemetry_rate = float(self.get_parameter("telemetry_rate_hz").value)
@@ -208,6 +218,56 @@ class OperatorBackend(Node):
         with self._lock:
             return self._state_payload_locked()
 
+    def go_named_pose(self, name: str) -> tuple[int, dict]:
+        """Call /teleop/go_named_pose off the HTTP request thread.
+
+        Waits on the rclpy future; does not spin. Returns HTTP 200 when the
+        robot handled the name (success or failure), 503 if the service is
+        missing. Caller must already have validated `name`.
+        """
+        self.get_logger().info(f"NAMED POSE request name={name}")
+        if not self._named_pose.wait_for_service(timeout_sec=NAMED_POSE_WAIT_SEC):
+            message = f"{NAMED_POSE_SERVICE} unavailable"
+            self.get_logger().warn(message)
+            return 503, {"ok": False, "name": name, "message": message}
+
+        request = GoNamedPose.Request()
+        request.name = name
+        future = self._named_pose.call_async(request)
+        deadline = time.monotonic() + NAMED_POSE_CALL_SEC
+        while not future.done():
+            if not rclpy.ok():
+                return 503, {
+                    "ok": False,
+                    "name": name,
+                    "message": "backend shutting down",
+                }
+            if time.monotonic() >= deadline:
+                message = f"timed out waiting for {name}"
+                self.get_logger().warn(f"NAMED POSE {message}")
+                return 200, {"ok": False, "name": name, "message": message}
+            time.sleep(0.05)
+
+        try:
+            result = future.result()
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc)
+            self.get_logger().warn(f"NAMED POSE error name={name} {message}")
+            return 200, {"ok": False, "name": name, "message": message}
+        if result is None:
+            message = "empty service response"
+            return 200, {"ok": False, "name": name, "message": message}
+
+        payload = {
+            "ok": bool(result.success),
+            "name": name,
+            "message": result.message,
+        }
+        self.get_logger().info(
+            f"NAMED POSE result name={name} ok={payload['ok']} msg={payload['message']}"
+        )
+        return 200, payload
+
     def _on_state(self, message: TeleopState) -> None:
         with self._lock:
             changed = (
@@ -267,7 +327,7 @@ class OperatorBackend(Node):
 
 
 class ConsoleHandler(SimpleHTTPRequestHandler):
-    """Static operate-console, /api/health, /api/state, and /ws/session."""
+    """Static operate-console, health/state, named poses, and /ws/session."""
 
     protocol_version = "HTTP/1.1"
 
@@ -297,6 +357,13 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             self._send_file(WEB_ROOT / "index.html", "text/html; charset=utf-8")
             return
         super().do_GET()
+
+    def do_POST(self) -> None:
+        path = urlparse(self.path).path
+        if path == "/api/named_pose":
+            self._handle_named_pose()
+            return
+        self.send_error(404, "not found")
 
     def _handle_websocket(self) -> None:
         node = getattr(self.server, "operator_node", None)
@@ -352,6 +419,68 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             self._send_json(503, {"ok": False, "node": NODE_NAME})
             return
         self._send_json(200, node.latest_state())
+
+    def _handle_named_pose(self) -> None:
+        node = getattr(self.server, "operator_node", None)
+        if node is None or not _node_ready.is_set() or not rclpy.ok():
+            self._send_json(
+                503, {"ok": False, "name": "", "message": "backend not ready"}
+            )
+            return
+        payload, error = self._read_json_object()
+        if error is not None:
+            self._send_json(400, {"ok": False, "name": "", "message": error})
+            return
+        raw_name = payload.get("name")
+        if not isinstance(raw_name, str):
+            self._send_json(
+                400, {"ok": False, "name": "", "message": "name must be a string"}
+            )
+            return
+        name = raw_name.strip().lower()
+        if name not in NAMED_POSE_NAMES:
+            allowed = ", ".join(NAMED_POSES)
+            self._send_json(
+                400,
+                {
+                    "ok": False,
+                    "name": raw_name,
+                    "message": f"unknown pose '{raw_name}'; use {allowed}",
+                },
+            )
+            return
+        status, body = node.go_named_pose(name)
+        self._send_json(status, body)
+
+    def _read_json_object(self) -> tuple[Optional[dict], Optional[str]]:
+        length_header = self.headers.get("Content-Length")
+        if length_header is None:
+            self.close_connection = True
+            return None, "missing Content-Length"
+        try:
+            length = int(length_header)
+        except ValueError:
+            self.close_connection = True
+            return None, "invalid Content-Length"
+        if length < 0:
+            self.close_connection = True
+            return None, "invalid Content-Length"
+        if length > MAX_JSON_BODY:
+            self.close_connection = True
+            return None, "body too large"
+        if length == 0:
+            return None, "empty body"
+        raw = self.rfile.read(length)
+        if len(raw) != length:
+            self.close_connection = True
+            return None, "truncated body"
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None, "invalid JSON"
+        if not isinstance(data, dict):
+            return None, "JSON object required"
+        return data, None
 
     def _send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
