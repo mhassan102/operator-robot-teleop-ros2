@@ -97,10 +97,10 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | F2 | Local Zenoh | done | Two containers, `rmw_zenoh_cpp`, robot runs `rmw_zenohd` |
 | F3 | mlink stages 0–3 | done | Protocol, localhost loopback, eth+wifi cable-pull |
 | F4 | Safety v0 (jog watchdog) | done | 500 ms gateway on `/cmd_vel_safe` only; named pose bypasses |
-| F5 | Operator backend + web console | **done** | Localhost operate page: keys, heartbeat, HUD, named poses. Camera still a stub (F6) |
-| F6 | Video into this repo + console embed | remaining | Lab preview exists on Orin, not in git |
+| F5 | Operator backend + web console | **done** | Localhost operate page: keys, heartbeat, HUD, named poses. Camera in the same tab (F6) |
+| F6 | Video into this repo + console embed | **done** | `video/` scripts + yaml; console iframe of Orin `/cam`. MediaMTX binary not in git |
 | F7 | Orin HW encode verify / efficiency | partial | Lab gst already uses `nvv4l2h264enc`; not proven in-product |
-| F8 | mlink Stage 5 (apps on 127.0.0.1) | remaining | F5 shape is done; session order still does F6 first. Stage 4 not required |
+| F8 | mlink Stage 5 (apps on 127.0.0.1) | remaining | F5+F6 shape is done. Stage 4 not required |
 | F9 | mlink Stage 4 (5G / `wwan0`) | blocked | USB dongle not on the Orin |
 | F10 | Safety-A local harden | **on hold** | Required before WAN / real arm; do not start until unblocked |
 | F11 | Safety-B WAN | remaining | After F10; `heartbeat_only`, E-stop, Reset |
@@ -119,9 +119,8 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | — | VR | deferred | |
 | — | SOC2 / IEC / ISO 10218 cert | deferred | |
 
-**Next to implement:** F6 (video into this repo + console embed).
-Do not start F8 until after F6 in session order. Do not start F10
-unless the user unblocks Safety-A. Do not start fleet.
+**Next to implement:** F7 (Orin HW encode verify) or F8 (mlink Stage 5).
+Do not start F10 unless the user unblocks Safety-A. Do not start fleet.
 
 ---
 
@@ -349,7 +348,7 @@ that is their first login page. Our v1 is one lab arm.
 ├──────────────────────────────────────────┬──────────────────┤
 │                                          │  Named poses     │
 │  CAMERA STAGE                            │  (F5.4 wires)    │
-│  “camera: not wired (F6)”                │                  │
+│  Orin WebRTC (F6 WHEP)                   │                  │
 │                                          │  Normal Stop     │
 │                                          │  (F5.2 wires)    │
 │                                          │                  │
@@ -413,8 +412,7 @@ TTY `keyboard_teleop.sh` **stays** as a fallback for existing tests.
 - Telemetry panel **reads** `/teleop/state`, `/teleop/tool_pose`,
   and ack/latency if already available. It must not sit on the
   safety path (display only).
-- Video panel: a box that says “camera: not wired (F6)” unless a
-  later F5 substage is told to iframe a lab URL.
+- Video panel: F6 plays the Orin WHEP stream here. F5 shipped a stub.
 - Health: `GET /api/health` → 200 if ROS node is up.
 
 **API sketch (lock the idea, names can be bikeshed in the session
@@ -461,7 +459,7 @@ on the host, changing `/teleop/command` fields.
 
 ---
 
-### F6 — Video into this repo + console embed — STATUS: remaining
+### F6 — Video into this repo + console embed — STATUS: done
 
 **Goal.** The lab WebRTC preview becomes a first-class tree in
 `video/`, and the F5 console shows the camera in the **same tab**.
@@ -496,6 +494,14 @@ replacing NVENC with software x264.
 test bars) **and** still jogs the arm from the same page. `video/`
 README lists start/stop. Encoder line in gst still contains
 `nvv4l2h264enc`.
+
+**Shipped.** `video/` has `start.sh` / `stop.sh` / `gst-publish.sh` /
+`gst-loop.sh` / `mediamtx.yml`. MediaMTX **v1.20.1 linux_arm64** is
+documented, not committed. Console embeds the same MediaMTX `/cam`
+page in an iframe (override `?cam=`). Native WHEP from `127.0.0.1`
+does not complete ICE against Tailscale-pinned MediaMTX; iframe keeps
+ICE same-origin on the Orin. F8 still removes Tailscale from video.
+Camera down does not stop jog.
 
 **Files to read:** `video/README.md`; this section; F5 `web/` page;
 the lab tree `gst-publish.sh` / `mediamtx.yml` / `start.sh`.
@@ -1257,8 +1263,9 @@ cases. Do not git commit unless asked.
 
 These can wait until the feature that needs them. Do not stall F5.
 
-1. **MediaMTX vs a smaller WHEP helper in v1** — F6 can iframe
-   MediaMTX; F8 may want a localhost-only player.
+1. **MediaMTX vs a smaller WHEP helper in v1** — F6 used a small
+   native WHEP client in `operate.js` (not an iframe). F8 may still
+   want a localhost-only player.
 2. **Control payload encoding** — ROS CDR vs a packed struct for
    the F8 bridge. Pick in the F8 session; both fit in 1440 bytes.
 3. **Who runs mlink** — host processes beside Compose (today’s

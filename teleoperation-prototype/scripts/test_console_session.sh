@@ -318,8 +318,12 @@ fi
 echo "GET /api/state after close: connection=${closed_conn} watchdog=${closed_watchdog}"
 
 page="$(curl -sf http://127.0.0.1:8090/)"
-if ! grep -q 'camera: not wired (F6)' <<<"${page}"; then
-  echo "ERROR: camera placeholder missing from console page." >&2
+if ! grep -q 'id="camera"' <<<"${page}"; then
+  echo "ERROR: camera video element missing from console page." >&2
+  exit 1
+fi
+if grep -q 'camera: not wired (F6)' <<<"${page}"; then
+  echo "ERROR: F6 camera stub still on console page." >&2
   exit 1
 fi
 if ! grep -q 'data-pose="home"' <<<"${page}"; then

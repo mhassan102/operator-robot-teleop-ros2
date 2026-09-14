@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=1280">
   <title>Teleop · lab-arm · localhost</title>
-  <link rel="stylesheet" href="/operate.css">
+  <link rel="stylesheet" href="/operate.css?v=f6v">
 </head>
 <body>
   <div class="shell">
@@ -22,7 +22,8 @@
     <main class="stage">
       <section class="camera" aria-label="Camera">
         <div class="camera-frame">
-          <p class="camera-msg">camera: not wired (F6)</p>
+          <video id="camera" autoplay playsinline muted></video>
+          <p class="camera-msg" id="camera-msg">camera: connecting…</p>
         </div>
       </section>
 
@@ -82,6 +83,7 @@
       </div>
     </footer>
   </div>
-  <script src="/operate.js"></script>
+  <script src="/reader.js"></script>
+  <script src="/operate.js?v=f6v"></script>
 </body>
 </html>

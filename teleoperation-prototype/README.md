@@ -47,7 +47,8 @@ Headless Gazebo is the default. For an interactive window (needs X11):
 ```
 
 Open the operator console at `http://127.0.0.1:8090/` (keys, heartbeat,
-HUD, named-pose buttons). TTY fallback:
+HUD, named-pose buttons, Orin camera). Camera URL override:
+`?cam=http://100.101.94.5:8889/cam`. TTY fallback:
 
 ```bash
 ./scripts/keyboard_teleop.sh

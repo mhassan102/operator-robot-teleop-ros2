@@ -19,7 +19,7 @@ board, target architecture, feature contracts, and session prompts.
 | [`teleoperation-prototype/`](teleoperation-prototype/) | ROS 2 Humble Compose: operator + robot, MoveIt Servo, Gazebo, keyboard teleop |
 | [`mlink-transport/`](mlink-transport/) | Userspace UDP bonding (`mlink-op` / `mlink-edge`), stages 0–3 done. Default doc: [`mlink-transport/README.md`](mlink-transport/README.md) |
 | [`safety/`](safety/) | 25-function coverage + Zone 1 plan (Safety-A integration on hold) |
-| [`video/`](video/) | Lab WebRTC / NVENC notes (code still on the Orin, not in git) |
+| [`video/`](video/) | Orin WebRTC / NVENC scripts + yaml (MediaMTX binary not in git) |
 
 Feature-specific plans live **in those directories**, including work
 that is on hold. Only the product roadmap stays at the repo root.
@@ -31,13 +31,13 @@ that is on hold. Only the product roadmap stays at the repo root.
   named poses.
 - **mlink** duplicate-on-all-up-paths, first-good delivery, Ethernet +
   Wi-Fi cable-pull between this PC and Orin `nvidia-3`.
-- Orin USB camera → **`nvv4l2h264enc`** → MediaMTX → Chrome (separate
-  tab, Tailscale ICE, tree not in this repo).
+- Orin USB camera → **`nvv4l2h264enc`** → MediaMTX → same console tab
+  (F6 WHEP). Tailscale ICE is a lab shortcut until F8.
 
 ## What is next
 
-F6: camera into this repo and the same console tab. See
-`IMPLEMENTATION.md` Feature F6. F5 localhost console is done.
+F7 (Orin HW encode verify) or F8 (mlink Stage 5). See
+`IMPLEMENTATION.md`. F5 console and F6 camera embed are done.
 
 ## Quick run (local teleop)
 

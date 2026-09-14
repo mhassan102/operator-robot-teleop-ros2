@@ -1,5 +1,6 @@
-/* F5.4: session keys, display-only HUD, named-pose POST. */
+/* F5 session keys / HUD / named poses. F6 camera uses MediaMTX WHEP reader. */
 const SESSION_PATH = "/ws/session";
+const DEFAULT_CAM = "http://100.101.94.5:8889/cam";
 
 const KEY_BINDINGS = {
   w: "+x",
@@ -185,6 +186,61 @@ async function postNamedPose(name) {
   }
 }
 
+function cameraWhepUrl() {
+  const raw = new URLSearchParams(window.location.search).get("cam") || DEFAULT_CAM;
+  let base = (raw || DEFAULT_CAM).trim();
+  base = base.replace(/\/+$/, "");
+  if (!base) {
+    base = DEFAULT_CAM;
+  }
+  if (!/\/whep$/i.test(base)) {
+    base = base + "/whep";
+  }
+  return base;
+}
+
+function setCameraMsg(text) {
+  const el = document.getElementById("camera-msg");
+  if (!el) {
+    return;
+  }
+  if (text) {
+    el.textContent = text;
+    el.hidden = false;
+  } else {
+    el.textContent = "";
+    el.hidden = true;
+  }
+}
+
+function startCamera() {
+  const video = document.getElementById("camera");
+  if (!video) {
+    return;
+  }
+  if (typeof MediaMTXWebRTCReader !== "function") {
+    setCameraMsg("camera unavailable");
+    return;
+  }
+  const whepUrl = cameraWhepUrl();
+  setCameraMsg("camera: connecting…");
+  const reader = new MediaMTXWebRTCReader({
+    url: whepUrl,
+    onError: () => {
+      setCameraMsg("camera: connecting…");
+    },
+    onTrack: (event) => {
+      video.srcObject = event.streams[0];
+      video.play().catch(() => {});
+      setCameraMsg("");
+    },
+  });
+  window.addEventListener("beforeunload", () => {
+    reader.close();
+  });
+}
+
+startCamera();
 connectSession();
 
 document.addEventListener("keydown", onKeyDown);
