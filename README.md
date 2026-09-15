@@ -36,7 +36,7 @@ that is on hold. Only the product roadmap stays at the repo root.
 
 ## What is next
 
-F7 (Orin HW encode verify) or F8 (mlink Stage 5). See
+F8 (mlink Stage 5). F7 (Orin HW encode verify) is on hold. See
 `IMPLEMENTATION.md`. F5 console and F6 camera embed are done.
 
 ## Quick run (local teleop)
