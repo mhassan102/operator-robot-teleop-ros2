@@ -18,6 +18,11 @@ tree under teammate directories on the Orin.
 
 ## Pipeline
 
+Decode / encode blocks (today vs F7 plan): [`decode-encode.md`](decode-encode.md).
+F7 is **on hold**. Today: CPU `jpegdec`, HW `nvv4l2h264enc`. This
+pipeline is Orin-only (`nvvidconv` / NVENC); no laptop software
+fallback.
+
 ```text
 USB /dev/video0 (MJPG) or videotestsrc
   -> jpegdec (CPU) + nvvidconv (NVMM NV12)
@@ -96,5 +101,6 @@ load.
 ## What is not done
 
 - ICE / media still on Tailscale, not mlink (F8)
-- `jpegdec` is software; NVENC is hardware (F7)
+- `jpegdec` is software; NVENC is hardware (F7 **on hold** — see
+  [`decode-encode.md`](decode-encode.md))
 - Bitrate adapt, multi-cam, video-freshness watchdog: later features

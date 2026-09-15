@@ -99,7 +99,7 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | F4 | Safety v0 (jog watchdog) | done | 500 ms gateway on `/cmd_vel_safe` only; named pose bypasses |
 | F5 | Operator backend + web console | **done** | Localhost operate page: keys, heartbeat, HUD, named poses. Camera in the same tab (F6) |
 | F6 | Video into this repo + console embed | **done** | `video/` scripts + yaml; console iframe of Orin `/cam`. MediaMTX binary not in git |
-| F7 | Orin HW encode verify / efficiency | partial | Lab gst already uses `nvv4l2h264enc`; not proven in-product |
+| F7 | Orin HW encode verify / efficiency | **on hold** | HW encode already in gst; skip until Orin time. Not a software-fallback feature |
 | F8 | mlink Stage 5 (apps on 127.0.0.1) | remaining | F5+F6 shape is done. Stage 4 not required |
 | F9 | mlink Stage 4 (5G / `wwan0`) | blocked | USB dongle not on the Orin |
 | F10 | Safety-A local harden | **on hold** | Required before WAN / real arm; do not start until unblocked |
@@ -119,7 +119,7 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | — | VR | deferred | |
 | — | SOC2 / IEC / ISO 10218 cert | deferred | |
 
-**Next to implement:** F7 (Orin HW encode verify) or F8 (mlink Stage 5).
+**Next to implement:** F8 (mlink Stage 5). F7 is on hold.
 Do not start F10 unless the user unblocks Safety-A. Do not start fleet.
 
 ---
@@ -508,17 +508,46 @@ the lab tree `gst-publish.sh` / `mediamtx.yml` / `start.sh`.
 
 ---
 
-### F7 — Orin HW encode verify / efficiency — STATUS: partial
+### F7 — Orin HW encode verify / efficiency — STATUS: on hold
 
-**Goal.** Prove the pixels that reach the operator used Jetson HW
-encode, and cut obvious CPU waste on the camera path.
+**On hold.** Do not start an implementation session for F7. Encode is
+already Jetson HW. F6 (camera in the console) does not depend on this.
+Revisit only when someone is on the Orin anyway (e.g. F8.2 media).
+
+**Not this feature.** F7 is **not** “if GPU on the edge then NVENC,
+else software `x264enc`.” `gst-publish.sh` stays Orin-specific. A
+laptop with no NVIDIA HW encode does not get a fallback while F7 is
+held. That would be a new portable-encoder ID later, if the camera
+computer is not always an Orin.
+
+**Goal (when unblocked).** Prove the pixels that reach the operator
+used Jetson HW encode, and cut obvious CPU waste on the camera path.
+One decode, then one encode — not two decodes.
+
+Diagrams (current vs F7 plan): [`video/decode-encode.md`](video/decode-encode.md).
+
+**Today (held):** software JPEG decode, hardware H.264 encode.
+
+```text
+  USB MJPG -- jpegdec (CPU) --> pixels -- nvv4l2h264enc (NVENC) --> H.264 --> Chrome
+```
+
+**F7 plan:** same encode; move decode to HW if L4T has `nvjpegdec`.
+
+```text
+  USB MJPG -- nvjpegdec (HW) --> pixels -- nvv4l2h264enc (NVENC) --> H.264 --> Chrome
+```
+
+Same **Orin chip**, not the same engine: JPEG decode is NVDEC/`nvjpeg`;
+H.264 encode is **NVENC**. The CUDA GPU is not the codec. Chrome
+always sees H.264.
 
 **Already true in the lab gst line:** `nvv4l2h264enc` after
 `nvvidconv` into NVMM NV12. USB camera is MJPG → **software
 `jpegdec`** → NVENC. That JPEG decode is the main remaining CPU
-cost.
+cost. Seeing WebRTC in the console proves F6, not F7.
 
-**Work (pick what the session can measure on the Orin):**
+**Work (when unblocked; pick what the session can measure on the Orin):**
 
 1. Confirm with logs / `tegrastats` / encoder debug that
    `nvv4l2h264enc` is the active encoder (not a silent fallback to
@@ -531,10 +560,10 @@ cost.
 5. Write the measured result in `video/README.md` (CPU %, encoder
    name, resolution, bitrate).
 
-**Non-goals:** bitrate adapt (F15), mlink, changing the console.
+**Non-goals:** bitrate adapt (F15), mlink, changing the console,
+GPU-detect / `x264enc` laptop fallback.
 
-**Depends on:** F6 (tree in git) or the lab tree if F6 is not done
-and the user points the session at the Orin path.
+**Depends on:** F6 (done). Orin access for measurement.
 
 ---
 
@@ -757,7 +786,7 @@ Do these in order unless a blocker is lifted out of sequence.
 | ----- | -- | ---- |
 | 1 | F5.1 → F5.4 | Now. Localhost console. |
 | 2 | F6 | Camera in the same tab. |
-| 3 | F7 | Short; can pair with F6 if the session is on the Orin. |
+| 3 | F7 | **on hold** — skip. Revisit only with Orin time (e.g. during F8.2). |
 | 4 | F8 | mlink Stage 5; unblocked by F5. |
 | 5 | F10 | When the user lifts the Safety-A hold. **Before WAN/real arm.** |
 | 6 | F9 | When the 5G dongle is on the Orin. Independent of F8. |
@@ -1253,7 +1282,7 @@ cases. Do not git commit unless asked.
 | Tailscale = SSH only | SSH must survive path failure; Adamo-style bonding is mlink |
 | Safety stays on the robot | Watchdog must work if the operator process dies |
 | Safety-A on hold but gated before WAN | User paused integration; WAN still must not ship the named-pose bypass |
-| NVENC already in lab gst | F7 is verify + JPEG-decode cost, not “add HW encode from zero” |
+| NVENC already in lab gst; F7 on hold | F7 is verify + JPEG-decode cost, not “add HW encode from zero” and not a laptop `x264enc` fallback |
 | Fleet / recording / VR / cert deferred | v1 is one operator, one arm, one console |
 | F5 look = Adamo operate-one-robot, not fleet grid | Product UI; still static HTML; fleet remains deferred |
 
