@@ -1,8 +1,11 @@
 # Operator-side example (Stage 3 hardware). Stage 1 tests use fake sockets
 # and do not bind these interfaces.
 session_id: 1
-listen_app: "127.0.0.1:5501"   # from local apps (Stage 2+)
-send_app:   "127.0.0.1:5502"   # to local apps (Stage 2+)
+listen_app: "127.0.0.1:5501"   # from local apps (control)
+send_app:   "127.0.0.1:5502"   # to local apps (control)
+# Stage 5 (optional; omit for control-only / mlink-ping):
+# listen_media: "127.0.0.1:5004"
+# send_media:   "127.0.0.1:5004"
 paths:
   - name: eth
     ifname: enx00e04c681cc3    # operator; Orin uses eno1

@@ -41,6 +41,10 @@ def test_lab_yaml_pair_is_complementary() -> None:
         "127.0.0.1:5503",
         "127.0.0.1:5504",
     }
+    assert op.send_media == "127.0.0.1:5004"
+    assert edge.listen_media == "127.0.0.1:5004"
+    assert op.listen_media == ""
+    assert edge.send_media == ""
 
 
 def test_udp_factory_unknown_ifname_raises() -> None:

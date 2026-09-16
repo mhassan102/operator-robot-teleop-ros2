@@ -174,6 +174,146 @@ plain bind.
 
 Topology: [`stage3_overview.md`](stage3_overview.md).
 
+## Stage 5 teleop over mlink (Ethernet + Wi-Fi)
+
+Operator PC: `mlink-op`, operator Compose, MediaMTX player, Chrome
+`http://127.0.0.1:8090/`. Orin: `mlink-edge`, robot Compose (Gazebo
+headless), gst `nvv4l2h264enc` → RTP 127.0.0.1:5004. Tailscale is SSH
+only. Default route stays on Wi-Fi.
+
+SSH the Orin over Wi-Fi so an Ethernet pull does not kill the session:
+`ssh nvidia@192.168.223.44`.
+
+Live bind/peer IPs are in `config/lab-op.yaml` / `config/lab-edge.yaml`.
+Guest DHCP moves; re-check before start:
+
+```bash
+# operator PC
+ip -br addr
+ip route | grep '^default'    # must stay on wlo1
+
+# Orin (Wi-Fi SSH)
+ssh nvidia@192.168.223.44 'ip -br addr; ip route | grep "^default"'
+```
+
+If Wi-Fi IPs moved, edit `bind_ip` / `peer:` on the `wifi` path in both
+YAML files. Do not use `100.x` or `tailscale0`.
+
+Copy trees (from the repo root on the operator PC):
+
+```bash
+rsync -az --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc' \
+  mlink-transport/ nvidia@192.168.223.44:/home/nvidia/hassan/mlink-transport/
+
+rsync -az --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc' \
+  --exclude 'ros2_ws/build' --exclude 'ros2_ws/install' --exclude 'ros2_ws/log' \
+  teleoperation-prototype/ nvidia@192.168.223.44:/home/nvidia/hassan/teleoperation-prototype/
+
+rsync -az --exclude 'bin/mediamtx' --exclude 'logs' --exclude 'run' \
+  video/ nvidia@192.168.223.44:/home/nvidia/hassan/video/
+```
+
+On Orin, first time only: build the **aarch64** image there (do not copy
+an x86 image), then colcon-build the mounted workspace:
+
+```bash
+ssh nvidia@192.168.223.44
+cd /home/nvidia/hassan/teleoperation-prototype
+docker compose -f compose.robot-mlink.yaml build
+./scripts/build_workspace_mlink.sh robot
+```
+
+Stop the old F6 Orin MediaMTX first so UDP 5004 is free for
+`mlink-edge` `listen_media` (gst still sends to 127.0.0.1:5004):
+
+```bash
+ssh nvidia@192.168.223.44
+# old lab tree, if it is running:
+/home/nvidia/webrtc-preview-hassan/stop.sh || true
+```
+
+Bring-up order (mlink before apps, camera after mlink-edge):
+
+```bash
+# 1. Orin — mlink-edge (Wi-Fi SSH)
+ssh nvidia@192.168.223.44
+cd /home/nvidia/hassan/mlink-transport
+PYTHONPATH=. python3 -m edge --config config/lab-edge.yaml
+```
+
+```bash
+# 2. Operator PC — mlink-op
+cd mlink-transport
+PYTHONPATH=. python3 -m op --config config/lab-op.yaml --control 127.0.0.1:5510
+```
+
+```bash
+# 3. Orin — robot container (Gazebo headless)
+ssh nvidia@192.168.223.44
+cd /home/nvidia/hassan/teleoperation-prototype
+./scripts/start_robot_mlink.sh
+```
+
+```bash
+# 4. Operator PC — backend + console
+cd teleoperation-prototype
+./scripts/build_workspace_mlink.sh operator   # once after F8 source lands
+./scripts/start_operator_mlink.sh
+```
+
+```bash
+# 5. Orin — camera into mlink media (not Tailscale, not MediaMTX on Orin)
+ssh nvidia@192.168.223.44
+# if start says the camera is busy, stop viam-server (or whatever holds /dev/video0)
+cd /home/nvidia/hassan/video
+./start.sh          # or --testsrc / --720p
+```
+
+```bash
+# 6. Operator PC — localhost WebRTC player
+cd video
+./start-player.sh   # needs video/bin/mediamtx linux_amd64
+```
+
+Open `http://127.0.0.1:8090/`. Camera is the real USB view. HUD
+connection/watchdog/pose come over mlink control. Keys jog the Gazebo
+arm on the Orin (tool pose in the HUD moves; the camera picture has no
+simulated arm).
+
+Cable pull (operator PC). Keep the Orin SSH on Wi-Fi:
+
+```bash
+nmcli device disconnect enx00e04c681cc3
+# console: camera stays, keys still jog, HUD still updates
+ssh nvidia@192.168.223.44 'echo still-here'
+```
+
+Bring Ethernet back:
+
+```bash
+nmcli connection up "Wired connection 1"
+```
+
+Stop:
+
+```bash
+# operator PC
+cd video && ./stop.sh
+cd ../teleoperation-prototype && ./scripts/stop_mlink.sh
+# Ctrl-C mlink-op
+
+# Orin (Wi-Fi SSH)
+cd /home/nvidia/hassan/video && ./stop.sh
+cd /home/nvidia/hassan/teleoperation-prototype && ./scripts/stop_mlink.sh
+# Ctrl-C mlink-edge
+```
+
+Localhost Zenoh tests (`./scripts/start.sh` + `test_basic.sh` etc.) are
+unchanged: both containers on one host, no mlink. They do not replace
+the two-host cable-pull.
+
+Topology: [`stage5_overview.md`](stage5_overview.md).
+
 ## Layout
 
 ```text
@@ -187,12 +327,13 @@ mlink-transport/
   tests/                 # unit + localhost UDP
   config/loopback.yaml       # op side (41001/41002 → 42001/42002)
   config/loopback-edge.yaml  # edge side (42001/42002 → 41001/41002)
-  config/lab-op.yaml         # Stage 3 operator (wlo1 + USB-eth)
-  config/lab-edge.yaml       # Stage 3 Orin (wlP1p1s0 + eno1)
-  docs/usage.md              # this file — tests, loopback, cable-pull
+  config/lab-op.yaml         # operator (wlo1 + USB-eth); Stage 5 send_media
+  config/lab-edge.yaml       # Orin (wlP1p1s0 + eno1); Stage 5 listen_media
+  docs/usage.md              # this file — tests, loopback, cable-pull, Stage 5
   docs/stage1_sequence.md
   docs/stage2_overview.md    # processes, ports, ping path
   docs/stage3_overview.md    # two machines, SO_BINDTODEVICE, cable pull
+  docs/stage5_overview.md    # apps on 127.0.0.1, control + media
   docs/latency_comparison.md
 ```
 
@@ -227,8 +368,10 @@ offset  size  field
 
 ```yaml
 session_id: 1
-listen_app: "127.0.0.1:5501"   # from local apps
-send_app:   "127.0.0.1:5502"   # to local apps
+listen_app: "127.0.0.1:5501"   # from local apps (control)
+send_app:   "127.0.0.1:5502"   # to local apps (control)
+listen_media: "127.0.0.1:5004" # optional; from local apps (media)
+send_media:   "127.0.0.1:5004" # optional; to local apps (media)
 paths:
   - name: eth
     ifname: enx00e04c681cc3    # optional; SO_BINDTODEVICE when set
@@ -251,6 +394,8 @@ inbound heartbeat loss > 20% over the last 20 heartbeats.
 Stage 2 loopback uses `127.0.0.1` and two port-pairs, no `ifname`. App
 ports on op and edge must not collide. Stage 3 lab YAML sets `ifname`
 and real bind/peer IPs (`config/lab-op.yaml`, `config/lab-edge.yaml`).
+Stage 5 adds optional `listen_media` / `send_media`; omitted means
+control-only (loopback / `mlink-ping` unchanged).
 
 ## Behavior
 
@@ -269,7 +414,7 @@ and real bind/peer IPs (`config/lab-op.yaml`, `config/lab-edge.yaml`).
   May need `CAP_NET_ADMIN` (sometimes documented as `CAP_NET_RAW`).
   Leave `ifname` unset and behavior matches Stage 2.
 
-## Not in Stage 3
+## Not in Stage 5
 
-Third link (`wwan0`), Tailscale peers, FEC, ROS, Compose,
-default-route changes.
+Third link (`wwan0` / F9), Tailscale peers, FEC, default-route
+changes, embedding mlink in ROS/GStreamer, `rmw_zenoh` through mlink.

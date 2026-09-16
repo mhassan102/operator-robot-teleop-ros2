@@ -177,6 +177,12 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[{"use_sim_time": True}],
     )
+    mlink_bridge = Node(
+        package="teleop_demo",
+        executable="robot_mlink_bridge",
+        output="screen",
+        parameters=[teleop_yaml],
+    )
 
     delayed_spawn = TimerAction(period=4.0, actions=[spawn])
     after_spawn = RegisterEventHandler(
@@ -186,21 +192,22 @@ def generate_launch_description() -> LaunchDescription:
         )
     )
 
-    return LaunchDescription(
-        [
-            DeclareLaunchArgument(
-                "gui",
-                default_value=os.environ.get("TELEOP_GAZEBO_GUI", "false"),
-            ),
-            SetEnvironmentVariable("LIBGL_ALWAYS_SOFTWARE", "1"),
-            gazebo,
-            rsp,
-            receiver,
-            delayed_spawn,
-            after_spawn,
-            TimerAction(
-                period=10.0,
-                actions=[move_group, servo_node, servo_bridge, named_pose],
-            ),
-        ]
-    )
+    actions = [
+        DeclareLaunchArgument(
+            "gui",
+            default_value=os.environ.get("TELEOP_GAZEBO_GUI", "false"),
+        ),
+        SetEnvironmentVariable("LIBGL_ALWAYS_SOFTWARE", "1"),
+        gazebo,
+        rsp,
+        receiver,
+        delayed_spawn,
+        after_spawn,
+        TimerAction(
+            period=10.0,
+            actions=[move_group, servo_node, servo_bridge, named_pose],
+        ),
+    ]
+    if os.environ.get("TELEOP_MLINK", "").strip() in ("1", "true", "yes", "on"):
+        actions.append(mlink_bridge)
+    return LaunchDescription(actions)

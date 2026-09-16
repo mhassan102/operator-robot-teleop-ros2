@@ -165,6 +165,7 @@ def test_control_drains_before_media(clock, net) -> None:
     ]
     assert payloads == [b"ctrl", b"media"]
     assert b.poll() == [b"ctrl", b"media"]
+    assert b.last_poll_classes == [TC_CONTROL, TC_MEDIA]
 
 
 def test_payload_over_mtu_rejected(clock, net) -> None:

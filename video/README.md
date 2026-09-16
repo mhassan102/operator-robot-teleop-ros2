@@ -3,104 +3,102 @@
 Lab camera path for teleop. Product roadmap:
 [`../IMPLEMENTATION.md`](../IMPLEMENTATION.md) (Features F6, F7, F8, F15, F16, F18).
 
-F6 put this tree in git and plays the same stream in the operator
-console at `http://127.0.0.1:8090/`.
+F8 sends RTP through mlink (`media` class). The operator console at
+`http://127.0.0.1:8090/` plays WebRTC from **localhost MediaMTX**, not
+from Tailscale ICE on the Orin.
 
 ## Where it runs
 
 | Place | Path |
 | ----- | ---- |
-| Orin `nvidia-3` (camera computer) | `/home/nvidia/webrtc-preview-hassan` (lab copy) or this `video/` tree |
+| Orin `nvidia-3` (camera + encode) | this `video/` tree: `./start.sh` (gst only) |
+| Operator PC (player) | this `video/` tree: `./start-player.sh` (MediaMTX) |
 | This repo | `video/` (scripts + yaml; **not** the MediaMTX binary) |
 
 Do not confuse this with viam on the Orin (port 8080). Do not put this
 tree under teammate directories on the Orin.
 
-## Pipeline
-
-Decode / encode blocks (today vs F7 plan): [`decode-encode.md`](decode-encode.md).
-F7 is **on hold**. Today: CPU `jpegdec`, HW `nvv4l2h264enc`. This
-pipeline is Orin-only (`nvvidconv` / NVENC); no laptop software
-fallback.
+## Pipeline (F8)
 
 ```text
 USB /dev/video0 (MJPG) or videotestsrc
   -> jpegdec (CPU) + nvvidconv (NVMM NV12)
   -> nvv4l2h264enc          # Jetson HW H.264
   -> rtph264pay mtu=1200
-  -> UDP 127.0.0.1:5004
-  -> MediaMTX
-  -> Chrome WebRTC  TCP :8889  UDP :8189
-       operator console iframe  http://127.0.0.1:8090/
-       or standalone            http://100.101.94.5:8889/cam
+  -> UDP 127.0.0.1:5004     # mlink-edge listen_media
+  -> mlink copies eth+wifi
+  -> mlink-op send_media 127.0.0.1:5004
+  -> MediaMTX on the operator PC
+  -> Chrome WHEP  http://127.0.0.1:8889/cam
+       operator console  http://127.0.0.1:8090/
 ```
 
 Default 640×480 @ 30 fps, ~1.5 Mbps. `--720p` is 1280×720 @ ~2.5 Mbps.
 `--testsrc` is SMPTE bars (no camera).
 
-ICE is pinned to **Tailscale** (`webrtcIPsFromInterfacesList:
-[tailscale0]`). That is a lab shortcut so the current Orin preview
-keeps working. F8 removes Tailscale from the video path. Do not add
-new Tailscale dependencies. Tailscale stays SSH-only for the product
-data path.
+ICE is **localhost only** (`webrtcAdditionalHosts: ["127.0.0.1"]`,
+listener `127.0.0.1:8889`). Tailscale is SSH only. The old Orin-hosted
+Tailscale ICE file is [`mediamtx.tailscale-lab.yml`](mediamtx.tailscale-lab.yml)
+(not the product path).
 
 ## MediaMTX binary (not in git)
 
-The Orin binary is **linux/arm64 MediaMTX v1.20.1** (~61 MB). Do not
-commit it. Download and place it at `video/bin/mediamtx` on the Orin:
+Operator PC needs **linux/amd64 MediaMTX v1.20.1**. Place it at
+`video/bin/mediamtx`:
 
 ```bash
 curl -L -o /tmp/mediamtx.tar.gz \
-  https://github.com/bluenviron/mediamtx/releases/download/v1.20.1/mediamtx_v1.20.1_linux_arm64.tar.gz
+  https://github.com/bluenviron/mediamtx/releases/download/v1.20.1/mediamtx_v1.20.1_linux_amd64.tar.gz
 tar -xzf /tmp/mediamtx.tar.gz -C /tmp mediamtx
-install -m 0755 /tmp/mediamtx /path/to/video/bin/mediamtx
+install -m 0755 /tmp/mediamtx video/bin/mediamtx
 ```
 
-The lab Orin already has this at
-`/home/nvidia/webrtc-preview-hassan/bin/mediamtx`.
+The Orin lab copy at `/home/nvidia/webrtc-preview-hassan/bin/mediamtx`
+is linux/arm64 and is **not** used for F8 (MediaMTX runs on the
+operator PC). Encoder gst still runs on the Orin.
 
-## Ports (Orin)
+## Ports
 
-| Port | Use |
-| ---- | --- |
-| TCP 8889 | MediaMTX WebRTC / WHEP / browser |
-| UDP 8189 | WebRTC media |
-| UDP 5004 | localhost RTP only (GStreamer → MediaMTX) |
+| Where | Port | Use |
+| ----- | ---- | --- |
+| Orin host | UDP 5004 | gst → mlink-edge `listen_media` |
+| Operator host | UDP 5004 | mlink-op `send_media` → MediaMTX RTP |
+| Operator host | TCP 127.0.0.1:8889 | MediaMTX WebRTC / WHEP |
+| Operator host | UDP 127.0.0.1:8189 | WebRTC ICE (localhost) |
 
-## Bring-up (lab)
+## Bring-up (F8)
 
-On the operator PC, Tailscale must be up (`tailscale status` shows
-`nvidia-3` online).
+mlink-edge must be up on the Orin **before** `./start.sh` so 5004 is
+the mlink app face, not a leftover MediaMTX.
 
 ```bash
-ssh nvidia@nvidia-3
-# existing lab tree:
-/home/nvidia/webrtc-preview-hassan/start.sh          # or --720p / --testsrc
-# Chrome console (same stream):
-#   http://127.0.0.1:8090/
-# standalone player:
-#   http://100.101.94.5:8889/cam
-/home/nvidia/webrtc-preview-hassan/stop.sh
+# Orin (Wi-Fi SSH). mlink-edge already running.
+cd /home/nvidia/hassan/video
+./start.sh          # or --720p / --testsrc
+
+# Operator PC. mlink-op already running.
+cd video
+./start-player.sh
+# Chrome: http://127.0.0.1:8090/
 ```
 
-If start says the camera is busy, another process holds `/dev/video0`
-(often `viam-server`). Stop that first.
+If start on the Orin says the camera is busy, another process holds
+`/dev/video0` (often `viam-server`). Stop that first.
 
-The console camera panel uses MediaMTX **reader.js** (WHEP + trickle
-ICE) against that `/cam` stream. Override with `?cam=` if the Orin
-address differs:
+Override the console camera URL with `?cam=` if needed (default is
+localhost):
 
 ```text
-http://127.0.0.1:8090/?cam=http://100.101.94.5:8889/cam
+http://127.0.0.1:8090/?cam=http://127.0.0.1:8889/cam
 ```
 
 Jog, heartbeat, HUD, and named poses are unchanged if the camera is
-down. The panel shows `camera unavailable` if the iframe fails to
-load.
+down. The panel shows `camera unavailable` if WHEP fails.
+
+Stop both sides with `./stop.sh` in this directory.
 
 ## What is not done
 
-- ICE / media still on Tailscale, not mlink (F8)
 - `jpegdec` is software; NVENC is hardware (F7 **on hold** — see
   [`decode-encode.md`](decode-encode.md))
 - Bitrate adapt, multi-cam, video-freshness watchdog: later features

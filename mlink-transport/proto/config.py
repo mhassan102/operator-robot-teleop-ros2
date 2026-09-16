@@ -29,6 +29,8 @@ class MlinkConfig:
     paths: tuple[PathConfig, ...]
     listen_app: str = "127.0.0.1:5501"
     send_app: str = "127.0.0.1:5502"
+    listen_media: str = ""
+    send_media: str = ""
     heartbeat_interval_us: int = 100_000
     down_timeout_us: int = 300_000
     probe_interval_us: int = 1_000_000
@@ -77,11 +79,21 @@ def _parse(raw: Mapping[str, Any]) -> MlinkConfig:
         names.add(path.name)
         paths.append(path)
 
+    listen_app = _require_app_addr(raw.get("listen_app", "127.0.0.1:5501"), "listen_app")
+    send_app = _require_app_addr(raw.get("send_app", "127.0.0.1:5502"), "send_app")
+    listen_media = _optional_app_addr(raw.get("listen_media"), "listen_media")
+    send_media = _optional_app_addr(raw.get("send_media"), "send_media")
+    app_addrs = [a for a in (listen_app, send_app, listen_media, send_media) if a]
+    if len(set(app_addrs)) != len(app_addrs):
+        raise ConfigError("listen_app/send_app/listen_media/send_media must be unique")
+
     cfg = MlinkConfig(
         session_id=session_id,
         paths=tuple(paths),
-        listen_app=str(raw.get("listen_app", "127.0.0.1:5501")),
-        send_app=str(raw.get("send_app", "127.0.0.1:5502")),
+        listen_app=listen_app,
+        send_app=send_app,
+        listen_media=listen_media,
+        send_media=send_media,
         heartbeat_interval_us=int(raw.get("heartbeat_interval_us", 100_000)),
         down_timeout_us=int(raw.get("down_timeout_us", 300_000)),
         probe_interval_us=int(raw.get("probe_interval_us", 1_000_000)),
@@ -146,6 +158,36 @@ def _parse_path(item: Mapping[str, Any]) -> PathConfig:
         ifname=ifname,
         bind_port=bind_port,
     )
+
+
+def _require_app_addr(value: Any, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ConfigError(f"{label} is required")
+    return _parse_app_addr(text, label)
+
+
+def _optional_app_addr(value: Any, label: str) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    return _parse_app_addr(text, label)
+
+
+def _parse_app_addr(text: str, label: str) -> str:
+    host, sep, port_s = text.rpartition(":")
+    if not sep or not host:
+        raise ConfigError(f"{label} must be host:port")
+    try:
+        port = int(port_s)
+    except ValueError as exc:
+        raise ConfigError(f"{label} port is not an integer") from exc
+    if port < 1 or port > 65535:
+        raise ConfigError(f"{label} port out of range")
+    _reject_tailscale_ip(host, label)
+    return f"{host}:{port}"
 
 
 def _reject_tailscale_ip(ip: str, label: str) -> None:

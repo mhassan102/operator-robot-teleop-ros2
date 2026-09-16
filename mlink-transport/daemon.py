@@ -14,7 +14,7 @@ from pathlib import Path
 
 from proto.clock import Clock, SystemClock
 from proto.config import MlinkConfig, load_config
-from proto.header import PayloadTooLarge
+from proto.header import TC_CONTROL, TC_MEDIA, PayloadTooLarge
 from proto.session import MlinkSession
 from proto.sockets import SocketFactory, UdpSocketFactory
 
@@ -123,14 +123,23 @@ def run(
     app_rx = _bind_udp(listen_addr)
     app_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     app_tx.setblocking(False)
+    media_rx = _bind_udp(parse_addr(config.listen_media)) if config.listen_media else None
+    media_tx = None
+    media_send_addr = parse_addr(config.send_media) if config.send_media else None
+    if media_send_addr is not None:
+        media_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        media_tx.setblocking(False)
     control = _bind_udp(control_addr) if control_addr else None
 
     log.info(
-        "%s session=%s listen_app=%s send_app=%s reflect=%s paths=%s",
+        "%s session=%s listen_app=%s send_app=%s listen_media=%s send_media=%s "
+        "reflect=%s paths=%s",
         role,
         config.session_id,
         config.listen_app,
         config.send_app,
+        config.listen_media or "-",
+        config.send_media or "-",
         reflect,
         ", ".join(
             f"{p.name} if={p.ifname or '-'} "
@@ -147,6 +156,10 @@ def run(
     def cleanup() -> None:
         app_rx.close()
         app_tx.close()
+        if media_rx is not None:
+            media_rx.close()
+        if media_tx is not None:
+            media_tx.close()
         if control is not None:
             control.close()
         close_factory = getattr(factory, "close", None)
@@ -164,6 +177,8 @@ def run(
     try:
         while stop is None or not stop.is_set():
             wait: list[object] = [app_rx]
+            if media_rx is not None:
+                wait.append(media_rx)
             if control is not None:
                 wait.append(control)
             wait.extend(session.paths[i].socket for i in range(len(session.paths)))
@@ -171,9 +186,16 @@ def run(
 
             for data, _addr in _recv_all(app_rx):
                 try:
-                    session.send(data)
+                    session.send(data, TC_CONTROL)
                 except PayloadTooLarge as exc:
                     log.warning("drop app datagram: %s", exc)
+
+            if media_rx is not None:
+                for data, _addr in _recv_all(media_rx):
+                    try:
+                        session.send(data, TC_MEDIA)
+                    except PayloadTooLarge as exc:
+                        log.warning("drop media datagram: %s", exc)
 
             if control is not None:
                 for data, addr in _recv_all(control):
@@ -181,20 +203,33 @@ def run(
 
             session.tick()
             delivered = session.poll()
-            for payload, winner in zip(delivered, session.last_poll_winners):
+            classes = session.last_poll_classes
+            if len(classes) != len(delivered):
+                classes = [TC_CONTROL] * len(delivered)
+            for payload, winner, tc in zip(delivered, session.last_poll_winners, classes):
                 name, path_id, seq = winner
                 log.debug(
-                    "first-good seq=%s path=%s path_id=%s bytes=%s",
+                    "first-good seq=%s path=%s path_id=%s class=%s bytes=%s",
                     seq,
                     name,
                     path_id,
+                    "media" if tc == TC_MEDIA else "control",
                     len(payload),
                 )
                 if reflect:
                     try:
-                        session.send(payload)
+                        session.send(payload, tc)
                     except PayloadTooLarge as exc:
                         log.warning("drop reflect: %s", exc)
+                    continue
+                if tc == TC_MEDIA:
+                    if media_tx is None or media_send_addr is None:
+                        log.warning("drop media: send_media not configured")
+                        continue
+                    try:
+                        media_tx.sendto(payload, media_send_addr)
+                    except OSError as exc:
+                        log.warning("send_media failed: %s", exc)
                 else:
                     try:
                         app_tx.sendto(payload, send_addr)

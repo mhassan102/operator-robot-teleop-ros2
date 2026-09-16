@@ -37,6 +37,7 @@ setup(
             "operator_backend = teleop_demo.operator_backend:main",
             "keyboard_teleop = teleop_demo.keyboard_teleop:main",
             "robot_receiver = teleop_demo.robot_receiver:main",
+            "robot_mlink_bridge = teleop_demo.robot_mlink_bridge:main",
             "servo_bridge = teleop_demo.servo_bridge:main",
             "named_pose = teleop_demo.named_pose:main",
         ],

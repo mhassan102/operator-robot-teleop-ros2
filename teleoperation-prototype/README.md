@@ -47,8 +47,8 @@ Headless Gazebo is the default. For an interactive window (needs X11):
 ```
 
 Open the operator console at `http://127.0.0.1:8090/` (keys, heartbeat,
-HUD, named-pose buttons, Orin camera). Camera URL override:
-`?cam=http://100.101.94.5:8889/cam`. TTY fallback:
+HUD, named-pose buttons, camera). F8 default camera is localhost
+MediaMTX (`http://127.0.0.1:8889/cam`). TTY fallback:
 
 ```bash
 ./scripts/keyboard_teleop.sh
@@ -98,6 +98,24 @@ Named poses are a separate robot-side service, not a `TeleopCommand` field:
 | `pregrasp` | Above a pick spot (open gripper with `g` if needed) |
 | `retract` | Pull back after a grasp, still holding height |
 | `stow` | Parked for shutdown / transport |
+
+## F8 two-host (mlink Stage 5)
+
+Operator Compose on this PC, robot Compose on Orin `nvidia-3`, mlink
+between them. Apps talk UDP to `127.0.0.1`; they never see WAN IPs.
+Copy-paste bring-up: [`../mlink-transport/docs/f8_usage.md`](../mlink-transport/docs/f8_usage.md).
+Also [`../mlink-transport/docs/usage.md`](../mlink-transport/docs/usage.md)
+(Stage 5). Scripts: `./scripts/start_operator_mlink.sh` (this PC),
+`./scripts/start_robot_mlink.sh` (Orin), `./scripts/stop_mlink.sh`.
+
+The robot image on Orin is built there (aarch64). Gazebo Classic ROS
+debs are not on arm64; `docker/Dockerfile` uses the Open Robotics
+Gazebo 11 PPA and builds `gazebo_ros` / `gazebo_ros2_control` from
+source on arm64 only. amd64 still uses `ros-humble-gazebo-ros-pkgs`.
+
+Localhost tests below (`./scripts/start.sh` + `test_*.sh`) still use
+**both containers on one host** via Zenoh on `ros2_teleop_poc_net`.
+They do not exercise mlink. Keep them for the single-host path.
 
 Default RMW is `rmw_zenoh_cpp`. The robot container runs `rmw_zenohd` on the
 `ros2_teleop_poc_net` bridge; the operator connects as a client to

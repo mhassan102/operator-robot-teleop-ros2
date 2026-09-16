@@ -9,5 +9,8 @@ ros2_ws/log/
 artifacts/
 *.pcap
 *.pcapng
+video/bin/mediamtx
+video/logs/
+video/run/
 **/__pycache__/
 *.py[cod]

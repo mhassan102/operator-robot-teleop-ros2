@@ -2,6 +2,9 @@
 set -e
 
 source /opt/ros/humble/setup.bash
+if [[ -f /opt/gazebo_ros_overlay/setup.bash ]]; then
+  source /opt/gazebo_ros_overlay/setup.bash
+fi
 
 zenoh_router_listening() {
   (echo >/dev/tcp/127.0.0.1/7447) >/dev/null 2>&1

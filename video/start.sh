@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Orin camera host: USB (or testsrc) -> nvv4l2h264enc -> RTP 127.0.0.1:5004
+# into mlink-edge listen_media. Does not start MediaMTX (that is start-player.sh
+# on the operator PC).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
@@ -12,14 +15,12 @@ for arg in "$@"; do
     --testsrc) TESTSRC=1 ;;
     -h|--help)
       echo "Usage: $0 [--720p] [--testsrc]"
-      echo "  default: /dev/video0 640x480 MJPG -> NVENC H.264 -> WebRTC"
+      echo "  default: /dev/video0 640x480 MJPG -> NVENC H.264 -> RTP 127.0.0.1:5004"
       echo "  --720p    1280x720"
       echo "  --testsrc SMPTE bars (does not use the USB camera)"
       echo
-      echo "Open in Chrome:"
-      echo "  http://127.0.0.1:8090/"
-      echo "  http://100.101.94.5:8889/cam"
-      echo "  http://nvidia-3.tail40aa1c.ts.net:8889/cam"
+      echo "mlink-edge must already be listening on 127.0.0.1:5004 (listen_media)."
+      echo "Operator player: video/start-player.sh then http://127.0.0.1:8090/"
       exit 0
       ;;
     *) echo "Unknown arg: $arg" >&2; exit 2 ;;
@@ -27,14 +28,8 @@ for arg in "$@"; do
 done
 export RESOLUTION TESTSRC
 
-if [[ ! -x "$ROOT/bin/mediamtx" ]]; then
-  echo "missing $ROOT/bin/mediamtx (linux_arm64)." >&2
-  echo "Download MediaMTX v1.20.1 and place the binary at bin/mediamtx. See README.md." >&2
-  exit 1
-fi
-
-if [[ -f run/mediamtx.pid ]] && kill -0 "$(cat run/mediamtx.pid)" 2>/dev/null; then
-  echo "already running (pid $(cat run/mediamtx.pid)). ./stop.sh first." >&2
+if [[ -f run/gst.pid ]] && kill -0 "$(cat run/gst.pid)" 2>/dev/null; then
+  echo "already running (pid $(cat run/gst.pid)). ./stop.sh first." >&2
   exit 1
 fi
 
@@ -57,32 +52,7 @@ if [[ "$TESTSRC" != "1" ]]; then
   fi
 fi
 
-: > logs/mediamtx.log
 : > logs/gst.log
-
-nohup ./bin/mediamtx "$ROOT/mediamtx.yml" >> logs/mediamtx.log 2>&1 &
-echo $! > run/mediamtx.pid
-disown || true
-
-for _ in $(seq 1 50); do
-  if ss -lnt | grep -q ":8889"; then
-    break
-  fi
-  if ! kill -0 "$(cat run/mediamtx.pid)" 2>/dev/null; then
-    echo "mediamtx exited. last log:" >&2
-    tail -30 logs/mediamtx.log >&2
-    exit 1
-  fi
-  sleep 0.1
-done
-
-if ! ss -lnt | grep -q ":8889"; then
-  echo "mediamtx did not bind :8889" >&2
-  tail -30 logs/mediamtx.log >&2
-  kill "$(cat run/mediamtx.pid)" 2>/dev/null || true
-  exit 1
-fi
-
 touch run/gst.loop
 nohup "$ROOT/gst-loop.sh" >> logs/gst-loop.log 2>&1 &
 echo $! > run/gst-loop.pid
@@ -95,8 +65,7 @@ if [[ "$TESTSRC" != "1" ]] && grep -q "Device '/dev/video0' is busy" logs/gst.lo
   exit 1
 fi
 
-echo "preview running"
-echo "  console: http://127.0.0.1:8090/"
-echo "  direct:  http://100.101.94.5:8889/cam"
-echo "  direct:  http://nvidia-3.tail40aa1c.ts.net:8889/cam"
+echo "camera encode running -> UDP 127.0.0.1:${UDP_PORT:-5004} (mlink-edge listen_media)"
+echo "  operator player: video/start-player.sh"
+echo "  console:         http://127.0.0.1:8090/"
 echo "stop with: $ROOT/stop.sh"

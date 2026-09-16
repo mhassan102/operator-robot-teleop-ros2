@@ -98,9 +98,9 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | F3 | mlink stages 0–3 | done | Protocol, localhost loopback, eth+wifi cable-pull |
 | F4 | Safety v0 (jog watchdog) | done | 500 ms gateway on `/cmd_vel_safe` only; named pose bypasses |
 | F5 | Operator backend + web console | **done** | Localhost operate page: keys, heartbeat, HUD, named poses. Camera in the same tab (F6) |
-| F6 | Video into this repo + console embed | **done** | `video/` scripts + yaml; console iframe of Orin `/cam`. MediaMTX binary not in git |
+| F6 | Video into this repo + console embed | **done** | `video/` scripts + yaml; console WHEP. MediaMTX binary not in git |
 | F7 | Orin HW encode verify / efficiency | **on hold** | HW encode already in gst; skip until Orin time. Not a software-fallback feature |
-| F8 | mlink Stage 5 (apps on 127.0.0.1) | remaining | F5+F6 shape is done. Stage 4 not required |
+| F8 | mlink Stage 5 (apps on 127.0.0.1) | **done** | Control + camera RTP on `127.0.0.1`; eth+wifi cable-pull; host daemons |
 | F9 | mlink Stage 4 (5G / `wwan0`) | blocked | USB dongle not on the Orin |
 | F10 | Safety-A local harden | **on hold** | Required before WAN / real arm; do not start until unblocked |
 | F11 | Safety-B WAN | remaining | After F10; `heartbeat_only`, E-stop, Reset |
@@ -119,8 +119,11 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | — | VR | deferred | |
 | — | SOC2 / IEC / ISO 10218 cert | deferred | |
 
-**Next to implement:** F8 (mlink Stage 5). F7 is on hold.
-Do not start F10 unless the user unblocks Safety-A. Do not start fleet.
+**Next to implement:** F8 is done. F7 and F10 stay on hold. F9 blocked
+(no 5G dongle). Do not start F10 unless the user unblocks Safety-A.
+Do not start fleet. Unblocked remaining in session order: F12
+packaging leftovers (F8 already runs robot on Orin / operator on PC),
+then F13 / F14 / F15…
 
 ---
 
@@ -132,15 +135,15 @@ Do not start F10 unless the user unblocks Safety-A. Do not start fleet.
 | Who owns the arm | Customer | Lab | Lab, then integrator’s arm behind the same gateway |
 | Who owns motion | Customer (MoveIt / vendor) | **We do** (Servo + named poses + Gazebo) | Keep — differentiator |
 | Who owns the operator PC | Browser on their site | Ubuntu + ROS operator container + TTY | Browser → **our** backend |
-| WAN | Their protocol + bonding + relay | Zenoh on Docker bridge; mlink eth+wifi; Tailscale = SSH | mlink under control + media; Tailscale still SSH only |
-| Video protocol | Custom, not WebRTC | WebRTC Orin → Chrome (lab, Tailscale ICE) | WebRTC to the **console**; WAN via mlink localhost, not Tailscale |
+| WAN | Their protocol + bonding + relay | mlink eth+wifi under control + media; Tailscale = SSH | Same; 5G when F9 exists |
+| Video protocol | Custom, not WebRTC | WebRTC to the console; RTP through mlink localhost | Same |
 | Operator input | Dashboard + gamepad + VR | ROS `keyboard_teleop` | Web keyboard first, gamepad next, VR out |
 | Multi-link | LTE+5G+Wi-Fi, steer around loss | Duplicate UDP, first-good; 5G not on box | Same protocol; 5G is YAML when dongle exists |
 | Safety | Heartbeat stop, video-freshness; SOC2 claims | 500 ms watchdog in front of `ros2_control` | Safety-A/B + video-freshness; still not a certified PLC |
-| Video transport | Custom + multi-path + bitrate adapt | WebRTC on one underlay (Tailscale) | Tunnel through mlink; bitrate adapt later |
+| Video transport | Custom + multi-path + bitrate adapt | RTP through mlink; localhost MediaMTX WHEP | Bitrate adapt later (F15) |
 | ROS 2 both sides | Agent on robot; operator is their UI | **Yes** — operator + robot | Keep ROS on both; browser does not speak ROS |
-| Video encode | Jetson HW H.264 on the video path | Lab gst uses `nvv4l2h264enc`; not in this git tree | Import, confirm, keep HW encode |
-| Operator UI | One web console | Terminal + separate Chrome tab | One web console |
+| Video encode | Jetson HW H.264 on the video path | Lab gst uses `nvv4l2h264enc` (`video/`) | Keep HW encode; F7 is verify |
+| Operator UI | One web console | One web console (`127.0.0.1:8090`) | Same |
 | Session recording | Synced video + telemetry + commands | Not here | Deferred (teammate / LeRobot) |
 | Reach the box | Their relay / multi-path | Tailscale SSH; mlink binds real NICs | mlink; relay only if 5G is CGNAT |
 | Fleet | Yes | No | Deferred |
@@ -149,27 +152,20 @@ Do not start F10 unless the user unblocks Safety-A. Do not start fleet.
 
 ## 5. Architecture as built
 
-```text
-Host keyboard (TTY) + Gazebo GUI          Chrome (separate tab)
-        |                                        |
-        v                                        v
-+--- operator container ----+            MediaMTX on Orin :8889
-| keyboard_teleop           |            (Tailscale ICE — lab only)
-|   /teleop/command         |
-|   /teleop/heartbeat       |
-+-------------+-------------+
-              | rmw_zenoh_cpp  (robot rmw_zenohd :7447)
-              | Docker bridge ros2_teleop_poc_net
-              v
-+--- robot container -------------------------+
-| robot_receiver + SafetyController           |
-|   /cmd_vel_safe  /gripper_safe /teleop/state|
-| servo_bridge → MoveIt Servo → Gazebo arm    |
-| named_pose  /teleop/go_named_pose  (bypass) |
-+---------------------------------------------+
+F8 two-host path (product data plane). Localhost Zenoh
+(`teleoperation-prototype/compose.yaml`, both containers on one host)
+still exists for `test_*.sh` only.
 
-mlink-op  <== eth + wifi copies ==>  mlink-edge     # ping only today
-   (this PC)                         (Orin nvidia-3)
+```text
+OPERATOR PC                                      ORIN nvidia-3
+Chrome  http://127.0.0.1:8090/                   USB cam → nvv4l2h264enc
+  HTTP/WS + localhost WHEP                       RTP 127.0.0.1:5004
+        |                                        robot ROS + Gazebo (headless)
+operator backend (Compose, host net)             robot_mlink_bridge → /teleop/*
+        | UDP 127.0.0.1  class=control            | UDP 127.0.0.1  class=control
+        | UDP 127.0.0.1  class=media              | UDP 127.0.0.1  class=media
+     mlink-op  ==== copies eth+wifi ====  mlink-edge
+Tailscale = SSH only. No tailscale0. No 100.x in mlink YAML.
 ```
 
 ROS interfaces (do not invent a parallel motion wire):
@@ -221,8 +217,7 @@ pipe. Safety stays on the **robot**, in front of `ros2_control`.
 
 1. **Tailscale is SSH / management only.** Never a bonded path, never
    ICE for the product video path. Do not bind `tailscale0` in mlink.
-   The current MediaMTX Tailscale ICE is a lab shortcut to be removed
-   in F6/F8.
+   F8 removed Tailscale ICE from video (localhost MediaMTX player).
 2. **mlink v1 duplicates each datagram on every live path.** First
    good `(session, seq)` wins. No Linux default-route failover. No
    reorder hold. Control queue is flushed before media.
@@ -471,8 +466,8 @@ already uses `nvv4l2h264enc`. ICE is Tailscale. See `video/README.md`.
 **Depends on:** F5.1 (a page to embed into). Orin + `/dev/video0` for
 the live camera; `--testsrc` for CI-less lab without the USB cam.
 
-**Non-goals:** mlink (F8), bitrate adapt (F15), multi-cam (F17),
-replacing NVENC with software x264.
+**Non-goals (F6):** mlink (done in F8), bitrate adapt (F15),
+multi-cam (F17), replacing NVENC with software x264.
 
 **Work:**
 
@@ -484,8 +479,8 @@ replacing NVENC with software x264.
    existing `/cam` page in an iframe is acceptable for F6; a native
    WHEP client in `web/` is better if it stays small).
 4. **Lab transitional ICE** may still be Tailscale so the current
-   Orin preview keeps working. Document that F8 removes Tailscale
-   from the video path. Do not add new Tailscale dependencies.
+   Orin preview keeps working. F8 removes Tailscale from the video
+   path. Do not add new Tailscale dependencies.
 5. Localhost-only demo without Orin: optional `videotestsrc` on the
    operator PC is nice-to-have, not required if Orin is the camera
    computer.
@@ -499,8 +494,9 @@ README lists start/stop. Encoder line in gst still contains
 `gst-loop.sh` / `mediamtx.yml`. MediaMTX **v1.20.1 linux_arm64** is
 documented, not committed. Console embeds the same MediaMTX `/cam`
 page in an iframe (override `?cam=`). Native WHEP from `127.0.0.1`
-does not complete ICE against Tailscale-pinned MediaMTX; iframe keeps
-ICE same-origin on the Orin. F8 still removes Tailscale from video.
+does not complete ICE against Tailscale-pinned MediaMTX; iframe kept
+ICE same-origin on the Orin. **F8 removed Tailscale from video**
+(localhost MediaMTX player on the operator PC).
 Camera down does not stop jog.
 
 **Files to read:** `video/README.md`; this section; F5 `web/` page;
@@ -567,14 +563,11 @@ GPU-detect / `x264enc` laptop fallback.
 
 ---
 
-### F8 — mlink Stage 5 (apps on localhost) — STATUS: blocked on F5
+### F8 — mlink Stage 5 (apps on localhost) — STATUS: done
 
 **Goal.** Operator backend and robot-side apps talk to mlink on
 `127.0.0.1`. WAN copies are eth+wifi (and 5G if F9 exists). Apps
 never see three public IPs.
-
-**Blocked until:** F5 backend is running (a real localhost app face,
-not TTY `docker exec`). Stage 4 dongle is **not** required.
 
 **Locked approach (see decision 9–10):**
 
@@ -591,9 +584,10 @@ browser → backend (HTTP/WS, local WebRTC)
 - Keep Zenoh/Cyclone for **on-host** ROS (operator process ↔ nothing
   remote; robot processes on the Orin).
 - Add a small **control bridge**: serialize `TeleopCommand` /
-  `TeleopHeartbeat` / ack / state (CDR or a documented compact
-  payload) as mlink datagrams. MTU budget is **1440** bytes; these
-  messages fit.
+  `TeleopHeartbeat` / ack / state as mlink datagrams. **Shipped as a
+  documented compact payload** (`mlink_payload.py`), not ROS CDR.
+  MTU budget is **1440** bytes; these messages fit. Named-pose
+  req/rep uses the same mux.
 - Media: RTP from `nvv4l2h264enc` into mlink `media` class; operator
   mlink emits RTP to a localhost player the console already uses.
   Do not ICE the browser across bonded NICs.
@@ -604,11 +598,16 @@ browser → backend (HTTP/WS, local WebRTC)
 and (if F6 is in) video continue on Wi-Fi; SSH over Wi-Fi/Tailscale
 still works; pytest still green.
 
-**Read:** `mlink-transport/README.md` Stage 5; this section; F5
-backend listen ports.
+**Shipped.** Host daemons (`mlink-op` / `mlink-edge`). Operator
+Compose on this PC (`compose.operator-mlink.yaml`), robot Compose on
+Orin (`compose.robot-mlink.yaml`). Compact UDP mux; RTP media class
+into localhost MediaMTX WHEP. Lab cable-pull (unplug USB-eth): jog +
+camera continue on Wi-Fi. How to run:
+`mlink-transport/docs/f8_usage.md` and `mlink-transport/docs/usage.md`
+Stage 5.
 
-**Resume only with the Stage 5 prompt in `mlink-transport/README.md`
-plus this F8 section.**
+**Read:** `mlink-transport/README.md` Stage 5; `docs/stage5_overview.md`;
+`docs/f8_usage.md`; this section.
 
 ---
 
@@ -662,14 +661,16 @@ Hardware mushroom / STO remains the integrator’s job on a real arm.
 
 ### F12 — WAN / Jetson ROS split — STATUS: remaining
 
-Today operator and robot containers share one host. Product: robot
-stack on Orin, backend on the operator PC, mlink between them (F8).
+F8 already runs the two-host data path: robot image/launch on Orin,
+operator backend on the PC, mlink between them, no Compose bridge as
+the WAN. Localhost `compose.yaml` (both containers on one host) is
+only for Zenoh `test_*.sh`.
 
 This is **not** “run rmw_zenoh across the public internet.” F8 is
-the WAN. F12 is packaging: robot image/launch on Orin, operator
-backend on the PC, documented IPs, no Compose bridge as the WAN.
+the WAN. F12 leftover is packaging/docs if the two Compose files
+should become the default product layout.
 
-**Depends on:** F5, F8, and F10 before anyone jogs a real/WAN arm.
+**Depends on:** F5, F8 (done), and F10 before anyone jogs a real/WAN arm.
 
 ---
 
@@ -787,7 +788,7 @@ Do these in order unless a blocker is lifted out of sequence.
 | 1 | F5.1 → F5.4 | Now. Localhost console. |
 | 2 | F6 | Camera in the same tab. |
 | 3 | F7 | **on hold** — skip. Revisit only with Orin time (e.g. during F8.2). |
-| 4 | F8 | mlink Stage 5; unblocked by F5. |
+| 4 | F8 | **done** — mlink Stage 5; apps on 127.0.0.1. |
 | 5 | F10 | When the user lifts the Safety-A hold. **Before WAN/real arm.** |
 | 6 | F9 | When the 5G dongle is on the Orin. Independent of F8. |
 | 7 | F12 | Robot processes on Orin, backend on PC. |
@@ -796,7 +797,8 @@ Do these in order unless a blocker is lifted out of sequence.
 | 10 | F18 | Real arm. |
 | 11 | F20, F21 | Encryption / relay as needed. |
 
-F5 is the only feature a new session should start without asking.
+Do not start F10, F7, F9, or a deferred row unless the user unblocks it.
+Ask before starting the next unblocked ID.
 
 ---
 
@@ -1246,11 +1248,10 @@ ICE may remain as a documented lab shortcut. Do not git commit unless
 asked.
 ```
 
-### F8 — mlink Stage 5
+### F8 — mlink Stage 5 — done
 
-Use the Stage 5 prompt in `mlink-transport/README.md` **and**
-read F8 in this file (localhost UDP control/media, no Zenoh-through-
-mlink, no mlink rewrite).
+Do not start another F8 session. Bring-up:
+`mlink-transport/docs/f8_usage.md`.
 
 ### F9 — 5G dongle
 
@@ -1288,19 +1289,15 @@ cases. Do not git commit unless asked.
 
 ---
 
-## 12. Open questions (do not block F5)
+## 12. Open questions
 
-These can wait until the feature that needs them. Do not stall F5.
-
-1. **MediaMTX vs a smaller WHEP helper in v1** — F6 used a small
-   native WHEP client in `operate.js` (not an iframe). F8 may still
-   want a localhost-only player.
-2. **Control payload encoding** — ROS CDR vs a packed struct for
-   the F8 bridge. Pick in the F8 session; both fit in 1440 bytes.
-3. **Who runs mlink** — host processes beside Compose (today’s
-   daemons) vs a Compose sidecar. Default: **keep host daemons**
-   until F8 proves otherwise (`SO_BINDTODEVICE` is simpler on the
-   host).
+1. **MediaMTX vs a smaller WHEP helper in v1** — **picked in F8:**
+   localhost MediaMTX player on the operator PC + native WHEP in
+   `operate.js` (`http://127.0.0.1:8889/cam`).
+2. **Control payload encoding** — **picked in F8:** documented compact
+   struct in `mlink_payload.py` (not ROS CDR). Fits in 1440 bytes.
+3. **Who runs mlink** — **picked in F8:** keep host daemons beside
+   Compose (`SO_BINDTODEVICE` on the host). Not a Compose sidecar.
 4. **Gripper on Normal Stop** — hold (current) vs close. Safety-A
    plan says hold. Console should match.
 

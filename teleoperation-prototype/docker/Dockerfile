@@ -1,8 +1,11 @@
 FROM ros:humble-ros-base-jammy@sha256:75dd3aba34a3838dadbb31a9f7bef769bdfa8713e6cec686fc868db2981b0987
 
+ARG TARGETARCH
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV GAZEBO_ROS_OVERLAY=/opt/gazebo_ros_overlay
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -17,8 +20,6 @@ RUN apt-get update \
         ros-humble-control-msgs \
         ros-humble-controller-manager \
         ros-humble-forward-command-controller \
-        ros-humble-gazebo-ros-pkgs \
-        ros-humble-gazebo-ros2-control \
         ros-humble-geometry-msgs \
         ros-humble-joint-state-broadcaster \
         ros-humble-joint-trajectory-controller \
@@ -48,6 +49,57 @@ RUN apt-get update \
         ros-humble-xacro \
         tcpdump \
     && rm -rf /var/lib/apt/lists/*
+
+# amd64: Gazebo Classic ROS wrappers from packages.ros.org (unchanged).
+# arm64: those debs are not published; Gazebo 11 comes from the Open Robotics
+# non-amd64 PPA and gazebo_ros / gazebo_ros2_control are built from source.
+RUN arch="${TARGETARCH:-}"; \
+    if [ -z "${arch}" ]; then \
+      case "$(uname -m)" in aarch64|arm64) arch=arm64 ;; *) arch=amd64 ;; esac; \
+    fi; \
+    apt-get update; \
+    if [ "${arch}" = "arm64" ]; then \
+      apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        gnupg \
+        python3-lxml \
+        software-properties-common; \
+      add-apt-repository -y ppa:openrobotics/gazebo11-non-amd64; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends \
+        gazebo \
+        libgazebo-dev \
+        ros-humble-gazebo-dev \
+        ros-humble-gazebo-msgs; \
+    else \
+      apt-get install -y --no-install-recommends \
+        ros-humble-gazebo-ros-pkgs \
+        ros-humble-gazebo-ros2-control; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN arch="${TARGETARCH:-}"; \
+    if [ -z "${arch}" ]; then \
+      case "$(uname -m)" in aarch64|arm64) arch=arm64 ;; *) arch=amd64 ;; esac; \
+    fi; \
+    if [ "${arch}" != "arm64" ]; then exit 0; fi; \
+    mkdir -p /tmp/gz_ws/src; \
+    git clone --depth 1 --branch ros2 \
+      https://github.com/ros-simulation/gazebo_ros_pkgs.git /tmp/gz_ws/src/gazebo_ros_pkgs && \
+    git clone --depth 1 --branch humble \
+      https://github.com/ros-controls/gazebo_ros2_control.git /tmp/gz_ws/src/gazebo_ros2_control && \
+    touch /tmp/gz_ws/src/gazebo_ros_pkgs/gazebo_dev/COLCON_IGNORE && \
+    touch /tmp/gz_ws/src/gazebo_ros_pkgs/gazebo_msgs/COLCON_IGNORE && \
+    touch /tmp/gz_ws/src/gazebo_ros_pkgs/gazebo_plugins/COLCON_IGNORE && \
+    touch /tmp/gz_ws/src/gazebo_ros_pkgs/gazebo_ros_pkgs/COLCON_IGNORE && \
+    touch /tmp/gz_ws/src/gazebo_ros2_control/gazebo_ros2_control_demos/COLCON_IGNORE && \
+    cd /tmp/gz_ws && \
+    . /opt/ros/humble/setup.bash && \
+    colcon build --merge-install --install-base "${GAZEBO_ROS_OVERLAY}" \
+      --cmake-args -DBUILD_TESTING=OFF \
+      --event-handlers console_direct+ && \
+    rm -rf /tmp/gz_ws
 
 ENV DEBIAN_FRONTEND=
 ENV ROS_DOMAIN_ID=42
