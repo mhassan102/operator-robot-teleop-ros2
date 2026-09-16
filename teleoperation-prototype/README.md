@@ -108,6 +108,17 @@ Also [`../mlink-transport/docs/usage.md`](../mlink-transport/docs/usage.md)
 (Stage 5). Scripts: `./scripts/start_operator_mlink.sh` (this PC),
 `./scripts/start_robot_mlink.sh` (Orin), `./scripts/stop_mlink.sh`.
 
+Robot container arm mode (`TELEOP_ARM`, default `gazebo`):
+
+```bash
+./scripts/start_robot_mlink.sh              # Gazebo + Servo + named poses (today)
+./scripts/start_robot_mlink.sh --real-arm   # robot_receiver (+ mlink); no Gazebo, no serial
+```
+
+`--real-arm` / `TELEOP_ARM=real` must not fall back to Gazebo. Stage 1 does
+not start a hardware driver (`TELEOP_ARM=real; hardware bridge not started`).
+Localhost `./scripts/start.sh` is unchanged (Gazebo).
+
 The robot image on Orin is built there (aarch64). Gazebo Classic ROS
 debs are not on arm64; `docker/Dockerfile` uses the Open Robotics
 Gazebo 11 PPA and builds `gazebo_ros` / `gazebo_ros2_control` from

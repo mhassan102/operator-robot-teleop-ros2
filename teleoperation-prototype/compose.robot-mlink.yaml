@@ -1,6 +1,7 @@
 # Robot-only Compose for F8 (mlink Stage 5) on Orin nvidia-3.
 # Operator stays on the PC. Host network so the UDP shim talks to
 # mlink-edge on 127.0.0.1. Do not use this file for localhost Zenoh tests.
+# TELEOP_ARM=gazebo|real (default gazebo). Stage 1 real mode does not mount ttyACM0.
 name: ${COMPOSE_PROJECT_NAME:-ros2_teleop_mlink_robot}
 
 services:
@@ -20,6 +21,7 @@ services:
       QT_X11_NO_MITSHM: "1"
       LIBGL_ALWAYS_SOFTWARE: "1"
       TELEOP_GAZEBO_GUI: ${TELEOP_GAZEBO_GUI:-false}
+      TELEOP_ARM: ${TELEOP_ARM:-gazebo}
       TELEOP_RUN_ZENOH_ROUTER: "1"
       TELEOP_MLINK: "1"
       TELEOP_MLINK_TX: ${TELEOP_MLINK_TX:-127.0.0.1:5503}
@@ -41,7 +43,7 @@ services:
           "CMD",
           "bash",
           "-c",
-          "source /opt/ros/humble/setup.bash && source /teleop/ros2_ws/install/setup.bash && ros2 topic list | grep -q /joint_states",
+          "source /opt/ros/humble/setup.bash && source /teleop/ros2_ws/install/setup.bash && if [ \"${TELEOP_ARM:-gazebo}\" = real ]; then ros2 topic list | grep -q /teleop/state; else ros2 topic list | grep -q /joint_states; fi",
         ]
       interval: 5s
       timeout: 8s

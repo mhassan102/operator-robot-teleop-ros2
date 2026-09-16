@@ -1,4 +1,5 @@
 import os
+import sys
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
@@ -6,6 +7,7 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
+    LogInfo,
     RegisterEventHandler,
     SetEnvironmentVariable,
     TimerAction,
@@ -16,6 +18,13 @@ from launch.substitutions import Command, FindExecutable, LaunchConfiguration, P
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
+
+from teleop_demo.arm_mode import (
+    ARM_REAL,
+    InvalidArmMode,
+    REAL_HARDWARE_PLACEHOLDER_LOG,
+    parse_teleop_arm,
+)
 
 
 def _load_yaml(path: str):
@@ -28,7 +37,40 @@ def _load_text(path: str) -> str:
         return stream.read()
 
 
-def generate_launch_description() -> LaunchDescription:
+def _teleop_mlink_enabled() -> bool:
+    return os.environ.get("TELEOP_MLINK", "").strip() in ("1", "true", "yes", "on")
+
+
+def _receiver_node() -> Node:
+    return Node(
+        package="teleop_demo",
+        executable="robot_receiver",
+        output="screen",
+        parameters=["/teleop/config/teleop.yaml"],
+    )
+
+
+def _mlink_bridge_node() -> Node:
+    return Node(
+        package="teleop_demo",
+        executable="robot_mlink_bridge",
+        output="screen",
+        parameters=["/teleop/config/teleop.yaml"],
+    )
+
+
+def _real_arm_launch_actions() -> list:
+    # Stage 1: deadman/safety only. No Gazebo, Servo, named poses, or serial.
+    actions = [
+        LogInfo(msg=REAL_HARDWARE_PLACEHOLDER_LOG),
+        _receiver_node(),
+    ]
+    if _teleop_mlink_enabled():
+        actions.append(_mlink_bridge_node())
+    return actions
+
+
+def _gazebo_launch_actions() -> list:
     gui = LaunchConfiguration("gui")
     pkg_share = get_package_share_directory("teleop_demo")
     world = os.path.join(pkg_share, "worlds", "teleop.world")
@@ -137,12 +179,7 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
     )
 
-    receiver = Node(
-        package="teleop_demo",
-        executable="robot_receiver",
-        output="screen",
-        parameters=[teleop_yaml],
-    )
+    receiver = _receiver_node()
 
     move_group = Node(
         package="moveit_ros_move_group",
@@ -177,12 +214,7 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[{"use_sim_time": True}],
     )
-    mlink_bridge = Node(
-        package="teleop_demo",
-        executable="robot_mlink_bridge",
-        output="screen",
-        parameters=[teleop_yaml],
-    )
+    mlink_bridge = _mlink_bridge_node()
 
     delayed_spawn = TimerAction(period=4.0, actions=[spawn])
     after_spawn = RegisterEventHandler(
@@ -208,6 +240,17 @@ def generate_launch_description() -> LaunchDescription:
             actions=[move_group, servo_node, servo_bridge, named_pose],
         ),
     ]
-    if os.environ.get("TELEOP_MLINK", "").strip() in ("1", "true", "yes", "on"):
+    if _teleop_mlink_enabled():
         actions.append(mlink_bridge)
-    return LaunchDescription(actions)
+    return actions
+
+
+def generate_launch_description() -> LaunchDescription:
+    try:
+        arm_mode = parse_teleop_arm(os.environ.get("TELEOP_ARM"))
+    except InvalidArmMode as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise RuntimeError(str(exc)) from exc
+    if arm_mode == ARM_REAL:
+        return LaunchDescription(_real_arm_launch_actions())
+    return LaunchDescription(_gazebo_launch_actions())
