@@ -1,8 +1,9 @@
-"""Operator backend: ROS 2 node plus localhost HTTP/WebSocket console (F5.4).
+"""Operator backend: ROS 2 node plus localhost HTTP/WebSocket console.
 
 Heartbeat and /teleop/command publish only while a /ws/session socket is open.
 Telemetry from /teleop/state and /teleop/tool_pose is display-only.
-Named poses are a rclpy client of /teleop/go_named_pose (not a second writer).
+Named poses use /teleop/go_named_pose locally, or the same compact UDP mux
+when TELEOP_MLINK=1 (F8). mlink stays a separate host process.
 """
 
 from __future__ import annotations
@@ -35,9 +36,29 @@ from teleop_demo.wsproto import (
     is_websocket_upgrade,
 )
 
+from teleop_demo.mlink_payload import (
+    TYPE_NAMED_POSE_REP,
+    TYPE_STATE,
+    TYPE_TOOL_POSE,
+    Command,
+    Heartbeat,
+    NamedPoseRep,
+    NamedPoseReq,
+    PayloadError,
+    State,
+    ToolPose,
+    decode,
+    encode_command,
+    encode_heartbeat,
+    encode_named_pose_req,
+)
+from teleop_demo.mlink_udp import mlink_enabled, open_from_env
+
 WEB_ROOT = Path(os.environ.get("TELEOP_WEB_ROOT", "/teleop/web"))
-HTTP_HOST = "0.0.0.0"
-HTTP_PORT = 8090
+HTTP_HOST = os.environ.get("TELEOP_HTTP_HOST", "0.0.0.0")
+HTTP_PORT = int(os.environ.get("TELEOP_HTTP_PORT", "8090"))
+MLINK_DEFAULT_TX = "127.0.0.1:5501"
+MLINK_DEFAULT_RX = "127.0.0.1:5502"
 NODE_NAME = "operator_backend"
 NAMED_POSE_SERVICE = "/teleop/go_named_pose"
 NAMED_POSE_NAMES = frozenset(NAMED_POSES)
@@ -81,6 +102,17 @@ class OperatorBackend(Node):
             PoseStamped, "/teleop/tool_pose", self._on_pose, qos
         )
         self._named_pose = self.create_client(GoNamedPose, NAMED_POSE_SERVICE)
+        self._mlink = None
+        self._pose_req = 0
+        self._pose_wait: dict[int, tuple[threading.Event, Optional[dict]]] = {}
+        if mlink_enabled():
+            self._mlink = open_from_env(
+                default_tx=MLINK_DEFAULT_TX, default_rx=MLINK_DEFAULT_RX
+            )
+            self.create_timer(0.005, self._poll_mlink)
+            self.get_logger().info(
+                f"MLINK control tx={self._mlink.tx_addr} rx={self._mlink.rx_addr}"
+            )
         command_rate = float(self.get_parameter("command_rate_hz").value)
         heartbeat_rate = float(self.get_parameter("heartbeat_rate_hz").value)
         telemetry_rate = float(self.get_parameter("telemetry_rate_hz").value)
@@ -182,8 +214,7 @@ class OperatorBackend(Node):
             if self._connection is None:
                 return
             self.command_sequence += 1
-            message = self._command_message_locked()
-            self.command_pub.publish(message)
+            self._emit_command_locked()
 
     def _publish_heartbeat(self) -> None:
         with self._lock:
@@ -197,12 +228,48 @@ class OperatorBackend(Node):
         message.sequence = self.heartbeat_sequence
         message.stamp = self.get_clock().now().to_msg()
         message.session_id = self.session_id
-        self.heartbeat_pub.publish(message)
+        if self._mlink is None:
+            self.heartbeat_pub.publish(message)
+            return
+        self._mlink.send(
+            encode_heartbeat(
+                Heartbeat(
+                    sequence=int(message.sequence),
+                    stamp_sec=int(message.stamp.sec),
+                    stamp_nsec=int(message.stamp.nanosec),
+                    session_id=message.session_id,
+                )
+            )
+        )
 
     def _publish_stop_locked(self) -> None:
         self.command_sequence += 1
+        self._emit_command_locked()
+
+    def _emit_command_locked(self) -> None:
         message = self._command_message_locked()
-        self.command_pub.publish(message)
+        if self._mlink is None:
+            self.command_pub.publish(message)
+            return
+        twist = message.twist
+        self._mlink.send(
+            encode_command(
+                Command(
+                    sequence=int(message.sequence),
+                    stamp_sec=int(message.stamp.sec),
+                    stamp_nsec=int(message.stamp.nanosec),
+                    lx=float(twist.linear.x),
+                    ly=float(twist.linear.y),
+                    lz=float(twist.linear.z),
+                    ax=float(twist.angular.x),
+                    ay=float(twist.angular.y),
+                    az=float(twist.angular.z),
+                    gripper=float(message.gripper),
+                    frame_id=message.frame_id,
+                    session_id=message.session_id,
+                )
+            )
+        )
 
     def _command_message_locked(self) -> TeleopCommand:
         message = TeleopCommand()
@@ -226,6 +293,8 @@ class OperatorBackend(Node):
         missing. Caller must already have validated `name`.
         """
         self.get_logger().info(f"NAMED POSE request name={name}")
+        if self._mlink is not None:
+            return self._mlink_named_pose(name)
         if not self._named_pose.wait_for_service(timeout_sec=NAMED_POSE_WAIT_SEC):
             message = f"{NAMED_POSE_SERVICE} unavailable"
             self.get_logger().warn(message)
@@ -267,6 +336,96 @@ class OperatorBackend(Node):
             f"NAMED POSE result name={name} ok={payload['ok']} msg={payload['message']}"
         )
         return 200, payload
+
+    def _mlink_named_pose(self, name: str) -> tuple[int, dict]:
+        if self._mlink is None:
+            return 503, {"ok": False, "name": name, "message": "mlink is not enabled"}
+        event = threading.Event()
+        with self._lock:
+            self._pose_req += 1
+            req_id = self._pose_req
+            self._pose_wait[req_id] = (event, None)
+        try:
+            self._mlink.send(encode_named_pose_req(NamedPoseReq(req_id, name)))
+        except OSError as exc:
+            with self._lock:
+                self._pose_wait.pop(req_id, None)
+            return 503, {"ok": False, "name": name, "message": str(exc)}
+        if not event.wait(NAMED_POSE_CALL_SEC):
+            with self._lock:
+                self._pose_wait.pop(req_id, None)
+            message = f"timed out waiting for {name}"
+            self.get_logger().warn(f"NAMED POSE {message}")
+            return 200, {"ok": False, "name": name, "message": message}
+        with self._lock:
+            _event, payload = self._pose_wait.pop(req_id, (event, None))
+        if payload is None:
+            return 200, {"ok": False, "name": name, "message": "empty mlink reply"}
+        payload = dict(payload)
+        payload["name"] = name
+        return 200, payload
+
+    def _poll_mlink(self) -> None:
+        if self._mlink is None:
+            return
+        while True:
+            data = self._mlink.recv(timeout=0.0)
+            if not data:
+                break
+            try:
+                kind, msg = decode(data)
+            except PayloadError as exc:
+                self.get_logger().warn(f"drop bad control datagram: {exc}")
+                continue
+            if kind == TYPE_STATE and isinstance(msg, State):
+                self._apply_mlink_state(msg)
+            elif kind == TYPE_TOOL_POSE and isinstance(msg, ToolPose):
+                self._apply_mlink_pose(msg)
+            elif kind == TYPE_NAMED_POSE_REP and isinstance(msg, NamedPoseRep):
+                self._apply_named_rep(msg)
+
+    def _apply_mlink_state(self, msg: State) -> None:
+        with self._lock:
+            changed = (
+                msg.connection_state != self._state_connection
+                or msg.watchdog_state != self._state_watchdog
+            )
+            self._state_connection = msg.connection_state
+            self._state_watchdog = msg.watchdog_state
+            self._state_session_id = msg.session_id
+            self._state_disposition = msg.last_disposition
+            conn = self._connection if changed else None
+            payload = self._state_payload_locked() if conn is not None else None
+        if conn is not None and payload is not None:
+            self._emit_state(conn, payload)
+
+    def _apply_mlink_pose(self, msg: ToolPose) -> None:
+        with self._lock:
+            self._pose = {
+                "x": msg.x,
+                "y": msg.y,
+                "z": msg.z,
+                "qx": msg.qx,
+                "qy": msg.qy,
+                "qz": msg.qz,
+                "qw": msg.qw,
+                "stamp_sec": msg.stamp_sec,
+                "stamp_nanosec": msg.stamp_nsec,
+            }
+
+    def _apply_named_rep(self, msg: NamedPoseRep) -> None:
+        with self._lock:
+            pending = self._pose_wait.get(msg.req_id)
+            if pending is None:
+                return
+            event, _old = pending
+            payload = {
+                "ok": bool(msg.success),
+                "name": "",
+                "message": msg.message,
+            }
+            self._pose_wait[msg.req_id] = (event, payload)
+        event.set()
 
     def _on_state(self, message: TeleopState) -> None:
         with self._lock:
@@ -538,6 +697,8 @@ def main(args=None) -> None:
     finally:
         _node_ready.clear()
         node.shutdown_session()
+        if node._mlink is not None:
+            node._mlink.close()
         httpd.shutdown()
         httpd.server_close()
         node.destroy_node()

@@ -16,16 +16,14 @@ the planner chat. Implement **one stage**, then stop.
 
 ## Session handoff (read this first)
 
-**Git branch:** `mlink-support` (merged to `main` when this pause landed).
+**Git branch:** `main` (Stage 5 / F8 merged).
 
-**Where we stand:** Stages 0–3 are **done**. **Do not start Stage 4 or
-Stage 5.** Both are blocked. A new session that is not explicitly
-unblocking one of them must stop after reading this file.
+**Where we stand:** Stages 0–3 and **5 are done**. **Do not start
+Stage 4** (no dongle).
 
 | Stage | Blocked on | Resume when |
 | ----- | ---------- | ----------- |
 | 4 | USB 4G/5G dongle not received | Dongle is on the Orin and has an address |
-| 5 | Operator service redesign | Backend daemon + web console/video shape is decided |
 
 **Do not implement a blocked stage.** No code, no YAML third path, no
 ROS/WebRTC wiring, no “while we wait” extras.
@@ -46,17 +44,8 @@ in YAML only. Repeat path-down tests. Keep pytest green.
 When done: STATUS done, commit remaining. Stop and show commands.
 ```
 
-Stage 5 — operator service design is decided:
-
-```text
-Read /home/muhammadhassan/robots/mlink-transport/README.md from the start.
-Also read /home/muhammadhassan/robots/IMPLEMENTATION.md (Feature F8).
-Stages 0–3 are done. Stage 4 may still be blocked; skip it if still blocked.
-Stage 5 is unblocked: operator service design is decided
-(backend daemon + web console with video). Implement Stage 5 only
-against that design. Apps talk to mlink on 127.0.0.1. Do not rewrite
-mlink. Do not git commit unless asked. Stop after Stage 5.
-```
+Stage 5 — **done** (F8). Do not start another Stage 5 session.
+Bring-up: `docs/f8_usage.md`.
 
 **Planner session (this architecture conversation):** after an
 implementation session finishes a stage, come back here to:
@@ -72,15 +61,14 @@ implementation session finishes a stage, come back here to:
   (once it exists). Do not require the planner chat.
 - Implement **exactly one** stage. Stop even if the next stage looks small.
 - Do not re-litigate locked decisions.
-- Do not touch `teleoperation-prototype/` until Stage 5 is approved.
 - Do not `git commit` or `git push` unless the user in that session
   explicitly asks. The planner session owns commits.
 - After the stage works: set that stage `STATUS: done`, keep
   `commit: remaining`, list files changed, list test commands, stop.
 - If a previous stage’s code is missing or tests fail, **stop** and
   report that. Do not silently redo earlier stages.
-- If Stage 4 or 5 is **blocked**, do not implement it. Wait for the
-  resume prompt above.
+- If Stage 4 is **blocked**, do not implement it. Wait for the
+  resume prompt above. Do not re-open Stage 5.
 
 ---
 
@@ -96,10 +84,10 @@ Update STATUS when a stage finishes or is paused. Values: `remaining`,
 | 2 | Two-process localhost loopback + `mlink-ping` | done | done |
 | 3 | Two machines, real Ethernet + Wi-Fi, cable-pull | done | done |
 | 4 | Third link `wwan0` in config only | blocked (no dongle) | remaining |
-| 5 | Operator apps on localhost in front of mlink | blocked (operator service redesign) | remaining |
+| 5 | Operator apps on localhost in front of mlink | done | done |
 
-**Next to implement:** nothing until a blocker is lifted. Do not start
-Stage 4 or 5 in a new session.
+**Next to implement:** Stage 4 stays blocked (no dongle). Stage 5 / F8
+is done. Do not start F9/F10 from this file.
 
 ---
 
@@ -165,10 +153,10 @@ Tailscale is not that path.
 
 ---
 
-## 2. Non-goals (until Stage 5 is approved)
+## 2. Non-goals
 
-- Do not modify ROS 2 teleop containers, MoveIt, watchdog, or the
-  existing WebRTC camera service
+- Do not rewrite the protocol header or locked mlink decisions
+- Do not modify MoveIt / watchdog policy in an mlink session
 - Do not implement real Voysys LLTP
 - Do not depend on kernel MPTCP or a hardware bonding router
 - No research-grade FEC/codec work — a **simple, testable** subset is
@@ -565,28 +553,19 @@ Do **not** start ROS/WebRTC / operator-app integration in this stage.
 
 ---
 
-### Stage 5 — Integration (blocked on operator service design)
+### Stage 5 — Integration (apps on localhost)
 
-- **STATUS:** blocked (operator service redesign)
-- **commit:** remaining
+- **STATUS:** done
+- **commit:** done
 - **Depends on:** Stages 1–3 (Stage 4 optional if still no dongle)
-  **and** a decided operator app shape **and** explicit user approval
+  **and** F5 backend + F6 video shape (done)
 
-**Why blocked:** operator side may become a backend daemon plus a web
-console with video. Wiring today’s ROS/Zenoh/WebRTC layout into mlink
-now would couple the transport to a structure that will change.
-
-mlink’s contract stays: apps send/recv opaque UDP on `127.0.0.1`. It
-does not care whether that app is the current Compose stack or a later
-backend + browser.
-
-**When unblocked:** put those localhost ports in front of mlink. Do not
-rewrite `mlink-transport/` except app-facing ports/docs. Robot container
-unchanged except “send to mlink localhost.” Stage 4 (5G) is **not**
-required for this if the dongle is still missing.
-
-Do not start this stage in a Stage 4 session, or while the operator
-service design is still open.
+mlink’s contract stays: apps send/recv opaque UDP on `127.0.0.1`.
+Control and media are separate app faces (`listen_app`/`send_app` vs
+optional `listen_media`/`send_media`). Do not rewrite the protocol
+header. Robot ROS stays on the Orin; operator backend stays on the PC.
+Zenoh is on-host only. How to run: `docs/f8_usage.md`,
+`docs/usage.md` Stage 5, `docs/stage5_overview.md`.
 
 ---
 
@@ -604,8 +583,8 @@ service design is still open.
 **Stage 4:** blocked until dongle; then third path from config; no
 Compose changes.
 
-**Stage 5:** blocked until operator service design (backend + web
-console/video) is decided, then written approval.
+**Stage 5:** done. Apps on `127.0.0.1`; cable-pull jog + camera on
+Wi-Fi. How to run: `docs/f8_usage.md`.
 
 ---
 
@@ -683,9 +662,11 @@ only**. Product roadmap: `IMPLEMENTATION.md` at the repo root
 | `mlink-transport/tests/test_stage2.py` | 2 | localhost UDP + subprocess loopback demo |
 | `mlink-transport/tests/test_stage3.py` | 3 | `SO_BINDTODEVICE` (`lo` / missing iface); lab YAML pair |
 | `mlink-transport/docs/stage3_overview.md` | 3 | two machines, bind-to-device, cable pull |
-| `mlink-transport/config/lab-op.yaml` | 3 | operator `wlo1` + `enx00e04c681cc3` |
-| `mlink-transport/config/lab-edge.yaml` | 3 | Orin `wlP1p1s0` + `eno1` |
+| `mlink-transport/config/lab-op.yaml` | 3+5 | operator `wlo1` + `enx00e04c681cc3`; `send_media` |
+| `mlink-transport/config/lab-edge.yaml` | 3+5 | Orin `wlP1p1s0` + `eno1`; `listen_media` |
 | `mlink-transport/docs/latency_comparison.md` | 3 | lab RTT: eth / wifi / Tailscale; WAN estimates |
+| `mlink-transport/docs/stage5_overview.md` | 5 | localhost app faces, control + media |
+| `mlink-transport/tests/test_stage5.py` | 5 | control vs media app-port routing |
 
 ---
 

@@ -72,6 +72,50 @@ def test_loopback_yaml_pair_is_complementary() -> None:
     assert all(p.ifname is None for p in edge.paths)
 
 
+def test_optional_media_app_ports() -> None:
+    cfg = load_config(
+        {
+            "session_id": 1,
+            "listen_app": "127.0.0.1:5501",
+            "send_app": "127.0.0.1:5502",
+            "listen_media": "127.0.0.1:5601",
+            "send_media": "127.0.0.1:5602",
+            "paths": [
+                {"name": "eth", "bind_ip": "127.0.0.1", "peer": "127.0.0.1:1"},
+            ],
+        }
+    )
+    assert cfg.listen_media == "127.0.0.1:5601"
+    assert cfg.send_media == "127.0.0.1:5602"
+
+
+def test_rejects_duplicate_app_addrs() -> None:
+    with pytest.raises(ConfigError, match="unique"):
+        load_config(
+            {
+                "session_id": 1,
+                "listen_app": "127.0.0.1:5501",
+                "send_app": "127.0.0.1:5501",
+                "paths": [
+                    {"name": "eth", "bind_ip": "127.0.0.1", "peer": "127.0.0.1:1"},
+                ],
+            }
+        )
+
+
+def test_rejects_100_x_media_addr() -> None:
+    with pytest.raises(ConfigError, match="Tailscale"):
+        load_config(
+            {
+                "session_id": 1,
+                "listen_media": "100.95.150.54:5004",
+                "paths": [
+                    {"name": "eth", "bind_ip": "127.0.0.1", "peer": "127.0.0.1:1"},
+                ],
+            }
+        )
+
+
 def test_third_path_is_config_only() -> None:
     cfg = load_config(
         {

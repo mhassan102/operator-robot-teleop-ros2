@@ -1,6 +1,5 @@
-# F8 operator-side player. WebRTC terminates on 127.0.0.1 next to the
-# console. Browser must not ICE across eth/wifi/5G. RTP in is from
-# mlink-op send_media (127.0.0.1:5004).
+# F6 lab shortcut (not the F8 product path). ICE pinned to Tailscale.
+# Kept only as a record of the old Orin-hosted MediaMTX layout.
 logLevel: info
 logDestinations: [file]
 logFile: logs/mediamtx.log
@@ -17,15 +16,15 @@ pprof: false
 playback: false
 
 webrtc: true
-webrtcAddress: 127.0.0.1:8889
-rtspAddress: 127.0.0.1:8554
+webrtcAddress: :8889
+rtspAddress: :8554
 webrtcEncryption: false
 webrtcAllowOrigins: ["*"]
-webrtcLocalUDPAddress: 127.0.0.1:8189
+webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: ""
-webrtcIPsFromInterfaces: false
-webrtcIPsFromInterfacesList: []
-webrtcAdditionalHosts: ["127.0.0.1"]
+webrtcIPsFromInterfaces: true
+webrtcIPsFromInterfacesList: [tailscale0]
+webrtcAdditionalHosts: ["100.101.94.5"]
 webrtcICEServers2: []
 
 paths:

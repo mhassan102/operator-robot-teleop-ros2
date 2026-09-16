@@ -1,6 +1,6 @@
 /* F5 session keys / HUD / named poses. F6 camera uses MediaMTX WHEP reader. */
 const SESSION_PATH = "/ws/session";
-const DEFAULT_CAM = "http://100.101.94.5:8889/cam";
+const DEFAULT_CAM = "http://127.0.0.1:8889/cam";
 
 const KEY_BINDINGS = {
   w: "+x",

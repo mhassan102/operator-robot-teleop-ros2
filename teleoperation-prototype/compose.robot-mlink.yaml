@@ -1,0 +1,50 @@
+# Robot-only Compose for F8 (mlink Stage 5) on Orin nvidia-3.
+# Operator stays on the PC. Host network so the UDP shim talks to
+# mlink-edge on 127.0.0.1. Do not use this file for localhost Zenoh tests.
+name: ${COMPOSE_PROJECT_NAME:-ros2_teleop_mlink_robot}
+
+services:
+  robot:
+    image: ${TELEOP_IMAGE:-ros2-teleop-poc:humble}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ros2-teleop-robot-mlink
+    init: true
+    network_mode: host
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+      RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_zenoh_cpp}
+      CYCLONEDDS_URI: file:///teleop/config/cyclonedds.xml
+      DISPLAY: ${DISPLAY:-:0}
+      QT_X11_NO_MITSHM: "1"
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      TELEOP_GAZEBO_GUI: ${TELEOP_GAZEBO_GUI:-false}
+      TELEOP_RUN_ZENOH_ROUTER: "1"
+      TELEOP_MLINK: "1"
+      TELEOP_MLINK_TX: ${TELEOP_MLINK_TX:-127.0.0.1:5503}
+      TELEOP_MLINK_RX: ${TELEOP_MLINK_RX:-127.0.0.1:5504}
+    volumes:
+      - ./config:/teleop/config:ro
+      - ./ros2_ws:/teleop/ros2_ws
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    command:
+      [
+        "ros2",
+        "launch",
+        "teleop_demo",
+        "robot_sim.launch.py",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bash",
+          "-c",
+          "source /opt/ros/humble/setup.bash && source /teleop/ros2_ws/install/setup.bash && ros2 topic list | grep -q /joint_states",
+        ]
+      interval: 5s
+      timeout: 8s
+      retries: 48
+      start_period: 90s
+    restart: "no"
