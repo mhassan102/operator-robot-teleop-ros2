@@ -117,8 +117,8 @@ These were decided in the planner session. Treat them as requirements.
 6. **Tailscale is SSH/management only by default.** Never a bonded
    path unless the session sets `allow_tailscale: true`. Do not bind
    `tailscale0` or use `100.x` peer IPs in Orin `lab-op.yaml` /
-   `lab-edge.yaml`. F18 Stage 3 remote-laptop YAML is the opt-in
-   exception (`lab-op-remote-laptop.yaml` / `lab-edge-remote-laptop.yaml`).
+   `lab-edge.yaml`. F18 remote-laptop YAML is the opt-in exception
+   (`lab-op-remote-laptop.yaml` / `lab-edge-remote-laptop.yaml`).
 7. **Stages 0–2 run on the operator PC only** (localhost / fake
    sockets). Orin is not in the data path until Stage 3.
 8. **Language for v1: Python 3** with stdlib + PyYAML, tests via
@@ -670,6 +670,8 @@ only**. Product roadmap: `IMPLEMENTATION.md` at the repo root
 | `mlink-transport/config/lab-edge.yaml` | 3+5 | Orin `wlP1p1s0` + `eno1`; `listen_media` |
 | `mlink-transport/config/lab-op-remote-laptop.yaml` | F18.3 | operator Tailscale path; `allow_tailscale`; control-only |
 | `mlink-transport/config/lab-edge-remote-laptop.yaml` | F18.3 | SO-ARM laptop Tailscale path; `allow_tailscale`; control-only |
+| `mlink-transport/scripts/start_daemon.sh` | F18.4 | `op\|edge [--remote-laptop]`; default Orin YAML; no `--reflect`/`--control` |
+| `mlink-transport/tests/test_f18_bringup.py` | F18.4 | YAML control-only + start_daemon parse |
 | `mlink-transport/docs/latency_comparison.md` | 3 | lab RTT: eth / wifi / Tailscale; WAN estimates |
 | `mlink-transport/docs/stage5_overview.md` | 5 | localhost app faces, control + media |
 | `mlink-transport/tests/test_stage5.py` | 5 | control vs media app-port routing |

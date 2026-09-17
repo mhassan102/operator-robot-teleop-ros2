@@ -3,8 +3,9 @@
 Userspace UDP bonding (LLTP-like). v1 sends a copy of each datagram on
 every live path. The receiver keeps the first good copy and drops the
 rest. No Linux default-route failover. The Orin lab path does not use
-Tailscale as a data path. F18 Stage 3 adds an explicit
-`allow_tailscale: true` session for this PC ↔ the SO-ARM laptop only.
+Tailscale as a data path. F18 adds an explicit `allow_tailscale: true`
+session for this PC ↔ the SO-ARM laptop only (Stage 3 path smoke,
+Stage 4 console g/h).
 
 Stage plan (default doc): [`../README.md`](../README.md).
 Product roadmap: [`../../IMPLEMENTATION.md`](../../IMPLEMENTATION.md).
@@ -182,9 +183,9 @@ One UDP path on `tailscale0` between this PC and the SO-ARM laptop.
 Orin `lab-op.yaml` / `lab-edge.yaml` stay the eth+wifi pair and still
 load without the flag. This pair is **control only** (no media through
 mlink). Camera stays on the laptop MediaMTX URL
-`http://100.67.47.79:8889/cam` (`?cam=` on the console). Do not start
-`start_operator_mlink.sh` / `start_robot_mlink.sh` / `--real-arm` for
-this smoke — those scripts stay the Orin lab path.
+`http://100.67.47.79:8889/cam` (`?cam=` on the console). Stage 3 is
+**path smoke only** (`--reflect` + ping). Do **not** start robot
+Compose / `--real-arm` here. End-to-end g/h is F18 Stage 4 below.
 
 Confirm IPs before editing YAML (`tailscale ip -4`):
 
@@ -229,6 +230,129 @@ PYTHONPATH=. python3 -m ping --count 20 --interval-ms 50
 Stop both daemons with Ctrl-C. Do not run `test_real_gripper.sh` in
 this stage. `SO_BINDTODEVICE` on `tailscale0` may need `CAP_NET_ADMIN`
 (same as Stage 3 Ethernet).
+
+## F18 Stage 4 — console g/h → Tailscale mlink → Feetech gripper
+
+Operator on this PC opens the console, watches the laptop camera, and
+taps **g** / **h** once. Commands ride mlink (Tailscale, control-only).
+Camera stays on MediaMTX; it is **not** sent through mlink. No Gazebo,
+no named poses, no MoveIt Servo, no joints 1–5.
+
+`--remote-laptop` picks `lab-*-remote-laptop.yaml`. Default remains
+Orin `lab-op.yaml` / `lab-edge.yaml`. `start_robot_mlink.sh` default
+is still Gazebo; use `--real-arm` on the laptop. Do **not** pass
+`--reflect` on edge (that echoes; it will not drive the robot). Do
+**not** pass `--control` on op (that is ping).
+
+Confirm IPs (`tailscale ip -4`) match the table in F18 Stage 3.
+
+From the repo root on this PC, copy trees:
+
+```bash
+rsync -az --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc' \
+  mlink-transport/ usama@gt-dev-muhammadusama:/home/usama/hassan/mlink-transport/
+
+rsync -az --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc' \
+  --exclude 'ros2_ws/build' --exclude 'ros2_ws/install' --exclude 'ros2_ws/log' \
+  teleoperation-prototype/ \
+  usama@gt-dev-muhammadusama:/home/usama/hassan/teleoperation-prototype/
+```
+
+Laptop first-time image/workspace (skip if Stage 2 already built):
+
+```bash
+ssh usama@gt-dev-muhammadusama
+cd /home/usama/hassan/teleoperation-prototype
+docker compose -f compose.robot-mlink.yaml -f compose.robot-mlink.real-arm.yaml build
+./scripts/build_workspace_mlink.sh robot
+```
+
+This PC, after F18 source lands:
+
+```bash
+cd /home/muhammadhassan/robots/teleoperation-prototype
+./scripts/build_workspace_mlink.sh operator
+```
+
+### Bring-up order
+
+Clear the gripper. Watch the camera **before** any key. One tap, not a
+held key. Do not mash g/h to “catch up” if the path flaps.
+
+```bash
+# 1. Laptop camera (existing MediaMTX; not through mlink)
+ssh usama@gt-dev-muhammadusama
+/home/usama/teleops_hassan/video/start.sh
+```
+
+```bash
+# 2. Laptop mlink-edge WITHOUT --reflect
+ssh usama@gt-dev-muhammadusama
+cd /home/usama/hassan/mlink-transport
+./scripts/start_daemon.sh edge --remote-laptop
+```
+
+```bash
+# 3. This PC mlink-op WITHOUT --control
+cd /home/muhammadhassan/robots/mlink-transport
+./scripts/start_daemon.sh op --remote-laptop
+```
+
+Daemon logs `session=1` and a one-second `stats` line (`ts=up`). App
+ports: op `127.0.0.1:5501/5502`, edge `127.0.0.1:5503/5504`.
+
+```bash
+# 4. Laptop robot --real-arm (TELEOP_MLINK=1, Feetech id 6, max_delta 48)
+ssh usama@gt-dev-muhammadusama
+cd /home/usama/hassan/teleoperation-prototype
+./scripts/start_robot_mlink.sh --real-arm
+```
+
+```bash
+# 5. This PC operator backend
+cd /home/muhammadhassan/robots/teleoperation-prototype
+./scripts/start_operator_mlink.sh --remote-laptop
+```
+
+```text
+# 6. Console. Heartbeat must keep CONNECTED before any key.
+http://127.0.0.1:8090/?cam=http://100.67.47.79:8889/cam
+```
+
+7. One **g** (tiny open) or one **h** (tiny close). Watch the camera.
+   Do not press wasd. Then stop.
+
+If joints 1–5 twitch, stop immediately.
+
+### Soft stop
+
+USB unplug is not available.
+
+```bash
+# this PC
+cd /home/muhammadhassan/robots/teleoperation-prototype
+./scripts/stop_mlink.sh
+# Ctrl-C mlink-op
+
+# laptop
+ssh usama@gt-dev-muhammadusama
+cd /home/usama/hassan/teleoperation-prototype && ./scripts/stop_mlink.sh
+# Ctrl-C mlink-edge
+/home/usama/teleops_hassan/video/stop.sh
+```
+
+Closing the console tab (or stopping operator Compose) must trip the
+500 ms watchdog and Feetech deadman torque-off. Path flap (~1 s ts
+down) must also deadman; do not mash g/h.
+
+### Must not
+
+- `--reflect` on edge
+- Cartesian jog (wasd) on the real arm
+- Named poses
+- EEPROM / servo IDs 1–5
+- Changing `allow_tailscale` default (Orin YAML still omits it)
+- Video through mlink
 
 ## Stage 5 teleop over mlink (Ethernet + Wi-Fi)
 
@@ -385,7 +509,10 @@ mlink-transport/
   config/loopback-edge.yaml  # edge side (42001/42002 → 41001/41002)
   config/lab-op.yaml         # operator (wlo1 + USB-eth); Stage 5 send_media
   config/lab-edge.yaml       # Orin (wlP1p1s0 + eno1); Stage 5 listen_media
-  docs/usage.md              # this file — tests, loopback, cable-pull, Stage 5
+  config/lab-op-remote-laptop.yaml   # F18 Tailscale op; allow_tailscale
+  config/lab-edge-remote-laptop.yaml # F18 Tailscale edge; control-only
+  scripts/start_daemon.sh    # op|edge [--remote-laptop]; no --reflect/--control
+  docs/usage.md              # this file — tests, loopback, cable-pull, Stage 5, F18
   docs/stage1_sequence.md
   docs/stage2_overview.md    # processes, ports, ping path
   docs/stage3_overview.md    # two machines, SO_BINDTODEVICE, cable pull
@@ -454,11 +581,13 @@ inbound heartbeat loss > 20% over the last 20 heartbeats.
 Stage 2 loopback uses `127.0.0.1` and two port-pairs, no `ifname`. App
 ports on op and edge must not collide. Stage 3 lab YAML sets `ifname`
 and real bind/peer IPs (`config/lab-op.yaml`, `config/lab-edge.yaml`).
-F18 Stage 3 remote-laptop YAML is `config/lab-op-remote-laptop.yaml` /
+F18 remote-laptop YAML is `config/lab-op-remote-laptop.yaml` /
 `config/lab-edge-remote-laptop.yaml` (`allow_tailscale: true`, one
-`tailscale0` path, control-only). Stage 5 adds optional
-`listen_media` / `send_media`; omitted means control-only (loopback /
-`mlink-ping` / remote-laptop unchanged).
+`tailscale0` path, control-only). Stage 4 starts those with
+`./scripts/start_daemon.sh {op,edge} --remote-laptop` (no `--reflect`,
+no `--control`). Stage 5 adds optional `listen_media` / `send_media`;
+omitted means control-only (loopback / `mlink-ping` / remote-laptop
+unchanged).
 
 ## Behavior
 

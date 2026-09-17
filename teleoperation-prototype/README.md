@@ -120,14 +120,18 @@ subscribes to `/gripper_safe` and commands the SO-ARM gripper servo only
 (Feetech STS3215 id 6 on `/dev/ttyACM0`). `/dev/ttyACM0` is mounted only
 when `TELEOP_ARM=real`. Localhost `./scripts/start.sh` is unchanged (Gazebo).
 
-F18 Stage 3 (mlink over Tailscale to the SO-ARM laptop) is a separate
-config pair: `mlink-transport/config/lab-op-remote-laptop.yaml` and
-`lab-edge-remote-laptop.yaml`. Start with the existing daemon CLI
-(`python3 -m op --config …` on this PC, `python3 -m edge --config …`
-on the laptop). See
+F18 Stage 4 (console g/h → Tailscale mlink → Feetech gripper) reuses
+`compose.operator-mlink.yaml` and `./scripts/start_robot_mlink.sh --real-arm`.
+mlink YAML is the Stage 3 pair (`lab-op-remote-laptop.yaml` /
+`lab-edge-remote-laptop.yaml`). Pick it with
+`mlink-transport/scripts/start_daemon.sh {op,edge} --remote-laptop`
+(default remains Orin `lab-op.yaml` / `lab-edge.yaml`). Operator:
+`./scripts/start_operator_mlink.sh --remote-laptop` (prints
+`?cam=http://100.67.47.79:8889/cam`, sets `TELEOP_GRIPPER_ONLY=1`).
+Do **not** pass `--reflect` on edge. Camera stays on laptop MediaMTX,
+not through mlink. Copy-paste sequence:
 [`../mlink-transport/docs/usage.md`](../mlink-transport/docs/usage.md)
-(F18 Stage 3). `start_operator_mlink.sh` / `start_robot_mlink.sh`
-stay the Orin lab path. Do not start `--real-arm` for the mlink smoke.
+(F18 Stage 4). Orin `start_*_mlink.sh` defaults are unchanged.
 
 The robot image on Orin is built there (aarch64). Gazebo Classic ROS
 debs are not on arm64; `docker/Dockerfile` uses the Open Robotics

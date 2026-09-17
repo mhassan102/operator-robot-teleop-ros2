@@ -1,3 +1,4 @@
+import os
 import time
 
 from geometry_msgs.msg import Twist
@@ -6,7 +7,8 @@ from teleop_demo_msgs.msg import TeleopAck, TeleopCommand, TeleopHeartbeat, Tele
 import rclpy
 from rclpy.node import Node
 
-from teleop_demo.commands import command_direction
+from teleop_demo.arm_mode import drops_cartesian_jog, parse_teleop_arm
+from teleop_demo.commands import command_direction, zero_twist
 from teleop_demo.delivery import DeliveryTracker, LatencyStats, time_msg_to_ns
 from teleop_demo.parameters import declare_teleop_parameters
 from teleop_demo.qos import command_qos
@@ -17,6 +19,8 @@ class RobotReceiver(Node):
     def __init__(self) -> None:
         super().__init__("robot_command_receiver")
         declare_teleop_parameters(self)
+        self._arm_mode = parse_teleop_arm(os.environ.get("TELEOP_ARM"))
+        self._drop_cartesian = drops_cartesian_jog(self._arm_mode)
         self.session_id = ""
         self.tracker = DeliveryTracker()
         self.latency = LatencyStats()
@@ -46,7 +50,9 @@ class RobotReceiver(Node):
         self.get_logger().info(
             "ROBOT RECEIVER READY topic=/teleop/command "
             f"keep_alive={self.safety.keep_alive} "
-            f"watchdog_ms={int(self.safety.watchdog_timeout_s * 1000)}"
+            f"watchdog_ms={int(self.safety.watchdog_timeout_s * 1000)} "
+            f"arm_mode={self._arm_mode} "
+            f"drop_cartesian={self._drop_cartesian}"
         )
 
     def heartbeat_callback(self, message: TeleopHeartbeat) -> None:
@@ -73,8 +79,16 @@ class RobotReceiver(Node):
         self.tracker.observe(int(message.sequence))
         self.latency.add(one_way_ns)
 
+        twist = message.twist
+        if self._drop_cartesian:
+            if command_direction(message.twist) != "STOP":
+                self.get_logger().warn(
+                    "REAL ARM drop cartesian "
+                    f"direction={command_direction(message.twist)}; gripper-only"
+                )
+            twist = zero_twist()
         disposition, transitions = self.safety.on_command(
-            message.twist,
+            twist,
             float(message.gripper),
             message.frame_id,
             time.monotonic(),
@@ -93,13 +107,13 @@ class RobotReceiver(Node):
             "COMMAND RECEIVED "
             f"seq={message.sequence} "
             f"session={self.session_id} "
-            f"direction={command_direction(message.twist)} "
-            f"linear_x={message.twist.linear.x:.3f} "
-            f"linear_y={message.twist.linear.y:.3f} "
-            f"linear_z={message.twist.linear.z:.3f} "
-            f"angular_x={message.twist.angular.x:.3f} "
-            f"angular_y={message.twist.angular.y:.3f} "
-            f"angular_z={message.twist.angular.z:.3f} "
+            f"direction={command_direction(twist)} "
+            f"linear_x={twist.linear.x:.3f} "
+            f"linear_y={twist.linear.y:.3f} "
+            f"linear_z={twist.linear.z:.3f} "
+            f"angular_x={twist.angular.x:.3f} "
+            f"angular_y={twist.angular.y:.3f} "
+            f"angular_z={twist.angular.z:.3f} "
             f"gripper={message.gripper:.3f} "
             f"frame={message.frame_id} "
             f"disposition={disposition} "

@@ -27,6 +27,7 @@ import rclpy
 from rclpy.node import Node
 
 from teleop_demo.arm_kinematics import NAMED_POSES
+from teleop_demo.arm_mode import gripper_only_from_env, key_direction_allowed
 from teleop_demo.commands import COMMANDS, KEY_BINDINGS, fill_twist
 from teleop_demo.parameters import declare_teleop_parameters
 from teleop_demo.qos import command_qos
@@ -105,6 +106,9 @@ class OperatorBackend(Node):
         self._mlink = None
         self._pose_req = 0
         self._pose_wait: dict[int, tuple[threading.Event, Optional[dict]]] = {}
+        self._gripper_only = gripper_only_from_env(os.environ.get("TELEOP_GRIPPER_ONLY"))
+        if self._gripper_only:
+            self.get_logger().info("GRIPPER ONLY: cartesian keys and named poses ignored")
         if mlink_enabled():
             self._mlink = open_from_env(
                 default_tx=MLINK_DEFAULT_TX, default_rx=MLINK_DEFAULT_RX
@@ -160,6 +164,10 @@ class OperatorBackend(Node):
     def apply_key(self, key: str, down: bool) -> None:
         direction = KEY_BINDINGS.get(key)
         if direction is None:
+            return
+        if not key_direction_allowed(direction, self._gripper_only):
+            if down:
+                self.get_logger().info(f"KEY {direction} ignored (gripper-only)")
             return
         values = COMMANDS[direction]
         with self._lock:
@@ -293,6 +301,10 @@ class OperatorBackend(Node):
         missing. Caller must already have validated `name`.
         """
         self.get_logger().info(f"NAMED POSE request name={name}")
+        if self._gripper_only:
+            message = "named poses disabled (gripper-only)"
+            self.get_logger().warn(message)
+            return 400, {"ok": False, "name": name, "message": message}
         if self._mlink is not None:
             return self._mlink_named_pose(name)
         if not self._named_pose.wait_for_service(timeout_sec=NAMED_POSE_WAIT_SEC):

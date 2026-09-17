@@ -110,7 +110,7 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | F15 | Bitrate adaptation | remaining | After media rides mlink or a measured WAN |
 | F16 | Console TLS / auth | remaining | Before anyone who is not us opens the UI |
 | F17 | Multi-camera | remaining | After one camera is in the console |
-| F18 | Real hardware arm | remaining | After F10 + F12; driver behind the same gateway |
+| F18 | Real hardware arm | partial | Gripper e2e over Tailscale (Stage 4). Joints 1–5 / URDF / Servo out. |
 | F19 | Benchmarks | remaining | Local vs WAN; command, watchdog, video |
 | F20 | mlink payload encryption | remaining | v1 is plaintext UDP; later |
 | F21 | CGNAT relay (5G reachability) | remaining | Ops/config when F9 exists; not a new protocol |
@@ -727,11 +727,17 @@ teleop pair; do not build a matrix product in the first session.
 
 ---
 
-### F18 — Real hardware arm — STATUS: remaining
+### F18 — Real hardware arm — STATUS: partial
 
 Replace Gazebo + `arm_controller` with the vendor driver **behind**
 the same `/cmd_vel_safe` / named-pose gate. Do not let the vendor
 UI publish around the gateway. Requires F10 at minimum, F11 if WAN.
+
+Gripper-only path is in (F18 Stages 1–4): `TELEOP_ARM=real`, Feetech
+id 6 / max_delta 48, mlink Tailscale opt-in, console g/h over
+`compose.operator-mlink.yaml`. Camera stays MediaMTX
+`http://100.67.47.79:8889/cam`. Joints 1–5, SO-ARM URDF/Servo, and
+camera-through-mlink are still out.
 
 ---
 

@@ -2,6 +2,7 @@
 
 TELEOP_ARM=gazebo|real (default gazebo). Unknown values must not fall back
 to Gazebo. Real mode starts robot_receiver plus the Feetech gripper node.
+TELEOP_GRIPPER_ONLY on the operator ignores Cartesian keys / named poses.
 """
 
 from __future__ import annotations
@@ -13,6 +14,9 @@ DEFAULT_ARM_MODE = ARM_GAZEBO
 REAL_ARM_SERIAL_PORT = "/dev/ttyACM0"
 REAL_ARM_COMPOSE_OVERLAY = "compose.robot-mlink.real-arm.yaml"
 REAL_ARM_GRIPPER_LOG = "TELEOP_ARM=real; feetech gripper on /dev/ttyACM0"
+GRIPPER_ONLY_DIRECTIONS = frozenset({"open", "close", "stop"})
+REMOTE_LAPTOP_CAM = "http://100.67.47.79:8889/cam"
+REMOTE_LAPTOP_CONSOLE = f"http://127.0.0.1:8090/?cam={REMOTE_LAPTOP_CAM}"
 
 # Executables that move the sim/arm. Real mode must not start these.
 GAZEBO_MOTION_EXECUTABLES = frozenset(
@@ -45,3 +49,22 @@ def parse_teleop_arm(raw: str | None) -> str:
             "refusing to fall back to Gazebo"
         )
     return value
+
+
+def env_flag_enabled(raw: str | None) -> bool:
+    return (raw or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def drops_cartesian_jog(arm_mode: str) -> bool:
+    """Real arm is gripper-only: joints 1-5 are never commanded."""
+    return arm_mode == ARM_REAL
+
+
+def gripper_only_from_env(raw: str | None) -> bool:
+    return env_flag_enabled(raw)
+
+
+def key_direction_allowed(direction: str, gripper_only: bool) -> bool:
+    if not gripper_only:
+        return True
+    return direction in GRIPPER_ONLY_DIRECTIONS

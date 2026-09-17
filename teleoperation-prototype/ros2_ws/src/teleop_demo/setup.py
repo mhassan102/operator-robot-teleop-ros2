@@ -8,7 +8,12 @@ package_name = "teleop_demo"
 
 
 def share_files(subdir: str) -> tuple[str, list[str]]:
-    return os.path.join("share", package_name, subdir), glob(os.path.join(subdir, "*"))
+    files = [
+        path
+        for path in glob(os.path.join(subdir, "*"))
+        if os.path.isfile(path)
+    ]
+    return os.path.join("share", package_name, subdir), files
 
 
 setup(

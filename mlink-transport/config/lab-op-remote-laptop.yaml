@@ -1,9 +1,11 @@
-# Operator PC (pure-dev-muhammadhassan) — F18 Stage 3 Tailscale path.
+# Operator PC (pure-dev-muhammadhassan) — F18 Tailscale path.
 # Complementary peer: config/lab-edge-remote-laptop.yaml (SO-ARM laptop).
 # Orin lab pair stays config/lab-op.yaml / config/lab-edge.yaml (do not use those here).
 # IPs must match `tailscale ip -4` on this machine. Requires allow_tailscale.
 # Control-only localhost app ports (same as lab-op.yaml). Camera stays
 # MediaMTX http://100.67.47.79:8889/cam — not through mlink.
+# Stage 4: start without --control (that is ping). operator_backend uses
+# 127.0.0.1:5501/5502. Use: ./scripts/start_daemon.sh op --remote-laptop
 session_id: 1
 allow_tailscale: true
 listen_app: "127.0.0.1:5501"

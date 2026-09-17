@@ -17,6 +17,11 @@ from teleop_demo.arm_mode import (
     REAL_ARM_COMPOSE_OVERLAY,
     REAL_ARM_GRIPPER_LOG,
     REAL_ARM_SERIAL_PORT,
+    REMOTE_LAPTOP_CAM,
+    REMOTE_LAPTOP_CONSOLE,
+    drops_cartesian_jog,
+    gripper_only_from_env,
+    key_direction_allowed,
     parse_teleop_arm,
 )
 
@@ -192,6 +197,84 @@ def test_start_script_invalid_env_does_not_fallback() -> None:
     assert "refusing to fall back to Gazebo" in result.stderr
 
 
+def test_start_robot_script_rejects_remote_laptop_flag() -> None:
+    result = _parse_start_script("--remote-laptop")
+    assert result.returncode == 2
+    assert "unknown argument" in result.stderr
+
+
+def _parse_operator_script(*args, extra_env=None) -> subprocess.CompletedProcess:
+    root = _prototype_root()
+    env = os.environ.copy()
+    env.pop("TELEOP_GRIPPER_ONLY", None)
+    env["TELEOP_OPERATOR_PARSE_ONLY"] = "1"
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        [str(root / "scripts" / "start_operator_mlink.sh"), *args],
+        cwd=str(root),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_start_operator_script_default_is_orin_console() -> None:
+    result = _parse_operator_script()
+    assert result.returncode == 0, result.stderr
+    assert "TELEOP_GRIPPER_ONLY=0" in result.stdout
+    assert "operator console: http://127.0.0.1:8090/" in result.stdout
+    assert "cam=" not in result.stdout
+
+
+def test_start_operator_script_remote_laptop() -> None:
+    result = _parse_operator_script("--remote-laptop")
+    assert result.returncode == 0, result.stderr
+    assert "TELEOP_GRIPPER_ONLY=1" in result.stdout
+    assert REMOTE_LAPTOP_CONSOLE in result.stdout
+    assert REMOTE_LAPTOP_CAM in result.stdout
+
+
+def test_start_operator_script_unknown_arg() -> None:
+    result = _parse_operator_script("--reflect")
+    assert result.returncode == 2
+    assert "unknown argument" in result.stderr
+
+
+def test_drops_cartesian_jog_only_in_real_mode() -> None:
+    assert drops_cartesian_jog(ARM_REAL) is True
+    assert drops_cartesian_jog(ARM_GAZEBO) is False
+
+
+def test_gripper_only_env_and_key_filter() -> None:
+    assert gripper_only_from_env(None) is False
+    assert gripper_only_from_env("") is False
+    assert gripper_only_from_env("0") is False
+    assert gripper_only_from_env("1") is True
+    assert gripper_only_from_env("true") is True
+    assert key_direction_allowed("+x", False) is True
+    assert key_direction_allowed("+x", True) is False
+    assert key_direction_allowed("open", True) is True
+    assert key_direction_allowed("close", True) is True
+    assert key_direction_allowed("stop", True) is True
+    assert key_direction_allowed("yaw-", True) is False
+
+
+def test_operator_mlink_compose_gripper_only_defaults_off() -> None:
+    text = (_prototype_root() / "compose.operator-mlink.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "TELEOP_GRIPPER_ONLY: ${TELEOP_GRIPPER_ONLY:-0}" in text
+    assert "TELEOP_MLINK: \"1\"" in text
+
+
+def test_stop_mlink_uses_real_arm_overlay() -> None:
+    text = (_prototype_root() / "scripts" / "stop_mlink.sh").read_text(encoding="utf-8")
+    assert REAL_ARM_COMPOSE_OVERLAY in text
+    assert "compose.operator-mlink.yaml" in text
+
+
 def test_robot_mlink_compose_gazebo_has_no_serial() -> None:
     root = _prototype_root()
     text = (root / "compose.robot-mlink.yaml").read_text(encoding="utf-8")
@@ -217,6 +300,38 @@ def test_localhost_compose_stays_gazebo() -> None:
     assert "TELEOP_ARM" not in text
     assert "grep -q /joint_states" in text
     assert "ttyACM0" not in text
+
+
+def test_robot_receiver_drops_cartesian_in_real_mode() -> None:
+    text = (
+        Path(__file__).resolve().parents[1] / "teleop_demo" / "robot_receiver.py"
+    ).read_text(encoding="utf-8")
+    assert "drops_cartesian_jog" in text
+    assert "zero_twist" in text
+    assert "REAL ARM drop cartesian" in text
+
+
+def test_operator_backend_gripper_only_gates() -> None:
+    text = (
+        Path(__file__).resolve().parents[1]
+        / "teleop_demo"
+        / "operator_backend.py"
+    ).read_text(encoding="utf-8")
+    assert "gripper_only_from_env" in text
+    assert "key_direction_allowed" in text
+    assert "named poses disabled (gripper-only)" in text
+
+
+def test_share_files_skips_pycache_dirs() -> None:
+    pkg = Path(__file__).resolve().parents[1]
+    text = (pkg / "setup.py").read_text(encoding="utf-8")
+    assert "os.path.isfile(path)" in text
+    assert 'glob(os.path.join(subdir, "*"))' in text
+    launch_glob = [str(path) for path in (pkg / "launch").glob("*")]
+    files = [path for path in launch_glob if Path(path).is_file()]
+    assert files
+    assert any(path.endswith("robot_sim.launch.py") for path in files)
+    assert not any(Path(path).name == "__pycache__" for path in files)
 
 
 def test_launch_file_wires_feetech_gripper_for_real() -> None:

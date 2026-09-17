@@ -1,8 +1,10 @@
-# SO-ARM laptop gt-dev-muhammadusama — F18 Stage 3 Tailscale path.
+# SO-ARM laptop gt-dev-muhammadusama — F18 Tailscale path.
 # Peer of config/lab-op-remote-laptop.yaml.
 # Copy mlink-transport/ here (e.g. /home/usama/hassan/mlink-transport).
 # IPs must match `tailscale ip -4` on the laptop. Requires allow_tailscale.
-# Control-only. Do not start TELEOP_ARM / robot compose for the mlink smoke.
+# Control-only. Stage 4: do NOT pass --reflect (that echoes; it will not
+# drive robot_mlink_bridge on 127.0.0.1:5503/5504).
+# Use: ./scripts/start_daemon.sh edge --remote-laptop
 session_id: 1
 allow_tailscale: true
 listen_app: "127.0.0.1:5503"

@@ -1,7 +1,8 @@
 # Operator-only Compose for F8 (mlink Stage 5) on the operator PC.
-# Robot runs on Orin. Host network so the backend talks to mlink-op on
-# 127.0.0.1. HTTP is bound to 127.0.0.1 (not all NICs). Localhost Zenoh
-# tests keep using compose.yaml.
+# Robot runs on Orin, or the SO-ARM laptop for F18 Stage 4. Host network
+# so the backend talks to mlink-op on 127.0.0.1. HTTP is bound to
+# 127.0.0.1 (not all NICs). Localhost Zenoh tests keep using compose.yaml.
+# TELEOP_GRIPPER_ONLY=1 (--remote-laptop) ignores wasd / named poses.
 name: ${COMPOSE_PROJECT_NAME:-ros2_teleop_mlink_op}
 
 services:
@@ -21,6 +22,7 @@ services:
       TELEOP_MLINK: "1"
       TELEOP_MLINK_TX: ${TELEOP_MLINK_TX:-127.0.0.1:5501}
       TELEOP_MLINK_RX: ${TELEOP_MLINK_RX:-127.0.0.1:5502}
+      TELEOP_GRIPPER_ONLY: ${TELEOP_GRIPPER_ONLY:-0}
       TELEOP_HTTP_HOST: "127.0.0.1"
       TELEOP_WEB_ROOT: "/teleop/web"
     volumes:

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Orin nvidia-3 only. Operator stays on the PC. Requires mlink-edge already running.
-# Default TELEOP_ARM=gazebo (headless). --real-arm: receiver + Feetech gripper
-# (+ mlink), no Gazebo. Mounts /dev/ttyACM0 only in real mode.
+# Robot host (Orin nvidia-3 default, or SO-ARM laptop with --real-arm).
+# Operator stays on the PC. Requires mlink-edge already running.
+# Default TELEOP_ARM=gazebo (headless, Orin). --real-arm: receiver + Feetech
+# gripper (+ mlink), no Gazebo. Mounts /dev/ttyACM0 only in real mode.
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
