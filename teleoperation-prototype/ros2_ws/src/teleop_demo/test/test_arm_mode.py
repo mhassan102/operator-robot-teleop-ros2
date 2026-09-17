@@ -14,7 +14,9 @@ from teleop_demo.arm_mode import (
     ARM_REAL,
     GAZEBO_MOTION_EXECUTABLES,
     InvalidArmMode,
-    REAL_HARDWARE_PLACEHOLDER_LOG,
+    REAL_ARM_COMPOSE_OVERLAY,
+    REAL_ARM_GRIPPER_LOG,
+    REAL_ARM_SERIAL_PORT,
     parse_teleop_arm,
 )
 
@@ -151,24 +153,25 @@ def test_parse_rejects_unknown_without_fallback() -> None:
         parse_teleop_arm("sim")
 
 
-def test_placeholder_log_is_exact() -> None:
-    assert REAL_HARDWARE_PLACEHOLDER_LOG == (
-        "TELEOP_ARM=real; hardware bridge not started"
+def test_real_arm_log_is_exact() -> None:
+    assert REAL_ARM_GRIPPER_LOG == (
+        "TELEOP_ARM=real; feetech gripper on /dev/ttyACM0"
     )
+    assert REAL_ARM_SERIAL_PORT == "/dev/ttyACM0"
 
 
 def test_start_script_default_is_gazebo() -> None:
     result = _parse_start_script()
     assert result.returncode == 0, result.stderr
     assert "TELEOP_ARM=gazebo" in result.stdout
-    assert REAL_HARDWARE_PLACEHOLDER_LOG not in result.stdout
+    assert REAL_ARM_GRIPPER_LOG not in result.stdout
 
 
 def test_start_script_real_arm_flag() -> None:
     result = _parse_start_script("--real-arm")
     assert result.returncode == 0, result.stderr
     assert "TELEOP_ARM=real" in result.stdout
-    assert REAL_HARDWARE_PLACEHOLDER_LOG in result.stdout
+    assert REAL_ARM_GRIPPER_LOG in result.stdout
 
 
 def test_start_script_env_real_without_flag() -> None:
@@ -189,13 +192,24 @@ def test_start_script_invalid_env_does_not_fallback() -> None:
     assert "refusing to fall back to Gazebo" in result.stderr
 
 
-def test_robot_mlink_compose_passes_arm_without_serial() -> None:
-    text = (_prototype_root() / "compose.robot-mlink.yaml").read_text(encoding="utf-8")
+def test_robot_mlink_compose_gazebo_has_no_serial() -> None:
+    root = _prototype_root()
+    text = (root / "compose.robot-mlink.yaml").read_text(encoding="utf-8")
     assert "TELEOP_ARM: ${TELEOP_ARM:-gazebo}" in text
     assert "/dev/ttyACM0" not in text
     assert "/teleop/state" in text
     assert "/joint_states" in text
     assert "\ndevices:" not in text
+
+
+def test_real_arm_compose_overlay_mounts_serial_only() -> None:
+    root = _prototype_root()
+    overlay = (root / REAL_ARM_COMPOSE_OVERLAY).read_text(encoding="utf-8")
+    assert "/dev/ttyACM0:/dev/ttyACM0" in overlay
+    assert "TELEOP_SERIAL_PORT: /dev/ttyACM0" in overlay
+    start = (root / "scripts" / "start_robot_mlink.sh").read_text(encoding="utf-8")
+    assert REAL_ARM_COMPOSE_OVERLAY in start
+    assert "compose.robot-mlink.yaml" in start
 
 
 def test_localhost_compose_stays_gazebo() -> None:
@@ -205,24 +219,24 @@ def test_localhost_compose_stays_gazebo() -> None:
     assert "ttyACM0" not in text
 
 
-def test_launch_file_has_no_serial_and_has_placeholder() -> None:
+def test_launch_file_wires_feetech_gripper_for_real() -> None:
     launch_text = (
         Path(__file__).resolve().parents[1] / "launch" / "robot_sim.launch.py"
     ).read_text(encoding="utf-8")
-    assert "ttyACM0" not in launch_text
-    assert "feetech" not in launch_text.lower()
-    assert "REAL_HARDWARE_PLACEHOLDER_LOG" in launch_text
+    assert "feetech_gripper" in launch_text
+    assert "REAL_ARM_GRIPPER_LOG" in launch_text
     assert "parse_teleop_arm" in launch_text
+    assert "gripper_id" in launch_text
 
 
-def test_real_launch_graph_is_receiver_only(monkeypatch) -> None:
+def test_real_launch_graph_is_receiver_and_gripper(monkeypatch) -> None:
     module = _load_launch_module()
     monkeypatch.setenv("TELEOP_ARM", "real")
     monkeypatch.delenv("TELEOP_MLINK", raising=False)
     executables, includes, logs = _graph(module.generate_launch_description())
-    assert executables == {"robot_receiver"}
+    assert executables == {"robot_receiver", "feetech_gripper"}
     assert includes == []
-    assert any(REAL_HARDWARE_PLACEHOLDER_LOG in log for log in logs)
+    assert any(REAL_ARM_GRIPPER_LOG in log for log in logs)
     assert executables.isdisjoint(GAZEBO_MOTION_EXECUTABLES)
 
 
@@ -231,7 +245,7 @@ def test_real_launch_graph_with_mlink(monkeypatch) -> None:
     monkeypatch.setenv("TELEOP_ARM", "real")
     monkeypatch.setenv("TELEOP_MLINK", "1")
     executables, includes, _logs = _graph(module.generate_launch_description())
-    assert executables == {"robot_receiver", "robot_mlink_bridge"}
+    assert executables == {"robot_receiver", "feetech_gripper", "robot_mlink_bridge"}
     assert includes == []
     assert executables.isdisjoint(GAZEBO_MOTION_EXECUTABLES)
 
@@ -268,6 +282,7 @@ def test_gazebo_launch_graph_matches_today(monkeypatch) -> None:
     }
     assert expected <= executables
     assert "robot_mlink_bridge" not in executables
+    assert "feetech_gripper" not in executables
     assert any("gazebo.launch.py" in item for item in includes)
 
 
@@ -288,4 +303,5 @@ def test_gazebo_launch_graph_with_mlink(monkeypatch) -> None:
     assert "robot_mlink_bridge" in executables
     assert "servo_node_main" in executables
     assert "named_pose" in executables
+    assert "feetech_gripper" not in executables
     assert any("gazebo.launch.py" in item for item in includes)

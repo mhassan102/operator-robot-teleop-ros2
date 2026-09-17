@@ -1,0 +1,17 @@
+# SO-ARM 101 follower gripper (Feetech STS3215).
+#
+# Verified 2026-09-16 on usama@gt-dev-muhammadusama, /dev/ttyACM0 @ 1 Mbps.
+# LeRobot so_follower calibration
+# (~/.cache/huggingface/lerobot/calibration/robots/so_follower/my_awesome_follower_arm.json):
+#   gripper id 6, range_min 2036, range_max 3466, drive_mode 0.
+# Read-only ping: IDs 1-6 present. ID 6 present_position=2061 (in follower
+# gripper range). IDs 1-5 present positions match so_follower ranges, not
+# so_leader. Follower arm is the one plugged in. Do not change the id.
+/**:
+  ros__parameters:
+    serial_port: /dev/ttyACM0
+    baudrate: 1000000
+    gripper_id: 6
+    range_min: 2036
+    range_max: 3466
+    max_delta_ticks: 48

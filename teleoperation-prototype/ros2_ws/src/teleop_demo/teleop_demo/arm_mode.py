@@ -1,7 +1,7 @@
 """Robot-side arm target: Gazebo sim vs real hardware bring-up.
 
 TELEOP_ARM=gazebo|real (default gazebo). Unknown values must not fall back
-to Gazebo. Stage 1 real mode does not start a hardware driver.
+to Gazebo. Real mode starts robot_receiver plus the Feetech gripper node.
 """
 
 from __future__ import annotations
@@ -10,7 +10,9 @@ ARM_GAZEBO = "gazebo"
 ARM_REAL = "real"
 VALID_ARM_MODES = (ARM_GAZEBO, ARM_REAL)
 DEFAULT_ARM_MODE = ARM_GAZEBO
-REAL_HARDWARE_PLACEHOLDER_LOG = "TELEOP_ARM=real; hardware bridge not started"
+REAL_ARM_SERIAL_PORT = "/dev/ttyACM0"
+REAL_ARM_COMPOSE_OVERLAY = "compose.robot-mlink.real-arm.yaml"
+REAL_ARM_GRIPPER_LOG = "TELEOP_ARM=real; feetech gripper on /dev/ttyACM0"
 
 # Executables that move the sim/arm. Real mode must not start these.
 GAZEBO_MOTION_EXECUTABLES = frozenset(

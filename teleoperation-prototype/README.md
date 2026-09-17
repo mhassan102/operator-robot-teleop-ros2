@@ -112,12 +112,13 @@ Robot container arm mode (`TELEOP_ARM`, default `gazebo`):
 
 ```bash
 ./scripts/start_robot_mlink.sh              # Gazebo + Servo + named poses (today)
-./scripts/start_robot_mlink.sh --real-arm   # robot_receiver (+ mlink); no Gazebo, no serial
+./scripts/start_robot_mlink.sh --real-arm   # robot_receiver + Feetech gripper (+ mlink); no Gazebo
 ```
 
-`--real-arm` / `TELEOP_ARM=real` must not fall back to Gazebo. Stage 1 does
-not start a hardware driver (`TELEOP_ARM=real; hardware bridge not started`).
-Localhost `./scripts/start.sh` is unchanged (Gazebo).
+`--real-arm` / `TELEOP_ARM=real` must not fall back to Gazebo. Real mode
+subscribes to `/gripper_safe` and commands the SO-ARM gripper servo only
+(Feetech STS3215 id 6 on `/dev/ttyACM0`). `/dev/ttyACM0` is mounted only
+when `TELEOP_ARM=real`. Localhost `./scripts/start.sh` is unchanged (Gazebo).
 
 The robot image on Orin is built there (aarch64). Gazebo Classic ROS
 debs are not on arm64; `docker/Dockerfile` uses the Open Robotics

@@ -1,7 +1,9 @@
 # Robot-only Compose for F8 (mlink Stage 5) on Orin nvidia-3.
 # Operator stays on the PC. Host network so the UDP shim talks to
 # mlink-edge on 127.0.0.1. Do not use this file for localhost Zenoh tests.
-# TELEOP_ARM=gazebo|real (default gazebo). Stage 1 real mode does not mount ttyACM0.
+# TELEOP_ARM=gazebo|real (default gazebo). This file must not mount ttyACM0:
+# Gazebo mode must not require the device. Real mode adds
+# compose.robot-mlink.real-arm.yaml via start_robot_mlink.sh --real-arm.
 name: ${COMPOSE_PROJECT_NAME:-ros2_teleop_mlink_robot}
 
 services:

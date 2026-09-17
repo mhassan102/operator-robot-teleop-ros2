@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Orin nvidia-3 only. Operator stays on the PC. Requires mlink-edge already running.
-# Default TELEOP_ARM=gazebo (headless). --real-arm: receiver + mlink, no Gazebo/serial.
+# Default TELEOP_ARM=gazebo (headless). --real-arm: receiver + Feetech gripper
+# (+ mlink), no Gazebo. Mounts /dev/ttyACM0 only in real mode.
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -44,7 +45,7 @@ esac
 
 echo "TELEOP_ARM=${TELEOP_ARM}"
 if [[ "${TELEOP_ARM}" == "real" ]]; then
-  echo "TELEOP_ARM=real; hardware bridge not started"
+  echo "TELEOP_ARM=real; feetech gripper on /dev/ttyACM0"
 fi
 
 if [[ "${TELEOP_ARM_PARSE_ONLY:-}" == "1" ]]; then
@@ -52,6 +53,44 @@ if [[ "${TELEOP_ARM_PARSE_ONLY:-}" == "1" ]]; then
 fi
 
 compose=(docker compose -f compose.robot-mlink.yaml)
+if [[ "${TELEOP_ARM}" == "real" ]]; then
+  compose+=(-f compose.robot-mlink.real-arm.yaml)
+  if [[ ! -e /dev/ttyACM0 ]]; then
+    echo "ERROR: /dev/ttyACM0 missing; refusing to fall back to Gazebo" >&2
+    exit 1
+  fi
+  if python3 -c "
+import glob, os, sys
+port = '/dev/ttyACM0'
+try:
+    target = os.stat(port)
+except OSError:
+    sys.exit(0)
+
+def docker_pid(pid):
+    try:
+        text = open('/proc/%d/cgroup' % pid, encoding='utf-8').read()
+    except OSError:
+        return False
+    return 'docker' in text or 'containerd' in text
+
+for fd in glob.glob('/proc/[0-9]*/fd/*'):
+    try:
+        pid = int(fd.split('/')[2])
+        opened = os.stat(fd)
+    except (OSError, ValueError, IndexError):
+        continue
+    if opened.st_dev == target.st_dev and opened.st_ino == target.st_ino:
+        if not docker_pid(pid):
+            sys.exit(1)
+sys.exit(0)
+"; then
+    :
+  else
+    echo "ERROR: /dev/ttyACM0 is busy (another process owns it, e.g. LeRobot); refusing to fall back to Gazebo" >&2
+    exit 1
+  fi
+fi
 
 if [[ ! -f ros2_ws/install/setup.bash ]] || [[ ! -d ros2_ws/install/teleop_demo_msgs ]]; then
   echo "ROS workspace is not built; performing the workspace build."

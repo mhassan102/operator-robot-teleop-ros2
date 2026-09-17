@@ -22,8 +22,15 @@ from launch_ros.substitutions import FindPackageShare
 from teleop_demo.arm_mode import (
     ARM_REAL,
     InvalidArmMode,
-    REAL_HARDWARE_PLACEHOLDER_LOG,
+    REAL_ARM_GRIPPER_LOG,
+    REAL_ARM_SERIAL_PORT,
     parse_teleop_arm,
+)
+from teleop_demo.gripper_control import (
+    DEFAULT_MAX_DELTA_TICKS,
+    VERIFIED_GRIPPER_ID,
+    VERIFIED_RANGE_MAX,
+    VERIFIED_RANGE_MIN,
 )
 
 
@@ -59,11 +66,33 @@ def _mlink_bridge_node() -> Node:
     )
 
 
+def _gripper_node() -> Node:
+    serial_port = os.environ.get("TELEOP_SERIAL_PORT", REAL_ARM_SERIAL_PORT)
+    return Node(
+        package="teleop_demo",
+        executable="feetech_gripper",
+        output="screen",
+        parameters=[
+            "/teleop/config/teleop.yaml",
+            {
+                "serial_port": serial_port,
+                "baudrate": 1_000_000,
+                "gripper_id": VERIFIED_GRIPPER_ID,
+                "range_min": VERIFIED_RANGE_MIN,
+                "range_max": VERIFIED_RANGE_MAX,
+                "max_delta_ticks": DEFAULT_MAX_DELTA_TICKS,
+            },
+        ],
+    )
+
+
 def _real_arm_launch_actions() -> list:
-    # Stage 1: deadman/safety only. No Gazebo, Servo, named poses, or serial.
+    # Stage 2: receiver + Feetech gripper. No Gazebo, Servo, named poses, or
+    # arm-joint motion. Serial is opened by feetech_gripper only.
     actions = [
-        LogInfo(msg=REAL_HARDWARE_PLACEHOLDER_LOG),
+        LogInfo(msg=REAL_ARM_GRIPPER_LOG),
         _receiver_node(),
+        _gripper_node(),
     ]
     if _teleop_mlink_enabled():
         actions.append(_mlink_bridge_node())
