@@ -110,7 +110,7 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | F15 | Bitrate adaptation | remaining | After media rides mlink or a measured WAN |
 | F16 | Console TLS / auth | remaining | Before anyone who is not us opens the UI |
 | F17 | Multi-camera | remaining | After one camera is in the console |
-| F18 | Real hardware arm | partial | Gripper e2e over Tailscale (Stage 4). Joints 1–5 / URDF / Servo out. |
+| F18 | Real hardware arm | partial | Stages 1–4 **done** (gripper e2e over Tailscale). Joints 1–5 / URDF / Servo / camera-through-mlink **out**. |
 | F19 | Benchmarks | remaining | Local vs WAN; command, watchdog, video |
 | F20 | mlink payload encryption | remaining | v1 is plaintext UDP; later |
 | F21 | CGNAT relay (5G reachability) | remaining | Ops/config when F9 exists; not a new protocol |
@@ -119,11 +119,13 @@ Values: `done`, `remaining`, `partial`, `blocked`, `on hold`, `deferred`.
 | — | VR | deferred | |
 | — | SOC2 / IEC / ISO 10218 cert | deferred | |
 
-**Next to implement:** F8 is done. F7 and F10 stay on hold. F9 blocked
-(no 5G dongle). Do not start F10 unless the user unblocks Safety-A.
-Do not start fleet. Unblocked remaining in session order: F12
-packaging leftovers (F8 already runs robot on Orin / operator on PC),
-then F13 / F14 / F15…
+**Next to implement:** F8 is done. **F18 Stages 1–4 are done** (real
+gripper e2e: operator PC console → mlink Tailscale → Usama laptop
+Feetech id 6). F18 leftover is joints 1–5 / SO-ARM URDF / Servo behind
+`/cmd_vel_safe` (do not start without F10). F7 and F10 stay on hold.
+F9 blocked (no 5G dongle). Do not start F10 unless the user unblocks
+Safety-A. Do not start fleet. Unblocked remaining in session order:
+F12 packaging leftovers, then F13 / F14 / F15…
 
 ---
 
@@ -667,10 +669,13 @@ the WAN. Localhost `compose.yaml` (both containers on one host) is
 only for Zenoh `test_*.sh`.
 
 This is **not** “run rmw_zenoh across the public internet.” F8 is
-the WAN. F12 leftover is packaging/docs if the two Compose files
-should become the default product layout.
+the WAN (Orin eth+wifi). F18 Stages 3–4 also run two-host: operator
+on this PC, robot Compose on Usama’s laptop, mlink on Tailscale
+(`allow_tailscale`). F12 leftover is packaging/docs if the two
+Compose files should become the default product layout.
 
-**Depends on:** F5, F8 (done), and F10 before anyone jogs a real/WAN arm.
+**Depends on:** F5, F8 (done), and F10 before anyone jogs a full
+real/WAN arm. Gripper-only F18 e2e already ran with F10 still on hold.
 
 ---
 
@@ -731,13 +736,40 @@ teleop pair; do not build a matrix product in the first session.
 
 Replace Gazebo + `arm_controller` with the vendor driver **behind**
 the same `/cmd_vel_safe` / named-pose gate. Do not let the vendor
-UI publish around the gateway. Requires F10 at minimum, F11 if WAN.
+UI publish around the gateway. Full-arm jog still wants F10 at
+minimum, F11 if WAN.
 
-Gripper-only path is in (F18 Stages 1–4): `TELEOP_ARM=real`, Feetech
-id 6 / max_delta 48, mlink Tailscale opt-in, console g/h over
-`compose.operator-mlink.yaml`. Camera stays MediaMTX
-`http://100.67.47.79:8889/cam`. Joints 1–5, SO-ARM URDF/Servo, and
-camera-through-mlink are still out.
+**Where we are (2026-09-17):** gripper-only v1 over WAN-style Tailscale
+is in. First end-to-end: web console on this PC (`g`/`h`) → backend
+WebSocket → mlink (one Tailscale path) → robot ROS on Usama’s PC →
+Feetech gripper. Video in the same tab; **not** through mlink.
+Bring-up: [`mlink-transport/docs/f18_end_to_end.md`](mlink-transport/docs/f18_end_to_end.md).
+Branch landed on `main` via `f18-real-arm-so101`.
+
+| Stage | Status | What |
+| ----- | ------ | ---- |
+| 1 | **done** | `TELEOP_ARM=gazebo\|real`. Real: no Gazebo/Servo/named poses, no serial. `./scripts/start_robot_mlink.sh --real-arm` |
+| 2 | **done** | Feetech gripper id 6 on `/gripper_safe`, max_delta 48, deadman torque-off, joints 1–5 never written. `test_real_gripper.sh` |
+| 3 | **done** | `lab-*-remote-laptop.yaml` + `allow_tailscale: true`. Orin YAML still rejects `100.x`. Control-only mlink smoke |
+| 4 | **done** | Console `g`/`h` over mlink. `start_daemon.sh --remote-laptop`, `start_operator_mlink.sh --remote-laptop`, `TELEOP_GRIPPER_ONLY=1` |
+
+Hosts: operator `pure-dev-muhammadhassan` `100.95.150.54`; robot
+`gt-dev-muhammadusama` `100.67.47.79`. Camera
+`http://100.67.47.79:8889/cam`. Tailscale is a **lab opt-in** for this
+pair only; Orin data path stays eth+wifi (F8). Local ROS on each box
+is CycloneDDS localhost; Zenoh is **not** the WAN hop.
+
+**Still out (next F18 work, later session):**
+
+- Joints 1–5, SO-ARM URDF, MoveIt Servo on the real arm
+- Named poses on hardware
+- Camera RTP through mlink
+- F10 Safety-A before treating this as a product WAN/real-arm jog
+- Cloud VPS for the backend; 5G USB as a second mlink path (F9 / F21)
+
+Do not start leftover F18 (full arm) unless the user asks. Soft stop:
+operator `stop_mlink.sh` → laptop `stop_mlink.sh` → Ctrl-C daemons →
+`video/stop.sh`.
 
 ---
 
@@ -800,7 +832,7 @@ Do these in order unless a blocker is lifted out of sequence.
 | 7 | F12 | Robot processes on Orin, backend on PC. |
 | 8 | F11, F14 | WAN safety + video-freshness. |
 | 9 | F13, F15, F16, F17, F19 | Product polish; order can flex. |
-| 10 | F18 | Real arm. |
+| 10 | F18 | Real arm. **Stages 1–4 done** (gripper e2e). Leftover: joints 1–5 / URDF / Servo. |
 | 11 | F20, F21 | Encryption / relay as needed. |
 
 Do not start F10, F7, F9, or a deferred row unless the user unblocks it.
