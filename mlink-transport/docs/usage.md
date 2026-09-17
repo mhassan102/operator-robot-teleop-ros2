@@ -2,7 +2,9 @@
 
 Userspace UDP bonding (LLTP-like). v1 sends a copy of each datagram on
 every live path. The receiver keeps the first good copy and drops the
-rest. No Linux default-route failover, no Tailscale data path.
+rest. No Linux default-route failover. The Orin lab path does not use
+Tailscale as a data path. F18 Stage 3 adds an explicit
+`allow_tailscale: true` session for this PC ↔ the SO-ARM laptop only.
 
 Stage plan (default doc): [`../README.md`](../README.md).
 Product roadmap: [`../../IMPLEMENTATION.md`](../../IMPLEMENTATION.md).
@@ -173,6 +175,60 @@ Leave `ifname` unset (loopback YAML) and the factory is the Stage 2
 plain bind.
 
 Topology: [`stage3_overview.md`](stage3_overview.md).
+
+## F18 Stage 3 — operator PC ↔ SO-ARM laptop (Tailscale opt-in)
+
+One UDP path on `tailscale0` between this PC and the SO-ARM laptop.
+Orin `lab-op.yaml` / `lab-edge.yaml` stay the eth+wifi pair and still
+load without the flag. This pair is **control only** (no media through
+mlink). Camera stays on the laptop MediaMTX URL
+`http://100.67.47.79:8889/cam` (`?cam=` on the console). Do not start
+`start_operator_mlink.sh` / `start_robot_mlink.sh` / `--real-arm` for
+this smoke — those scripts stay the Orin lab path.
+
+Confirm IPs before editing YAML (`tailscale ip -4`):
+
+| Host | Tailscale name | `tailscale0` |
+| --- | --- | --- |
+| Operator PC | `pure-dev-muhammadhassan` | `100.95.150.54` |
+| SO-ARM laptop | `gt-dev-muhammadusama` | `100.67.47.79` |
+
+Existing daemon CLI: `python3 -m op --config …` / `python3 -m edge --config …`.
+
+From the repo root on this PC:
+
+```bash
+rsync -az --exclude '__pycache__' --exclude '.pytest_cache' --exclude '*.pyc' \
+  mlink-transport/ usama@gt-dev-muhammadusama:/home/usama/hassan/mlink-transport/
+```
+
+Keep `TELEOP_ARM` / robot Compose **stopped** on the laptop (Stage 2
+driver is present; mlink + a stray command could move the gripper).
+
+```bash
+# Laptop — mlink-edge (control-only; --reflect for ping/heartbeat smoke)
+ssh usama@gt-dev-muhammadusama
+cd /home/usama/hassan/mlink-transport
+PYTHONPATH=. python3 -m edge --config config/lab-edge-remote-laptop.yaml --reflect
+```
+
+```bash
+# Operator PC — mlink-op
+cd /home/muhammadhassan/robots/mlink-transport
+PYTHONPATH=. python3 -m op --config config/lab-op-remote-laptop.yaml --control 127.0.0.1:5510
+```
+
+Daemon logs `session=1` and a one-second `stats` line (`ts=up` plus
+RTT once heartbeats echo). Optional ping (still no arm motion):
+
+```bash
+cd /home/muhammadhassan/robots/mlink-transport
+PYTHONPATH=. python3 -m ping --count 20 --interval-ms 50
+```
+
+Stop both daemons with Ctrl-C. Do not run `test_real_gripper.sh` in
+this stage. `SO_BINDTODEVICE` on `tailscale0` may need `CAP_NET_ADMIN`
+(same as Stage 3 Ethernet).
 
 ## Stage 5 teleop over mlink (Ethernet + Wi-Fi)
 
@@ -368,6 +424,7 @@ offset  size  field
 
 ```yaml
 session_id: 1
+allow_tailscale: false         # default. true is a session opt-in for 100.x / tailscale0
 listen_app: "127.0.0.1:5501"   # from local apps (control)
 send_app:   "127.0.0.1:5502"   # to local apps (control)
 listen_media: "127.0.0.1:5004" # optional; from local apps (media)
@@ -385,7 +442,10 @@ paths:
 ```
 
 Adding a third path is another YAML entry (no protocol change).
-`tailscale0` and `100.x` addresses are rejected.
+`tailscale0` and `100.x` addresses are rejected unless the session
+sets `allow_tailscale: true` (F18 Stage 3 remote-laptop pair only).
+Orin `lab-op.yaml` / `lab-edge.yaml` omit the flag and still reject
+those. Do not put Tailscale IPs in the Orin files.
 
 Defaults (overridable in YAML): heartbeat 100 ms, down after 300 ms
 silence, probe at 1 Hz while down, exclude a path from **data** when
@@ -394,8 +454,11 @@ inbound heartbeat loss > 20% over the last 20 heartbeats.
 Stage 2 loopback uses `127.0.0.1` and two port-pairs, no `ifname`. App
 ports on op and edge must not collide. Stage 3 lab YAML sets `ifname`
 and real bind/peer IPs (`config/lab-op.yaml`, `config/lab-edge.yaml`).
-Stage 5 adds optional `listen_media` / `send_media`; omitted means
-control-only (loopback / `mlink-ping` unchanged).
+F18 Stage 3 remote-laptop YAML is `config/lab-op-remote-laptop.yaml` /
+`config/lab-edge-remote-laptop.yaml` (`allow_tailscale: true`, one
+`tailscale0` path, control-only). Stage 5 adds optional
+`listen_media` / `send_media`; omitted means control-only (loopback /
+`mlink-ping` / remote-laptop unchanged).
 
 ## Behavior
 

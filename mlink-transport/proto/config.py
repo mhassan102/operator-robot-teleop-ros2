@@ -40,6 +40,8 @@ class MlinkConfig:
     rtt_alpha: float = 0.2
     max_payload: int = 1440
     max_media_queue: int = 64
+    # Session opt-in. Default False: reject tailscale0 / 100.x (Orin lab).
+    allow_tailscale: bool = False
 
 
 def load_config(source: str | Path | Mapping[str, Any]) -> MlinkConfig:
@@ -62,6 +64,11 @@ def _parse(raw: Mapping[str, Any]) -> MlinkConfig:
     if session_id < 0 or session_id > 0xFFFFFFFF:
         raise ConfigError("session_id must fit in u32")
 
+    allow_raw = raw.get("allow_tailscale", False)
+    if not isinstance(allow_raw, bool):
+        raise ConfigError("allow_tailscale must be a boolean")
+    allow_tailscale = allow_raw
+
     paths_raw = raw.get("paths")
     if not isinstance(paths_raw, list) or not paths_raw:
         raise ConfigError("paths must be a non-empty list")
@@ -73,16 +80,28 @@ def _parse(raw: Mapping[str, Any]) -> MlinkConfig:
     for item in paths_raw:
         if not isinstance(item, dict):
             raise ConfigError("each path must be a mapping")
-        path = _parse_path(item)
+        path = _parse_path(item, allow_tailscale=allow_tailscale)
         if path.name in names:
             raise ConfigError(f"duplicate path name {path.name!r}")
         names.add(path.name)
         paths.append(path)
 
-    listen_app = _require_app_addr(raw.get("listen_app", "127.0.0.1:5501"), "listen_app")
-    send_app = _require_app_addr(raw.get("send_app", "127.0.0.1:5502"), "send_app")
-    listen_media = _optional_app_addr(raw.get("listen_media"), "listen_media")
-    send_media = _optional_app_addr(raw.get("send_media"), "send_media")
+    listen_app = _require_app_addr(
+        raw.get("listen_app", "127.0.0.1:5501"),
+        "listen_app",
+        allow_tailscale=allow_tailscale,
+    )
+    send_app = _require_app_addr(
+        raw.get("send_app", "127.0.0.1:5502"),
+        "send_app",
+        allow_tailscale=allow_tailscale,
+    )
+    listen_media = _optional_app_addr(
+        raw.get("listen_media"), "listen_media", allow_tailscale=allow_tailscale
+    )
+    send_media = _optional_app_addr(
+        raw.get("send_media"), "send_media", allow_tailscale=allow_tailscale
+    )
     app_addrs = [a for a in (listen_app, send_app, listen_media, send_media) if a]
     if len(set(app_addrs)) != len(app_addrs):
         raise ConfigError("listen_app/send_app/listen_media/send_media must be unique")
@@ -103,6 +122,7 @@ def _parse(raw: Mapping[str, Any]) -> MlinkConfig:
         rtt_alpha=float(raw.get("rtt_alpha", 0.2)),
         max_payload=int(raw.get("max_payload", 1440)),
         max_media_queue=int(raw.get("max_media_queue", 64)),
+        allow_tailscale=allow_tailscale,
     )
     if cfg.heartbeat_interval_us <= 0 or cfg.down_timeout_us <= 0:
         raise ConfigError("heartbeat_interval_us and down_timeout_us must be > 0")
@@ -115,20 +135,26 @@ def _parse(raw: Mapping[str, Any]) -> MlinkConfig:
     return cfg
 
 
-def _parse_path(item: Mapping[str, Any]) -> PathConfig:
+def _parse_path(item: Mapping[str, Any], *, allow_tailscale: bool) -> PathConfig:
     name = str(item.get("name") or "").strip()
     if not name:
         raise ConfigError("path.name is required")
     ifname = item.get("ifname")
     if ifname is not None:
         ifname = str(ifname).strip() or None
-    if ifname is not None and ifname.lower() == "tailscale0":
+    if (
+        ifname is not None
+        and ifname.lower() == "tailscale0"
+        and not allow_tailscale
+    ):
         raise ConfigError("tailscale0 is SSH/management only; do not bind it")
 
     bind_ip = str(item.get("bind_ip") or "").strip()
     if not bind_ip:
         raise ConfigError(f"path {name!r} missing bind_ip")
-    _reject_tailscale_ip(bind_ip, f"path {name!r} bind_ip")
+    _reject_tailscale_ip(
+        bind_ip, f"path {name!r} bind_ip", allow_tailscale=allow_tailscale
+    )
 
     peer = item.get("peer")
     if not isinstance(peer, str) or ":" not in peer:
@@ -143,7 +169,9 @@ def _parse_path(item: Mapping[str, Any]) -> PathConfig:
         raise ConfigError(f"path {name!r} peer host is empty")
     if peer_port < 1 or peer_port > 65535:
         raise ConfigError(f"path {name!r} peer port out of range")
-    _reject_tailscale_ip(peer_ip, f"path {name!r} peer")
+    _reject_tailscale_ip(
+        peer_ip, f"path {name!r} peer", allow_tailscale=allow_tailscale
+    )
 
     bind_port_raw = item.get("bind_port")
     bind_port = int(bind_port_raw) if bind_port_raw is not None else None
@@ -160,23 +188,23 @@ def _parse_path(item: Mapping[str, Any]) -> PathConfig:
     )
 
 
-def _require_app_addr(value: Any, label: str) -> str:
+def _require_app_addr(value: Any, label: str, *, allow_tailscale: bool) -> str:
     text = str(value or "").strip()
     if not text:
         raise ConfigError(f"{label} is required")
-    return _parse_app_addr(text, label)
+    return _parse_app_addr(text, label, allow_tailscale=allow_tailscale)
 
 
-def _optional_app_addr(value: Any, label: str) -> str:
+def _optional_app_addr(value: Any, label: str, *, allow_tailscale: bool) -> str:
     if value is None:
         return ""
     text = str(value).strip()
     if not text:
         return ""
-    return _parse_app_addr(text, label)
+    return _parse_app_addr(text, label, allow_tailscale=allow_tailscale)
 
 
-def _parse_app_addr(text: str, label: str) -> str:
+def _parse_app_addr(text: str, label: str, *, allow_tailscale: bool) -> str:
     host, sep, port_s = text.rpartition(":")
     if not sep or not host:
         raise ConfigError(f"{label} must be host:port")
@@ -186,11 +214,13 @@ def _parse_app_addr(text: str, label: str) -> str:
         raise ConfigError(f"{label} port is not an integer") from exc
     if port < 1 or port > 65535:
         raise ConfigError(f"{label} port out of range")
-    _reject_tailscale_ip(host, label)
+    _reject_tailscale_ip(host, label, allow_tailscale=allow_tailscale)
     return f"{host}:{port}"
 
 
-def _reject_tailscale_ip(ip: str, label: str) -> None:
-    # Locked decision: never use 100.x peer IPs (Tailscale).
+def _reject_tailscale_ip(ip: str, label: str, *, allow_tailscale: bool) -> None:
+    # Default: never use 100.x (Tailscale). Session opt-in: allow_tailscale.
+    if allow_tailscale:
+        return
     if ip.startswith("100."):
         raise ConfigError(f"{label} {ip} looks like Tailscale; not a bonded path")

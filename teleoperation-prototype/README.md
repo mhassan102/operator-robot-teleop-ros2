@@ -120,6 +120,15 @@ subscribes to `/gripper_safe` and commands the SO-ARM gripper servo only
 (Feetech STS3215 id 6 on `/dev/ttyACM0`). `/dev/ttyACM0` is mounted only
 when `TELEOP_ARM=real`. Localhost `./scripts/start.sh` is unchanged (Gazebo).
 
+F18 Stage 3 (mlink over Tailscale to the SO-ARM laptop) is a separate
+config pair: `mlink-transport/config/lab-op-remote-laptop.yaml` and
+`lab-edge-remote-laptop.yaml`. Start with the existing daemon CLI
+(`python3 -m op --config …` on this PC, `python3 -m edge --config …`
+on the laptop). See
+[`../mlink-transport/docs/usage.md`](../mlink-transport/docs/usage.md)
+(F18 Stage 3). `start_operator_mlink.sh` / `start_robot_mlink.sh`
+stay the Orin lab path. Do not start `--real-arm` for the mlink smoke.
+
 The robot image on Orin is built there (aarch64). Gazebo Classic ROS
 debs are not on arm64; `docker/Dockerfile` uses the Open Robotics
 Gazebo 11 PPA and builds `gazebo_ros` / `gazebo_ros2_control` from

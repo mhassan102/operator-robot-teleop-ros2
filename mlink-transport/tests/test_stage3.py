@@ -45,6 +45,33 @@ def test_lab_yaml_pair_is_complementary() -> None:
     assert edge.listen_media == "127.0.0.1:5004"
     assert op.listen_media == ""
     assert edge.send_media == ""
+    assert op.allow_tailscale is False
+    assert edge.allow_tailscale is False
+
+
+def test_remote_laptop_yaml_pair_is_complementary() -> None:
+    op = load_config(ROOT / "config" / "lab-op-remote-laptop.yaml")
+    edge = load_config(ROOT / "config" / "lab-edge-remote-laptop.yaml")
+    assert op.session_id == edge.session_id == 1
+    assert op.allow_tailscale is True
+    assert edge.allow_tailscale is True
+    assert [p.name for p in op.paths] == ["ts"]
+    assert [p.name for p in edge.paths] == ["ts"]
+    assert len(op.paths) == len(edge.paths) == 1
+    a, b = op.paths[0], edge.paths[0]
+    assert a.ifname == b.ifname == "tailscale0"
+    assert a.bind_ip == b.peer_ip == "100.95.150.54"
+    assert a.peer_ip == b.bind_ip == "100.67.47.79"
+    assert a.bind_port == b.peer_port == 46000
+    assert a.peer_port == b.bind_port == 46000
+    assert {op.listen_app, op.send_app, edge.listen_app, edge.send_app} == {
+        "127.0.0.1:5501",
+        "127.0.0.1:5502",
+        "127.0.0.1:5503",
+        "127.0.0.1:5504",
+    }
+    assert op.listen_media == op.send_media == ""
+    assert edge.listen_media == edge.send_media == ""
 
 
 def test_udp_factory_unknown_ifname_raises() -> None:

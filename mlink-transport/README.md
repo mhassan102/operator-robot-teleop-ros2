@@ -114,8 +114,11 @@ These were decided in the planner session. Treat them as requirements.
    WebRTC/RTP (later) has its own jitter buffer; mlink must not add a
    second one. Control must not sit behind a video burst (separate
    queues or priority).
-6. **Tailscale is SSH/management only.** Never a bonded path. Do not
-   bind `tailscale0`. Do not use `100.x` peer IPs in mlink config.
+6. **Tailscale is SSH/management only by default.** Never a bonded
+   path unless the session sets `allow_tailscale: true`. Do not bind
+   `tailscale0` or use `100.x` peer IPs in Orin `lab-op.yaml` /
+   `lab-edge.yaml`. F18 Stage 3 remote-laptop YAML is the opt-in
+   exception (`lab-op-remote-laptop.yaml` / `lab-edge-remote-laptop.yaml`).
 7. **Stages 0–2 run on the operator PC only** (localhost / fake
    sockets). Orin is not in the data path until Stage 3.
 8. **Language for v1: Python 3** with stdlib + PyYAML, tests via
@@ -296,7 +299,8 @@ Locked in Stage 1 (`mlink-transport/proto/header.py`). Do not change.
 - v1: explicit peer IPs, no discovery.
 - Prefer not to need `CAP_NET_RAW`. Document if `SO_BINDTODEVICE`
   requires `CAP_NET_RAW` / `CAP_NET_ADMIN`.
-- Never bind `tailscale0`. Never use `100.x` peers.
+- Never bind `tailscale0` / never use `100.x` peers unless the
+  session sets `allow_tailscale: true`.
 
 ### 7.0.3 Duplicate / dedupe / deliver
 
@@ -644,7 +648,7 @@ only**. Product roadmap: `IMPLEMENTATION.md` at the repo root
 | `mlink-transport/README.md` | 0 | this file (stage plan) |
 | `mlink-transport/docs/usage.md` | 1+2+3 | tests, loopback demo, two-machine cable-pull |
 | `mlink-transport/proto/header.py` | 1 | 32-byte encode/decode, `Packet` |
-| `mlink-transport/proto/config.py` | 1 | YAML load; rejects `tailscale0` / `100.x` |
+| `mlink-transport/proto/config.py` | 1 | YAML load; rejects `tailscale0` / `100.x` unless `allow_tailscale` |
 | `mlink-transport/proto/clock.py` | 1 | `Clock` / `FakeClock` / `SystemClock` |
 | `mlink-transport/proto/sockets.py` | 1+2+3 | Fake sockets + `UdpSocketFactory`; `SO_BINDTODEVICE` when `ifname` set |
 | `mlink-transport/proto/path.py` | 1 | up/down, loss, RTT, last-heard |
@@ -652,7 +656,7 @@ only**. Product roadmap: `IMPLEMENTATION.md` at the repo root
 | `mlink-transport/proto/scheduler.py` | 1 | all up paths with loss ≤ threshold |
 | `mlink-transport/proto/session.py` | 1 | `MlinkSession`: send copies, poll, tick HB/probe |
 | `mlink-transport/tests/` | 1 | pytest, fake clock + sockets |
-| `mlink-transport/config/` | 1+2+3 | `example.yaml`, loopback pair, `lab-op.yaml`, `lab-edge.yaml` |
+| `mlink-transport/config/` | 1+2+3 | `example.yaml`, loopback pair, Orin `lab-op.yaml` / `lab-edge.yaml`, F18 remote-laptop pair |
 | `mlink-transport/docs/stage1_sequence.md` | 1 | sequence diagrams for the library |
 | `mlink-transport/docs/stage2_overview.md` | 2 | processes, port-pairs, ping round-trip |
 | `mlink-transport/daemon.py` | 2 | op/edge run loop, app face, `down <path>` control |
@@ -664,6 +668,8 @@ only**. Product roadmap: `IMPLEMENTATION.md` at the repo root
 | `mlink-transport/docs/stage3_overview.md` | 3 | two machines, bind-to-device, cable pull |
 | `mlink-transport/config/lab-op.yaml` | 3+5 | operator `wlo1` + `enx00e04c681cc3`; `send_media` |
 | `mlink-transport/config/lab-edge.yaml` | 3+5 | Orin `wlP1p1s0` + `eno1`; `listen_media` |
+| `mlink-transport/config/lab-op-remote-laptop.yaml` | F18.3 | operator Tailscale path; `allow_tailscale`; control-only |
+| `mlink-transport/config/lab-edge-remote-laptop.yaml` | F18.3 | SO-ARM laptop Tailscale path; `allow_tailscale`; control-only |
 | `mlink-transport/docs/latency_comparison.md` | 3 | lab RTT: eth / wifi / Tailscale; WAN estimates |
 | `mlink-transport/docs/stage5_overview.md` | 5 | localhost app faces, control + media |
 | `mlink-transport/tests/test_stage5.py` | 5 | control vs media app-port routing |
