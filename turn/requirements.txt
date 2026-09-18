@@ -1,0 +1,4 @@
+aioice
+pytest
+websockets
+PyYAML

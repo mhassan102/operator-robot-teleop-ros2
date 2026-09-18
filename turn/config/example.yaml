@@ -1,0 +1,13 @@
+# Placeholders only. Copy to config/local.yaml (gitignored).
+# Do not commit TURN passwords or signalling tokens.
+role: controlling  # controlling | controlled
+bind_ip: 192.0.2.10
+ifname: null  # optional; T3 binds SO_BINDTODEVICE when set
+stun_server: 192.0.2.1
+stun_port: 3478
+turn_server: 192.0.2.1
+turn_port: 3478
+turn_user: turnuser
+turn_password: changeme
+signalling_url: ws://192.0.2.1:8765
+room: hello-world

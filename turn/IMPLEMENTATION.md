@@ -59,7 +59,7 @@ then `done`.
 | ID | Milestone | Sheet subtasks | STATUS | commit |
 | -- | --------- | -------------- | ------ | ------ |
 | T0 | This plan | — | done | done |
-| T1 | Skeleton + locked ICE design | 1 | remaining | remaining |
+| T1 | Skeleton + locked ICE design | 1 | done | done |
 | T2 | Signalling (candidate exchange) | 5 | remaining | remaining |
 | T3 | STUN gather (mapped IP:port) | 2, 3 | remaining | remaining |
 | T4 | Punch + auth checks + nominate + echo | 7, 8, 11 | remaining | remaining |
@@ -70,7 +70,7 @@ then `done`.
 | T9 | NAT rebind + re-check | 15, 16 | remaining | remaining |
 | T10 | Path-fail vs loss + recovery | 17, 18 | remaining | remaining |
 
-**Next to implement:** `T1` only.
+**Next to implement:** `T2` only.
 
 **Hello-world (T1–T5):** two NAT’d nodes, one NIC each, STUN,
 signalling, punch **or** TURN, echo `hello`. No mlink, no video, no
@@ -210,7 +210,7 @@ Plan files under `turn/`. `commit: done`.
 
 ---
 
-### T1 — Skeleton + locked ICE design — sheet 1 — STATUS: remaining
+### T1 — Skeleton + locked ICE design — sheet 1 — STATUS: done
 
 **Goal.** Repo layout + a short design note in `turn/README.md` that
 states: ICE/STUN, hole punch, nominate direct UDP, TURN only if punch
@@ -244,6 +244,8 @@ cd turn && python3 -m pytest -q
 README states the NAT-traversal mechanism (sheet 1) in ≤20 lines.
 
 **When done:** `STATUS: done`, `commit: remaining`, list files, stop.
+
+T1 landed: skeleton + README sheet-1 design. `commit: done`.
 
 ---
 
@@ -487,7 +489,7 @@ threshold counter.
 Copy **one** prompt into a new Grok session. Do not give two
 milestones to one session.
 
-### T1 (next)
+### T1
 
 ```text
 Read /home/muhammadhassan/robots/turn/IMPLEMENTATION.md from the start.
@@ -499,7 +501,7 @@ Do not git commit unless I explicitly ask. Never git push.
 When T1 works: set T1 STATUS done, keep commit remaining, list files, print T1 verify commands, stop.
 ```
 
-### T2
+### T2 (next)
 
 ```text
 Read /home/muhammadhassan/robots/turn/IMPLEMENTATION.md from the start.
