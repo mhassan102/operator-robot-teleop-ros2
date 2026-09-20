@@ -66,8 +66,9 @@ python3 -m pytest -q
 Later milestones (stubs until those land):
 
 ```bash
-# T2 signalling (EC2 or localhost)
-python3 -m signalling.server --bind 0.0.0.0 --port 8765   # TBD
+# T2 signalling (EC2 or localhost; from this directory)
+python3 -m signalling.server --bind 0.0.0.0 --port 8765
+# from repo root: python3 -m turn.signalling.server --bind 127.0.0.1 --port 8765
 
 # T3 STUN gather
 python3 -m agent gather --config config/local.yaml        # TBD

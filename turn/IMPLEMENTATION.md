@@ -60,7 +60,7 @@ then `done`.
 | -- | --------- | -------------- | ------ | ------ |
 | T0 | This plan | — | done | done |
 | T1 | Skeleton + locked ICE design | 1 | done | done |
-| T2 | Signalling (candidate exchange) | 5 | remaining | remaining |
+| T2 | Signalling (candidate exchange) | 5 | done | done |
 | T3 | STUN gather (mapped IP:port) | 2, 3 | remaining | remaining |
 | T4 | Punch + auth checks + nominate + echo | 7, 8, 11 | remaining | remaining |
 | T5 | TURN fallback when punch fails | 19 | remaining | remaining |
@@ -70,7 +70,7 @@ then `done`.
 | T9 | NAT rebind + re-check | 15, 16 | remaining | remaining |
 | T10 | Path-fail vs loss + recovery | 17, 18 | remaining | remaining |
 
-**Next to implement:** `T2` only.
+**Next to implement:** `T3` only.
 
 **Hello-world (T1–T5):** two NAT’d nodes, one NIC each, STUN,
 signalling, punch **or** TURN, echo `hello`. No mlink, no video, no
@@ -249,7 +249,7 @@ T1 landed: skeleton + README sheet-1 design. `commit: done`.
 
 ---
 
-### T2 — Signalling — sheet 5 — STATUS: remaining
+### T2 — Signalling — sheet 5 — STATUS: done
 
 **Goal.** Two agents can join a `room` and exchange ICE **username,
 password, and candidate list**. Signalling does not carry `hello`.
@@ -280,6 +280,8 @@ cd turn && python3 -m pytest -q
 ```
 
 **When done:** `STATUS: done`, `commit: remaining`, list files, stop.
+
+T2 landed: WS signalling, two-client ICE blob exchange. `commit: done`.
 
 ---
 
@@ -501,7 +503,7 @@ Do not git commit unless I explicitly ask. Never git push.
 When T1 works: set T1 STATUS done, keep commit remaining, list files, print T1 verify commands, stop.
 ```
 
-### T2 (next)
+### T2
 
 ```text
 Read /home/muhammadhassan/robots/turn/IMPLEMENTATION.md from the start.
@@ -513,7 +515,7 @@ Do not git commit unless I explicitly ask. Never git push.
 When T2 works: set T2 STATUS done, keep commit remaining, list files, print T2 verify commands, stop.
 ```
 
-### T3
+### T3 (next)
 
 ```text
 Read /home/muhammadhassan/robots/turn/IMPLEMENTATION.md from the start.
