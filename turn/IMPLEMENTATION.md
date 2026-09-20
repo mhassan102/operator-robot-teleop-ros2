@@ -61,7 +61,7 @@ then `done`.
 | T0 | This plan | — | done | done |
 | T1 | Skeleton + locked ICE design | 1 | done | done |
 | T2 | Signalling (candidate exchange) | 5 | done | done |
-| T3 | STUN gather (mapped IP:port) | 2, 3 | remaining | remaining |
+| T3 | STUN gather (mapped IP:port) | 2, 3 | done | done |
 | T4 | Punch + auth checks + nominate + echo | 7, 8, 11 | remaining | remaining |
 | T5 | TURN fallback when punch fails | 19 | remaining | remaining |
 | T6 | NAT type + mapping TTL + keepalives | 4, 13, 14 | remaining | remaining |
@@ -70,7 +70,7 @@ then `done`.
 | T9 | NAT rebind + re-check | 15, 16 | remaining | remaining |
 | T10 | Path-fail vs loss + recovery | 17, 18 | remaining | remaining |
 
-**Next to implement:** `T3` only.
+**Next to implement:** `T4` only.
 
 **Hello-world (T1–T5):** two NAT’d nodes, one NIC each, STUN,
 signalling, punch **or** TURN, echo `hello`. No mlink, no video, no
@@ -285,7 +285,7 @@ T2 landed: WS signalling, two-client ICE blob exchange. `commit: done`.
 
 ---
 
-### T3 — STUN gather — sheet 2, 3 — STATUS: remaining
+### T3 — STUN gather — sheet 2, 3 — STATUS: done
 
 **Goal.** On a configured NIC, gather ICE candidates and print the
 **srflx** mapped public IP:port from STUN. One NIC is enough.
@@ -319,6 +319,10 @@ python3 -m turn.agent gather --config config/local.yaml
 ```
 
 **When done:** `STATUS: done`, `commit: remaining`, list files, stop.
+
+T3 landed: aioice STUN gather on one NIC (`bind_ip`); print host/srflx;
+`SO_BINDTODEVICE` after bind when `ifname` is set, else bind_ip only.
+`commit: done`.
 
 ---
 
@@ -515,7 +519,7 @@ Do not git commit unless I explicitly ask. Never git push.
 When T2 works: set T2 STATUS done, keep commit remaining, list files, print T2 verify commands, stop.
 ```
 
-### T3 (next)
+### T3
 
 ```text
 Read /home/muhammadhassan/robots/turn/IMPLEMENTATION.md from the start.
@@ -527,7 +531,7 @@ Do not git commit unless I explicitly ask. Never git push.
 When T3 works: set T3 STATUS done, keep commit remaining, list files, print T3 verify commands, stop.
 ```
 
-### T4
+### T4 (next)
 
 ```text
 Read /home/muhammadhassan/robots/turn/IMPLEMENTATION.md from the start.

@@ -70,8 +70,9 @@ Later milestones (stubs until those land):
 python3 -m signalling.server --bind 0.0.0.0 --port 8765
 # from repo root: python3 -m turn.signalling.server --bind 127.0.0.1 --port 8765
 
-# T3 STUN gather
-python3 -m agent gather --config config/local.yaml        # TBD
+# T3 STUN gather (one NIC = bind_ip). Expect host + srflx public ip:port.
+python3 -m agent gather --config config/local.yaml
+# from repo root: python3 -m turn.agent gather --config turn/config/local.yaml
 
 # T4 punch + echo (TURN disabled)
 python3 -m agent run --config config/local.yaml           # TBD
@@ -79,3 +80,8 @@ python3 -m agent run --config config/local.yaml           # TBD
 # T5 TURN fallback (coturn on EC2; ice_policy: relay)
 python3 -m agent run --config config/local.yaml           # TBD
 ```
+
+aioice has no `ifname` argument. Gather binds `bind_ip` only (one NIC; never
+`tailscale0` / `100.x`). When `ifname` is set, we apply `SO_BINDTODEVICE` on
+the gather sockets after aioice creates them. If that fails (EPERM, missing
+iface), gather still uses `bind_ip` and the CLI prints a warning.
