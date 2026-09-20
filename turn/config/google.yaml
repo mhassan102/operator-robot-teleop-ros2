@@ -1,0 +1,16 @@
+# T3 lab: Google public STUN. No secrets. bind_ip is this PC's wifi (wlo1).
+# Do not use tailscale0 / 100.x.
+#
+#   cd turn && python3 -m agent gather --config config/google.yaml
+#
+role: controlling
+bind_ip: 192.168.1.103
+ifname: null
+stun_server: stun.l.google.com
+stun_port: 19302
+turn_server: 192.0.2.1
+turn_port: 3478
+turn_user: turnuser
+turn_password: changeme
+signalling_url: ws://192.0.2.1:8765
+room: hello-world
