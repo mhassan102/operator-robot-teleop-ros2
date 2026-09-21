@@ -74,8 +74,12 @@ python3 -m signalling.server --bind 0.0.0.0 --port 8765
 python3 -m agent gather --config config/local.yaml
 # from repo root: python3 -m turn.agent gather --config turn/config/local.yaml
 
-# T4 punch + echo (TURN disabled)
-python3 -m agent run --config config/local.yaml           # TBD
+# T4 punch + echo (TURN disabled). Signalling first, then both nodes:
+python3 -m signalling.server --bind 0.0.0.0 --port 8765
+# each node: role controlling vs controlled, bind_ip = that NIC, TURN unused
+python3 -m agent run --config config/local.yaml
+# expect path=direct and hello-ack (host or srflx). Ctrl-C to stop.
+# from repo root: python3 -m turn.agent run --config turn/config/local.yaml
 
 # T5 TURN fallback (coturn on EC2; ice_policy: relay)
 python3 -m agent run --config config/local.yaml           # TBD

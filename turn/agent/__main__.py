@@ -1,4 +1,8 @@
-"""ICE agent CLI. T3: `python3 -m agent gather --config config/local.yaml`."""
+"""ICE agent CLI.
+
+T3: `python3 -m agent gather --config config/local.yaml`
+T4: `python3 -m agent run --config config/local.yaml`
+"""
 
 from __future__ import annotations
 
@@ -8,18 +12,10 @@ import sys
 from pathlib import Path
 
 from .ice import format_candidate, gather, load_config
+from .session import run_session
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="ICE agent")
-    sub = parser.add_subparsers(dest="cmd", required=True)
-    g = sub.add_parser("gather", help="STUN gather on the configured NIC")
-    g.add_argument("--config", required=True, help="path to YAML (e.g. config/local.yaml)")
-    args = parser.parse_args(argv)
-    if args.cmd != "gather":
-        parser.error("T3 CLI is gather only")
-
-    cfg = load_config(Path(args.config))
+def _cmd_gather(cfg: dict) -> int:
     cands, note = asyncio.run(gather(cfg))
     ifname = cfg.get("ifname") or "-"
     stun = cfg.get("stun_server") or "-"
@@ -39,6 +35,29 @@ def main(argv: list[str] | None = None) -> int:
         print("no srflx (STUN timeout or unreachable)", file=sys.stderr)
         return 1
     return 0
+
+
+def _cmd_run(cfg: dict) -> int:
+    result = asyncio.run(run_session(cfg, hold=True))
+    return 0 if result.get("ok") else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="ICE agent")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    g = sub.add_parser("gather", help="STUN gather on the configured NIC")
+    g.add_argument("--config", required=True, help="path to YAML (e.g. config/local.yaml)")
+    r = sub.add_parser("run", help="gather, signal, punch, nominate, echo hello")
+    r.add_argument("--config", required=True, help="path to YAML (e.g. config/local.yaml)")
+    args = parser.parse_args(argv)
+
+    cfg = load_config(Path(args.config))
+    if args.cmd == "gather":
+        return _cmd_gather(cfg)
+    if args.cmd == "run":
+        return _cmd_run(cfg)
+    parser.error(f"unknown command {args.cmd}")
+    return 2
 
 
 if __name__ == "__main__":

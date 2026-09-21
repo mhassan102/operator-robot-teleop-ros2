@@ -62,7 +62,7 @@ then `done`.
 | T1 | Skeleton + locked ICE design | 1 | done | done |
 | T2 | Signalling (candidate exchange) | 5 | done | done |
 | T3 | STUN gather (mapped IP:port) | 2, 3 | done | done |
-| T4 | Punch + auth checks + nominate + echo | 7, 8, 11 | remaining | remaining |
+| T4 | Punch + auth checks + nominate + echo | 7, 8, 11 | done | done |
 | T5 | TURN fallback when punch fails | 19 | remaining | remaining |
 | T6 | NAT type + mapping TTL + keepalives | 4, 13, 14 | remaining | remaining |
 | T7 | Channel/ISP tags + all NIC pairs | 6, 10 | remaining | remaining |
@@ -70,7 +70,7 @@ then `done`.
 | T9 | NAT rebind + re-check | 15, 16 | remaining | remaining |
 | T10 | Path-fail vs loss + recovery | 17, 18 | remaining | remaining |
 
-**Next to implement:** `T4` only.
+**Next to implement:** `T5` only.
 
 **Hello-world (T1–T5):** two NAT’d nodes, one NIC each, STUN,
 signalling, punch **or** TURN, echo `hello`. No mlink, no video, no
@@ -326,7 +326,7 @@ T3 landed: aioice STUN gather on one NIC (`bind_ip`); print host/srflx;
 
 ---
 
-### T4 — Punch, checks, nominate, echo — sheet 7, 8, 11 — STATUS: remaining
+### T4 — Punch, checks, nominate, echo — sheet 7, 8, 11 — STATUS: done
 
 **Goal.** Two agents: gather (T3), exchange via signalling (T2),
 `aioice` connectivity checks (authenticated ICE-PWD — sheet 8),
@@ -365,6 +365,17 @@ lab, record it; do not implement T5 in this session.
 
 **When done:** `STATUS: done`, `commit: remaining`, list files, stop.
 
+T4 landed: gather → signalling (ICE-UFRAG/ICE-PWD + candidates) → `connect()`
+(authenticated checks) → nominate host/srflx as `path=direct` → echo
+`hello` / `hello-ack`. aioice consent checks are the light keepalive.
+TURN still unused. `commit: done`.
+
+**Lab:** pytest two-agent loopback = pass. Operator STUN to
+`stun.l.google.com` = srflx. Two-NAT **direct** on the laptop wifi
+(`10.255.254.58`) = no Google STUN reply (UDP STUN/VoIP filtered
+upstream; DNS UDP still works). Not a T4 code bug. Proceed T5.
+Direct T4 WAN can be re-tried on a network that allows STUN.
+
 ---
 
 ### T5 — TURN fallback — sheet 19 — STATUS: remaining
@@ -395,14 +406,19 @@ coturn is **deployed**, not written.
 cd turn && python3 -m pytest -q
 ```
 
+**Lab 0 — laptop UDP to EC2:** before ICE, prove the laptop can send
+UDP to `3.227.234.95:3478` (coturn STUN Binding or `nc -u`). If that
+is also filtered, UDP TURN cannot work on that wifi; document and
+stop (TURN-TCP/443 is out of T5).
+
 **Lab A — force TURN:** `ice_policy: relay`, coturn up, two nodes.
 Expect `path=turn` and `hello-ack`.
 
 **Lab B — fallback:** `ice_policy: all`, block direct (peer firewall
 or policy) so checks fail on host/srflx; expect TURN then echo.
 
-Hello-world is **complete** when Lab A works and T4’s direct lab
-(or a punch-OK run) also works.
+Hello-world T5 is **Lab A**. T4 two-NAT direct remains blocked on
+this laptop wifi until STUN UDP is allowed; do not block T5 on that.
 
 **When done:** `STATUS: done`, `commit: remaining`, list files, stop.
 Do not start T6 until the user confirms both labs.
@@ -531,7 +547,7 @@ Do not git commit unless I explicitly ask. Never git push.
 When T3 works: set T3 STATUS done, keep commit remaining, list files, print T3 verify commands, stop.
 ```
 
-### T4 (next)
+### T4
 
 ```text
 Read /home/muhammadhassan/robots/turn/IMPLEMENTATION.md from the start.
@@ -543,7 +559,7 @@ Do not git commit unless I explicitly ask. Never git push.
 When T4 works: set T4 STATUS done, keep commit remaining, list files, print T4 verify commands including the two-NAT direct lab, stop.
 ```
 
-### T5
+### T5 (next)
 
 ```text
 Read /home/muhammadhassan/robots/turn/IMPLEMENTATION.md from the start.

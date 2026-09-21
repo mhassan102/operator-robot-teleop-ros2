@@ -1,4 +1,4 @@
-"""STUN gather on one NIC via aioice. No ICE connect, no TURN Allocate."""
+"""ICE agent: STUN gather (T3) and direct punch / echo (T4). No TURN Allocate."""
 
 from __future__ import annotations
 
@@ -10,7 +10,11 @@ import ipaddress
 import socket
 
 import yaml
-from aioice import Connection
+from aioice import Candidate, Connection
+
+HELLO = b"hello"
+HELLO_ACK = b"hello-ack"
+DIRECT_TYPES = frozenset({"host", "srflx", "prflx"})
 
 # Tailscale is SSH/mgmt only (locked decision 5).
 _TAILSCALE_IFNAME = "tailscale0"
@@ -53,6 +57,52 @@ def format_candidate(c: dict[str, Any]) -> str:
     if related is not None:
         line += f" related {related['ip']}:{related['port']}"
     return line
+
+
+def dict_to_candidate(c: dict[str, Any]) -> Candidate:
+    """Rebuild an aioice Candidate from a signalling / print dict."""
+    related = c.get("related") or {}
+    related_ip = related.get("ip")
+    related_port = related.get("port")
+    return Candidate(
+        foundation=str(c["foundation"]),
+        component=int(c["component"]),
+        transport="udp",
+        priority=int(c["priority"]),
+        host=str(c["ip"]),
+        port=int(c["port"]),
+        type=str(c["type"]),
+        related_address=str(related_ip) if related_ip is not None else None,
+        related_port=int(related_port) if related_port is not None else None,
+    )
+
+
+def nominated_path(connection: Connection) -> dict[str, Any]:
+    """Classify the nominated pair. aioice has no public nominated-pair API."""
+    pair = getattr(connection, "_nominated", {}).get(1)
+    if pair is None:
+        return {"kind": "none"}
+    local = pair.local_candidate
+    remote = pair.remote_candidate
+    types = {local.type, remote.type}
+    kind = "direct" if types <= DIRECT_TYPES else "turn"
+    return {
+        "kind": kind,
+        "local_type": local.type,
+        "remote_type": remote.type,
+        "local": f"{local.host}:{local.port}",
+        "remote": f"{remote.host}:{remote.port}",
+    }
+
+
+def format_path(info: dict[str, Any]) -> str:
+    if info.get("kind") in (None, "none"):
+        return "path=none"
+    return (
+        f"path={info['kind']} "
+        f"local={info['local_type']}:{info['local']} "
+        f"remote={info['remote_type']}:{info['remote']}"
+    )
 
 
 def _is_100_x(value: str) -> bool:
@@ -161,7 +211,7 @@ def _apply_bindtodevice(connection: Connection, ifname: str | None) -> str | Non
 
 
 class IceAgent:
-    """Same code on operator and robot. T3: gather only."""
+    """Same code on operator and robot. Gather (T3) then punch/echo (T4). No TURN."""
 
     def __init__(self, cfg: dict[str, Any]) -> None:
         self.cfg = cfg
@@ -174,7 +224,7 @@ class IceAgent:
         )
 
     def build_connection(self) -> Connection:
-        # T3: STUN only. Do not pass turn_server (no Allocate).
+        # T3/T4: STUN only. Do not pass turn_server (no Allocate; T5).
         return Connection(
             ice_controlling=self.cfg["role"] == "controlling",
             stun_server=_stun_server(self.cfg),
@@ -200,6 +250,44 @@ class IceAgent:
         conn.get_component_candidates = _one_nic  # type: ignore[method-assign]
         await conn.gather_candidates()
         return [candidate_to_dict(c) for c in conn.local_candidates]
+
+    async def set_remote(self, blob: dict[str, Any]) -> None:
+        """Install peer ICE-UFRAG / ICE-PWD and candidates (authenticated checks)."""
+        conn = self.connection
+        if conn is None:
+            raise RuntimeError("gather first")
+        username = blob.get("username")
+        password = blob.get("password")
+        if not isinstance(username, str) or not username:
+            raise ValueError("peer blob missing username")
+        if not isinstance(password, str) or not password:
+            raise ValueError("peer blob missing password")
+        conn.remote_username = username
+        conn.remote_password = password
+        for raw in blob.get("candidates") or []:
+            await conn.add_remote_candidate(dict_to_candidate(raw))
+        await conn.add_remote_candidate(None)
+
+    async def connect(self) -> None:
+        """ICE connectivity checks + nominate. Consent keepalive starts in aioice."""
+        if self.connection is None:
+            raise RuntimeError("gather first")
+        await self.connection.connect()
+
+    def path(self) -> dict[str, Any]:
+        if self.connection is None:
+            return {"kind": "none"}
+        return nominated_path(self.connection)
+
+    async def send(self, data: bytes) -> None:
+        if self.connection is None:
+            raise RuntimeError("not connected")
+        await self.connection.send(data)
+
+    async def recv(self) -> bytes:
+        if self.connection is None:
+            raise RuntimeError("not connected")
+        return await self.connection.recv()
 
     async def close(self) -> None:
         if self.connection is not None:
