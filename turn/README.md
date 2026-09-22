@@ -50,6 +50,10 @@ After nominate: echo b"hello" / b"hello-ack"
 
 Two NAT’d nodes, one NIC each. No mlink, no video, no gripper.
 
+Lab steps (run yourself): [`docs/t3_test_steps.md`](docs/t3_test_steps.md),
+[`docs/t4_test_steps.md`](docs/t4_test_steps.md),
+[`docs/t5_test_steps.md`](docs/t5_test_steps.md).
+
 ## How to run (T1–T5)
 
 Copy `config/example.yaml` to `config/local.yaml` (gitignored). Fill
@@ -81,8 +85,14 @@ python3 -m agent run --config config/local.yaml
 # expect path=direct and hello-ack (host or srflx). Ctrl-C to stop.
 # from repo root: python3 -m turn.agent run --config turn/config/local.yaml
 
-# T5 TURN fallback (coturn on EC2; ice_policy: relay)
-python3 -m agent run --config config/local.yaml           # TBD
+# T5 TURN fallback. Deploy coturn first (scripts/coturn.md). UDP only.
+# Lab 0 — STUN Binding reply from the EC2 coturn (laptop and operator):
+python3 scripts/stun_probe.py 3.227.234.95 3478
+# Lab A — force relay. ice_policy: relay in config/local.yaml on both nodes.
+python3 -m agent run --config config/local.yaml
+# expect path=turn and hello-ack. Ctrl-C to stop.
+# Lab B — fallback. ice_policy: all, and drop direct host/srflx (firewall).
+# expect path=turn and hello-ack. If direct answers first, path=direct.
 ```
 
 aioice has no `ifname` argument. Gather binds `bind_ip` only (one NIC; never

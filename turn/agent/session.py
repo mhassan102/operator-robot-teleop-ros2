@@ -1,4 +1,7 @@
-"""T4 run: gather → signalling exchange → ICE connect → hello / hello-ack."""
+"""Run: gather → signalling exchange → ICE connect → hello / hello-ack.
+
+T4 nominates a direct pair. T5 passes coturn into aioice when turn_* is set.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,15 @@ import asyncio
 import sys
 from typing import Any
 
-from .ice import HELLO, HELLO_ACK, IceAgent, format_candidate, format_path
+from .ice import (
+    HELLO,
+    HELLO_ACK,
+    IceAgent,
+    format_candidate,
+    format_path,
+    ice_policy,
+    turn_params,
+)
 from .signalling_client import SignallingClient, SignallingError
 
 PEER_TIMEOUT = 60.0
@@ -27,10 +38,12 @@ def _require_signalling(cfg: dict[str, Any]) -> tuple[str, str]:
 def _print_gather(cfg: dict[str, Any], cands: list[dict[str, Any]], note: str | None) -> None:
     ifname = cfg.get("ifname") or "-"
     stun = cfg.get("stun_server") or "-"
+    turn_host = cfg.get("turn_server") or "-"
     print(
         f"bind_ip={cfg['bind_ip']} ifname={ifname} role={cfg['role']} "
         f"room={cfg.get('room', '-')} signalling={cfg.get('signalling_url', '-')} "
-        f"stun={stun}:{cfg.get('stun_port', '-')}",
+        f"stun={stun}:{cfg.get('stun_port', '-')} "
+        f"ice_policy={ice_policy(cfg)} turn={turn_host}:{cfg.get('turn_port', '-')}",
         flush=True,
     )
     if note:
@@ -57,10 +70,18 @@ async def _echo(agent: IceAgent, role: str) -> bytes:
     return HELLO_ACK
 
 
-async def run_session(cfg: dict[str, Any], *, hold: bool = False) -> dict[str, Any]:
-    """Gather, exchange ICE-PWD + candidates, punch, nominate, echo.
+def _connect_fail_line(cfg: dict[str, Any], why: str) -> str:
+    if ice_policy(cfg) == "relay" or turn_params(cfg) is not None:
+        return f"ICE negotiation failed ({why}); no TURN pair nominated."
+    return f"ICE negotiation failed ({why}); direct punch did not nominate."
 
-    TURN is not used (T5). aioice consent checks are the light keepalive.
+
+async def run_session(cfg: dict[str, Any], *, hold: bool = False) -> dict[str, Any]:
+    """Gather, exchange ICE-PWD + candidates, connect, nominate, echo.
+
+    ``ice_policy: relay`` nominates a coturn relay pair. ``all`` passes
+    turn_* into aioice and keeps host/srflx, so a direct pair can still win.
+    aioice consent checks are the light keepalive.
     """
     url, room = _require_signalling(cfg)
     role = cfg["role"]
@@ -82,21 +103,11 @@ async def run_session(cfg: dict[str, Any], *, hold: bool = False) -> dict[str, A
         try:
             await asyncio.wait_for(agent.connect(), CONNECT_TIMEOUT)
         except ConnectionError as exc:
-            print(
-                f"ICE negotiation failed ({exc}); direct punch did not nominate. "
-                "T5 TURN is not this milestone.",
-                file=sys.stderr,
-                flush=True,
-            )
+            print(_connect_fail_line(cfg, str(exc)), file=sys.stderr, flush=True)
             result["path"] = "failed"
             return result
         except asyncio.TimeoutError:
-            print(
-                "ICE connect timed out; direct punch did not nominate. "
-                "T5 TURN is not this milestone.",
-                file=sys.stderr,
-                flush=True,
-            )
+            print(_connect_fail_line(cfg, "timed out"), file=sys.stderr, flush=True)
             result["path"] = "failed"
             return result
         info = agent.path()

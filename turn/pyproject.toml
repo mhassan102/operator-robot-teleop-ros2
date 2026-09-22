@@ -2,4 +2,5 @@
 testpaths = ["tests"]
 markers = [
     "network: live STUN (skipped without network / srflx)",
+    "turn: live TURN allocate (skipped unless TURN_SERVER is set)",
 ]

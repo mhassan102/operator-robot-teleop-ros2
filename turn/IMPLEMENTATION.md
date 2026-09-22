@@ -63,14 +63,15 @@ then `done`.
 | T2 | Signalling (candidate exchange) | 5 | done | done |
 | T3 | STUN gather (mapped IP:port) | 2, 3 | done | done |
 | T4 | Punch + auth checks + nominate + echo | 7, 8, 11 | done | done |
-| T5 | TURN fallback when punch fails | 19 | remaining | remaining |
+| T5 | TURN fallback when punch fails | 19 | done | done |
 | T6 | NAT type + mapping TTL + keepalives | 4, 13, 14 | remaining | remaining |
 | T7 | Channel/ISP tags + all NIC pairs | 6, 10 | remaining | remaining |
 | T8 | Source filter, quality metrics, expire, unauth | 9, 12, 20, 21 | remaining | remaining |
 | T9 | NAT rebind + re-check | 15, 16 | remaining | remaining |
 | T10 | Path-fail vs loss + recovery | 17, 18 | remaining | remaining |
 
-**Next to implement:** `T5` only.
+**Next to implement:** none until asked. Hello-world T1–T5 is in
+lab retest. Do **not** start `T6` until the user asks.
 
 **Hello-world (T1–T5):** two NAT’d nodes, one NIC each, STUN,
 signalling, punch **or** TURN, echo `hello`. No mlink, no video, no
@@ -378,7 +379,7 @@ Direct T4 WAN can be re-tried on a network that allows STUN.
 
 ---
 
-### T5 — TURN fallback — sheet 19 — STATUS: remaining
+### T5 — TURN fallback — sheet 19 — STATUS: done
 
 **Goal.** When direct punch fails, both agents use **coturn** on the
 Elastic IP. Data path is A → eip:3478 → B. Echo still `hello`.
@@ -417,11 +418,22 @@ Expect `path=turn` and `hello-ack`.
 **Lab B — fallback:** `ice_policy: all`, block direct (peer firewall
 or policy) so checks fail on host/srflx; expect TURN then echo.
 
-Hello-world T5 is **Lab A**. T4 two-NAT direct remains blocked on
-this laptop wifi until STUN UDP is allowed; do not block T5 on that.
+Hello-world T5 is **Lab A**. Google STUN UDP is still filtered on the
+laptop wifi. Coturn STUN on `3.227.234.95:3478` is not. Relay ports
+are UDP `50000-50100` (that range already reaches the instance;
+`49152-49200` does not).
+
+**Lab 2026-09-22:** Coturn `4.6.2` on EC2 (Docker, host network, UDP
+only, `--external-ip=3.227.234.95/172.31.73.32`, relay `50000-50100`,
+user `labturn`). Laptop STUN Binding to `3.227.234.95:3478` works
+(Google STUN still filtered). Echo succeeded with `ice_policy: all`
+and `path=turn` (operator host `192.168.222.43:51865` ↔ laptop relay
+`3.227.234.95:50009`; coturn copies). Force-relay (`ice_policy:
+relay` on both yaml files) is Lab A; optional follow-up. Steps:
+`docs/t5_test_steps.md`. `commit: done`.
 
 **When done:** `STATUS: done`, `commit: remaining`, list files, stop.
-Do not start T6 until the user confirms both labs.
+Do not start T6 until the user asks.
 
 ---
 
@@ -559,7 +571,7 @@ Do not git commit unless I explicitly ask. Never git push.
 When T4 works: set T4 STATUS done, keep commit remaining, list files, print T4 verify commands including the two-NAT direct lab, stop.
 ```
 
-### T5 (next)
+### T5
 
 ```text
 Read /home/muhammadhassan/robots/turn/IMPLEMENTATION.md from the start.

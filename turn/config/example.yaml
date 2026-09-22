@@ -9,5 +9,7 @@ turn_server: 192.0.2.1
 turn_port: 3478
 turn_user: turnuser
 turn_password: changeme
+# all: direct pair if it answers, else TURN. relay: only TURN (Lab A).
+ice_policy: all
 signalling_url: ws://192.0.2.1:8765
 room: hello-world

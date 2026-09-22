@@ -1,0 +1,27 @@
+# Coturn on EC2. UDP only. Host network so relay ports are not docker-NAT'd.
+# Secrets: copy coturn.env.example to coturn.env, then:
+#   docker compose --env-file coturn.env -f docker-compose.yml up -d
+# Amazon Linux may not have the compose plugin; scripts/run-coturn.sh uses docker run.
+
+services:
+  coturn:
+    image: coturn/coturn:4.6.2
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--listening-port=3478"
+      - "--fingerprint"
+      - "--lt-cred-mech"
+      - "--realm=${TURN_REALM:-teleop.lab}"
+      - "--user=${TURN_USER:?set TURN_USER}:${TURN_PASSWORD:?set TURN_PASSWORD}"
+      - "--external-ip=${TURN_PUBLIC_IP:?set TURN_PUBLIC_IP}/${TURN_PRIVATE_IP:?set TURN_PRIVATE_IP}"
+      - "--relay-ip=${TURN_PRIVATE_IP:?set TURN_PRIVATE_IP}"
+      - "--min-port=${TURN_MIN_PORT:-50000}"
+      - "--max-port=${TURN_MAX_PORT:-50100}"
+      - "--no-multicast-peers"
+      - "--no-cli"
+      - "--no-tcp"
+      - "--no-tls"
+      - "--no-dtls"

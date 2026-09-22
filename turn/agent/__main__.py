@@ -1,7 +1,7 @@
 """ICE agent CLI.
 
 T3: `python3 -m agent gather --config config/local.yaml`
-T4: `python3 -m agent run --config config/local.yaml`
+T4/T5: `python3 -m agent run --config config/local.yaml`
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from .ice import format_candidate, gather, load_config
+from .ice import format_candidate, gather, ice_policy, load_config, turn_params
 from .session import run_session
 
 
@@ -28,12 +28,27 @@ def _cmd_gather(cfg: dict) -> int:
     for c in cands:
         print(format_candidate(c))
     srflx = [c for c in cands if c.get("type") == "srflx"]
+    relay = [c for c in cands if c.get("type") == "relay"]
     if not cands:
         print("no candidates", file=sys.stderr)
         return 1
+    policy = ice_policy(cfg)
+    if policy == "relay":
+        if not relay:
+            print(
+                "no relay candidate (TURN allocate failed or timed out)",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
     if not srflx:
         print("no srflx (STUN timeout or unreachable)", file=sys.stderr)
         return 1
+    if turn_params(cfg) is not None and not relay:
+        print(
+            "warning: no relay candidate (TURN allocate failed or timed out)",
+            file=sys.stderr,
+        )
     return 0
 
 

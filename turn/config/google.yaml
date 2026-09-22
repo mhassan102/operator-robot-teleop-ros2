@@ -8,9 +8,11 @@ bind_ip: 192.168.1.103
 ifname: null
 stun_server: stun.l.google.com
 stun_port: 19302
-turn_server: 192.0.2.1
+# TURN off. Placeholder 192.0.2.1 would make gather wait on Allocate.
+turn_server: null
 turn_port: 3478
-turn_user: turnuser
-turn_password: changeme
+turn_user: null
+turn_password: null
+ice_policy: all
 signalling_url: ws://192.0.2.1:8765
 room: hello-world

@@ -14,6 +14,7 @@ REQUIRED_KEYS = (
     "turn_port",
     "turn_user",
     "turn_password",
+    "ice_policy",
     "signalling_url",
     "room",
 )
