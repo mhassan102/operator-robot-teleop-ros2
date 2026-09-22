@@ -4,7 +4,7 @@
 #   cd turn && python3 -m agent gather --config config/google.yaml
 #
 role: controlling
-bind_ip: 192.168.1.103
+bind_ip: 192.168.222.43
 ifname: null
 stun_server: stun.l.google.com
 stun_port: 19302
