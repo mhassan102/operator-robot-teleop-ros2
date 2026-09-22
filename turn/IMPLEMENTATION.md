@@ -1,9 +1,11 @@
 # ICE / STUN / TURN — implementation plan
 
-Read this file first in a new session. This directory is **independent
-of mlink and teleop** until a later product decision wires nominated
-paths into `mlink-transport/`. Do not edit `mlink-transport/`,
-`teleoperation-prototype/`, or `video/` from these milestones.
+Read this file first in a new session. `T1`–`T10` stay inside
+`turn/` and do not edit mlink, teleop, or video. `T11` is the
+product step that wires the nominated socket into mlink for one
+ISP (control, then video). A `T1`–`T10` session must not start
+`T11`. Do not renumber `T6`–`T10`; `T11` stays after them even
+though it is implemented first.
 
 This session (the planner) writes this file only. **Do not write ICE /
 signalling / coturn code until a later session is given a resume
@@ -32,7 +34,7 @@ finishes a milestone (and the user has verified the test steps):
 **Implementation session:**
 
 - Read this file from the start, then only files under `turn/`.
-- Implement **exactly one** milestone (`T1` … `T10`). Stop even if
+- Implement **exactly one** milestone (`T1` … `T11`). Stop even if
   the next one looks small.
 - Do not re-open locked decisions.
 - Do not start a `blocked` or `on hold` row.
@@ -40,11 +42,13 @@ finishes a milestone (and the user has verified the test steps):
 - After the milestone works: set that row `STATUS: done`, keep
   `commit: remaining`, list files changed, **print the test steps for
   that milestone**, stop.
-- Do not touch mlink, ROS, the console, or the gripper.
+- `T1`–`T10`: do not touch mlink, ROS, the console, or the gripper.
+  `T11` is the only milestone that edits mlink and the video path.
 
 **Hello-world first.** `T1`–`T5` are the 5-day slice (sheet subtasks
-1–3, 5, 7–8, 11, 19). Do not start `T6` until `T5` is `STATUS: done`
-and hello-world has been verified on two NAT’d nodes + EC2.
+1–3, 5, 7–8, 11, 19). They are done. Do not start `T6` until the
+user asks. Implement `T11` before `T6` when the user asks; leave
+the `T6`–`T10` rows where they are.
 
 ---
 
@@ -69,9 +73,11 @@ then `done`.
 | T8 | Source filter, quality metrics, expire, unauth | 9, 12, 20, 21 | remaining | remaining |
 | T9 | NAT rebind + re-check | 15, 16 | remaining | remaining |
 | T10 | Path-fail vs loss + recovery | 17, 18 | remaining | remaining |
+| T11 | mlink + ICE, one ISP (control, then video) |  | remaining | remaining |
 
-**Next to implement:** none until asked. Hello-world T1–T5 is in
-lab retest. Do **not** start `T6` until the user asks.
+**Next to implement:** `T11` when the user asks, before `T6`.
+Hello-world `T1`–`T5` is done. Do **not** start `T6` or `T11` until
+the user asks. Do not renumber `T6`–`T10`.
 
 **Hello-world (T1–T5):** two NAT’d nodes, one NIC each, STUN,
 signalling, punch **or** TURN, echo `hello`. No mlink, no video, no
@@ -121,9 +127,11 @@ gripper, no all-NIC matrix, no rebind/recovery.
    Allocate). Hello payload is plaintext `hello` / `hello-ack`.
    Payload encryption is **not** this plan (product F20 / later).
    ICE-PWD on connectivity checks (subtask 8) is **not** F20.
-4. **No mlink in T1–T10.** Agents send application bytes on the ICE
-   socket after `connect()`. Do not change `mlink-transport/` YAML
-   or daemons. A later plan may pass a nominated 5-tuple into mlink.
+4. **No mlink in T1–T10.** Those agents send `hello` on the ICE
+   socket after `connect()`. Do not change `mlink-transport/` from
+   a `T1`–`T10` session. `T11` is the integration: mlink sends and
+   receives application bytes on the socket the ICE agent already
+   nominated. Do not start `T11` inside a `T1`–`T10` session.
 5. **Tailscale is SSH/mgmt only.** Do not gather ICE candidates on
    `tailscale0`. Do not use `100.x` as STUN/TURN/peer.
 6. **Hello-world is one NIC per node.** `T7` adds eth/wifi/cell
@@ -145,6 +153,12 @@ gripper, no all-NIC matrix, no rebind/recovery.
 11. **Tests:** pytest for protocol/unit (no live NAT required). Lab
     steps in each milestone are **manual** on two hosts + EC2.
     Network-using tests must skip cleanly without STUN/EC2.
+12. **T11 is one wifi NIC.** mlink’s app face stays `127.0.0.1`.
+    The WAN hop is the nominated ICE socket (direct, or coturn when
+    the punch fails). The signalling room is the two ICE agents
+    only. ROS, the camera, MediaMTX, and the browser do not join.
+    Chrome’s WebRTC stays on the operator localhost. A second ISP
+    is not `T11`. Tailscale is not a data path.
 
 ---
 
@@ -178,7 +192,34 @@ After nominate: echo b"hello" / b"hello-ack"
 
 STUN on every NIC, all A-nic×B-nic pairs, keepalive vs NAT TTL,
 rebind → re-ICE, fail vs loss → recover or TURN, expire, ICE-PWD
-required before allocating state.
+required before allocating state. `T11` does not wait for this.
+`T6`–`T10` stay later hello-world work.
+
+### T11 — one ISP through mlink
+
+```text
+browser  http://127.0.0.1:8090/
+  → operator backend
+  → UDP 127.0.0.1:5501/5502  (control)
+  → UDP 127.0.0.1:5004       (RTP, after control passes)
+  → mlink-op
+       one wifi NIC, socket nominated by the ICE agent
+       path=direct:  operator public ↔ laptop public
+       path=turn:    operator host → coturn relay → laptop
+  → mlink-edge
+  → UDP 127.0.0.1:5503/5504  → robot bridge → /teleop/*
+  → UDP 127.0.0.1:5004       → (no player on the laptop)
+
+operator PC, after the RTP arrives:
+  MediaMTX 127.0.0.1:8889/cam
+  → Chrome WHEP from the console (localhost only)
+```
+
+The heartbeat and RTP enter mlink on localhost. mlink writes them
+on the nominated socket. They do not go backend → ICE → mlink.
+The ICE agent is the WAN end of that one path because a TURN
+allocation is not a raw `peer:` address. Signalling on EC2 still
+only exchanges ICE username, password, and candidates.
 
 ---
 
@@ -518,6 +559,106 @@ threshold counter.
 
 ---
 
+### T11 — mlink + ICE, one ISP — sheet (none) — STATUS: remaining
+
+Not on the task sheet. Implement this when the user asks, **before
+`T6`**. Do not renumber `T6`–`T10`. Do not implement `T6`–`T10` here.
+
+**Goal.** One wifi NIC on each lab host. mlink carries teleop
+control, then camera RTP, on the socket `T5` already nominates
+(`path=direct` or `path=turn`). Tailscale leaves the data path.
+SSH may still use Tailscale.
+
+**Read:** this file (locked decisions 4, 5, 12, and the T11
+diagram). `mlink-transport/config/lab-op-remote-laptop.yaml` and
+`lab-edge-remote-laptop.yaml` (today’s Tailscale `ts` path).
+`mlink-transport/docs/f18_end_to_end.md` (gripper over that path).
+`video/README.md` (F8: RTP through mlink, WebRTC localhost).
+`turn/agent` `run` / `ice_policy: all`. Repo
+`IMPLEMENTATION.md` section 5 (ROS topics; do not invent a second
+motion wire).
+
+**Lab hosts.** Operator PC, role `controlling`, wifi `bind_ip`
+(confirm with `ip -4 route get 1.1.1.1`; lab value
+`192.168.222.43`). SO-ARM laptop, role `controlled`, wifi
+`10.255.254.58`. Coturn `3.227.234.95` UDP `3478`, relay
+`50000-50100`, user `labturn` (password only in gitignored yaml).
+Signalling `ws://ec2-3-227-234-95.compute-1.amazonaws.com:8765`.
+Room `so-arm101` (do not reuse `hello-world` while a hello agent
+might still be joined). Do not bind `tailscale0`. Do not use
+`100.x` as bind, STUN, TURN, or peer.
+
+**Implement:**
+
+1. **Control, one path.** New mlink configs for this pair (do not
+   rewrite Orin `lab-op.yaml` / `lab-edge.yaml`, and do not delete
+   the Tailscale yaml). App face unchanged: operator
+   `127.0.0.1:5501/5502`, laptop `127.0.0.1:5503/5504`.
+2. **WAN is the nominated ICE connection.** Each daemon starts the
+   existing ICE agent (`ice_policy: all`, coturn STUN and TURN
+   set). Laptop joins `so-arm101` as `controlled` first; operator
+   joins as `controlling`. After `connect()`, mlink send/recv for
+   that single path uses that connection. On `path=turn`, aioice
+   already encapsulates; do not put `3.227.234.95:<relay>` into
+   mlink `peer:` and send raw UDP from a new socket. The relay port
+   changes every run. On `path=direct`, send from the nominated
+   local socket, not from a second bind.
+3. **Bytes.** `/teleop/command` and `/teleop/heartbeat` operator →
+   laptop. `/teleop/ack` and `/teleop/state` laptop → operator.
+   Safety stays on the laptop. The 500 ms watchdog still stops the
+   gripper when heartbeats stop. Browser stays on
+   `http://127.0.0.1:8090/` and does not see the WAN address.
+4. **Video, same socket, after control passes.** Laptop camera
+   publishes H.264 RTP to `127.0.0.1:5004` (mlink-edge
+   `listen_media`). mlink copies it on the **same** nominated
+   socket. Operator mlink delivers `127.0.0.1:5004` to MediaMTX on
+   this PC. Chrome plays `http://127.0.0.1:8889/cam` from the
+   console. WebRTC ICE is localhost only
+   (`webrtcAdditionalHosts: ["127.0.0.1"]`). Do not use
+   `mediamtx.tailscale-lab.yml`. Do not point the console at
+   `http://100.x:8889/cam`.
+5. **Room.** One room, two ICE agents. The camera, MediaMTX, the
+   browser, and the ROS nodes do not join. Signalling does not
+   carry the heartbeat or RTP. Coturn carries those bytes only
+   when the nominated path is `path=turn`.
+
+**Do not:** `T6` NAT-TTL soak, `T7` second NIC or mlink bonding of
+two ISPs, `T8`–`T10`, a second `paths:` entry, Tailscale as the
+WAN, gathering on `tailscale0`, putting the camera in the room,
+browser `iceServers` aimed at coturn, a new motion topic, F20
+crypto. If the socket dies, the existing watchdog is the stop;
+do not build rebind here.
+
+**Verify:**
+
+```bash
+cd turn && python3 -m pytest -q
+```
+
+Pytest must still pass. Add a unit test that app datagrams cross a
+stand-in nominated connection in both directions with no
+`tailscale0` and no `100.x`. Skip live STUN/EC2 in pytest.
+
+**Lab, control.** Coturn and signalling up. Both mlink daemons up.
+Logs show one path, `ice_policy=all`, and `path=direct` or
+`path=turn` (this pair has been `path=turn`: operator host →
+laptop relay `3.227.234.95:<port>` in `50000-50100`). `ss` / the
+path list shows no `tailscale0` and no `100.x`.
+
+Open `http://127.0.0.1:8090/`. Heartbeats keep the watchdog quiet.
+A short g/h jog moves Feetech id 6. Close the tab: the 500 ms
+watchdog safe-stops the gripper.
+
+**Lab, video (same session, same socket).** Console cam URL is
+`http://127.0.0.1:8889/cam`, not a `100.x` host. The laptop camera
+is visible in the tab. Media counters show RTP on that same
+nominated peer.
+
+**When done:** `STATUS: done`, `commit: remaining`, list files,
+print these lab steps, stop. Do not start `T6`.
+
+---
+
 ## Session prompts
 
 Copy **one** prompt into a new Grok session. Do not give two
@@ -630,12 +771,26 @@ Do not git commit unless I explicitly ask. Never git push.
 When T10 works: set T10 STATUS done, keep commit remaining, list files, print T10 verify steps, stop.
 ```
 
+### T11
+
+```text
+Read /home/muhammadhassan/robots/turn/IMPLEMENTATION.md from the start.
+Git branch: feature/turn-server.
+T1–T5 are done. Implement T11 only (mlink + ICE, one wifi ISP: control, then video).
+T11 is before T6. Do not renumber T6–T10. Do not implement T6, T7, T8, T9, or T10.
+You may edit mlink-transport and the operator video/console path. Do not rewrite Orin lab-op.yaml / lab-edge.yaml.
+Tailscale is SSH/mgmt only. Do not bind tailscale0 or use 100.x as a peer.
+The camera, MediaMTX, the browser, and ROS do not join the signalling room. Chrome WebRTC stays on 127.0.0.1.
+Do not git commit unless I explicitly ask. Never git push.
+When T11 works: set T11 STATUS done, keep commit remaining, list files, print the T11 lab steps, stop.
+```
+
 ---
 
 ## Out of this plan
 
-- mlink integration of nominated 5-tuples
-- Teleop, gripper, RTP, MediaMTX, console
+- Second ISP, and the `T7` all-NIC matrix (mlink bonding of two nominated sockets is later)
+- `T6` mapping TTL, `T9` rebind, `T10` fail-vs-loss (the robot watchdog covers a dead socket until those exist)
 - Writing coturn / Twilio
 - F16 console TLS, F20 mlink payload crypto
 - Changing Linux default route; Tailscale as an ICE NIC
