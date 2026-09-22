@@ -61,7 +61,7 @@ def test_remote_laptop_yaml_pair_is_complementary() -> None:
     a, b = op.paths[0], edge.paths[0]
     assert a.ifname == b.ifname == "tailscale0"
     assert a.bind_ip == b.peer_ip == "100.95.150.54"
-    assert a.peer_ip == b.bind_ip == "100.67.47.79"
+    assert a.peer_ip == b.bind_ip == "100.120.193.52"
     assert a.bind_port == b.peer_port == 46000
     assert a.peer_port == b.bind_port == 46000
     assert {op.listen_app, op.send_app, edge.listen_app, edge.send_app} == {

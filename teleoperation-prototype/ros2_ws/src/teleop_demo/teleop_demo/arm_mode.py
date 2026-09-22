@@ -15,7 +15,7 @@ REAL_ARM_SERIAL_PORT = "/dev/ttyACM0"
 REAL_ARM_COMPOSE_OVERLAY = "compose.robot-mlink.real-arm.yaml"
 REAL_ARM_GRIPPER_LOG = "TELEOP_ARM=real; feetech gripper on /dev/ttyACM0"
 GRIPPER_ONLY_DIRECTIONS = frozenset({"open", "close", "stop"})
-REMOTE_LAPTOP_CAM = "http://100.67.47.79:8889/cam"
+REMOTE_LAPTOP_CAM = "http://100.120.193.52:8889/cam"
 REMOTE_LAPTOP_CONSOLE = f"http://127.0.0.1:8090/?cam={REMOTE_LAPTOP_CAM}"
 
 # Executables that move the sim/arm. Real mode must not start these.

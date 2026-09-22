@@ -1,6 +1,6 @@
-# SO-ARM laptop gt-dev-muhammadusama — F18 Tailscale path.
+# SO-ARM laptop AUTOOS-DEV-MUHAMMADOSAMA — F18 Tailscale path.
 # Peer of config/lab-op-remote-laptop.yaml.
-# Copy mlink-transport/ here (e.g. /home/usama/hassan/mlink-transport).
+# Lives at /home/muhammad-osama/teleops_hassan/mlink-transport.
 # IPs must match `tailscale ip -4` on the laptop. Requires allow_tailscale.
 # Control-only. Stage 4: do NOT pass --reflect (that echoes; it will not
 # drive robot_mlink_bridge on 127.0.0.1:5503/5504).
@@ -12,6 +12,6 @@ send_app:   "127.0.0.1:5504"
 paths:
   - name: ts
     ifname: tailscale0
-    bind_ip: 100.67.47.79
+    bind_ip: 100.120.193.52
     bind_port: 46000
     peer: 100.95.150.54:46000

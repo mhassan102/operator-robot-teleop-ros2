@@ -24,7 +24,7 @@ for arg in "$@"; do
   esac
 done
 
-REMOTE_LAPTOP_CAM="${REMOTE_LAPTOP_CAM:-http://100.67.47.79:8889/cam}"
+REMOTE_LAPTOP_CAM="${REMOTE_LAPTOP_CAM:-http://100.120.193.52:8889/cam}"
 if (( remote_laptop )); then
   export TELEOP_GRIPPER_ONLY="${TELEOP_GRIPPER_ONLY:-1}"
   console_url="http://127.0.0.1:8090/?cam=${REMOTE_LAPTOP_CAM}"
