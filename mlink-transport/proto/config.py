@@ -21,6 +21,9 @@ class PathConfig:
     peer_port: int
     ifname: str | None = None
     bind_port: int | None = None  # default: same as peer_port
+    # udp: bind + sendto(peer). ice: WAN is the nominated aioice connection.
+    transport: str = "udp"
+    ice_config: str = ""
 
 
 @dataclass(frozen=True)
@@ -53,10 +56,12 @@ def load_config(source: str | Path | Mapping[str, Any]) -> MlinkConfig:
         if not isinstance(loaded, dict):
             raise ConfigError("config root must be a mapping")
         raw = loaded
-    return _parse(raw)
+        base = Path(source).resolve().parent
+        return _parse(raw, base_dir=base)
+    return _parse(raw, base_dir=None)
 
 
-def _parse(raw: Mapping[str, Any]) -> MlinkConfig:
+def _parse(raw: Mapping[str, Any], *, base_dir: Path | None) -> MlinkConfig:
     try:
         session_id = int(raw["session_id"])
     except (KeyError, TypeError, ValueError) as exc:
@@ -80,7 +85,7 @@ def _parse(raw: Mapping[str, Any]) -> MlinkConfig:
     for item in paths_raw:
         if not isinstance(item, dict):
             raise ConfigError("each path must be a mapping")
-        path = _parse_path(item, allow_tailscale=allow_tailscale)
+        path = _parse_path(item, allow_tailscale=allow_tailscale, base_dir=base_dir)
         if path.name in names:
             raise ConfigError(f"duplicate path name {path.name!r}")
         names.add(path.name)
@@ -135,10 +140,20 @@ def _parse(raw: Mapping[str, Any]) -> MlinkConfig:
     return cfg
 
 
-def _parse_path(item: Mapping[str, Any], *, allow_tailscale: bool) -> PathConfig:
+def _parse_path(
+    item: Mapping[str, Any],
+    *,
+    allow_tailscale: bool,
+    base_dir: Path | None,
+) -> PathConfig:
     name = str(item.get("name") or "").strip()
     if not name:
         raise ConfigError("path.name is required")
+    transport = str(item.get("transport") or "udp").strip().lower()
+    if transport not in ("udp", "ice"):
+        raise ConfigError(f"path {name!r} transport must be udp or ice")
+    if transport == "ice":
+        return _parse_ice_path(item, name=name, base_dir=base_dir)
     ifname = item.get("ifname")
     if ifname is not None:
         ifname = str(ifname).strip() or None
@@ -185,6 +200,43 @@ def _parse_path(item: Mapping[str, Any], *, allow_tailscale: bool) -> PathConfig
         peer_port=peer_port,
         ifname=ifname,
         bind_port=bind_port,
+    )
+
+
+def _parse_ice_path(
+    item: Mapping[str, Any],
+    *,
+    name: str,
+    base_dir: Path | None,
+) -> PathConfig:
+    """One nominated ICE connection. Addresses live in the ICE yaml, not here."""
+    ifname = item.get("ifname")
+    if ifname is not None and str(ifname).strip():
+        if str(ifname).strip().lower() == "tailscale0":
+            raise ConfigError("tailscale0 is SSH/management only; do not bind it")
+        raise ConfigError(
+            f"path {name!r} ifname belongs in the ICE config, not the mlink path"
+        )
+    if any(key in item for key in ("bind_ip", "bind_port", "peer")):
+        raise ConfigError(
+            f"path {name!r} transport ice has no UDP peer; "
+            "bind_ip and TURN live in ice_config"
+        )
+    raw_cfg = item.get("ice_config")
+    if not isinstance(raw_cfg, str) or not raw_cfg.strip():
+        raise ConfigError(f"path {name!r} transport ice requires ice_config")
+    ice_path = Path(raw_cfg.strip())
+    if not ice_path.is_absolute():
+        ice_path = (base_dir / ice_path).resolve() if base_dir is not None else ice_path.resolve()
+    return PathConfig(
+        name=name,
+        bind_ip="0.0.0.0",
+        peer_ip="0.0.0.0",
+        peer_port=9,
+        ifname=None,
+        bind_port=None,
+        transport="ice",
+        ice_config=str(ice_path),
     )
 
 

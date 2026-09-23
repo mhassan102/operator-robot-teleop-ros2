@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
 # Start mlink-op or mlink-edge in the foreground.
 # Default YAML is the Orin lab pair (eth+wifi). --remote-laptop picks the
-# Tailscale control-only pair. Never passes --reflect (that echoes; it will
-# not drive the robot) or --control (that is mlink-ping).
+# Tailscale control-only pair. --ice picks the one-NIC ICE pair (no Tailscale).
+# Never passes --reflect (that echoes; it will not drive the robot) or
+# --control (that is mlink-ping).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${root}"
 
 usage() {
-  echo "Usage: $0 op|edge [--remote-laptop]" >&2
+  echo "Usage: $0 op|edge [--remote-laptop | --ice]" >&2
   echo "  default:     config/lab-{op,edge}.yaml (Orin eth+wifi)" >&2
   echo "  --remote-laptop: config/lab-{op,edge}-remote-laptop.yaml" >&2
+  echo "  --ice:       config/lab-{op,edge}-ice.yaml (nominated ICE socket)" >&2
   echo "  Does not pass --reflect or --control." >&2
 }
 
 role=""
 remote_laptop=0
+ice=0
 for arg in "$@"; do
   case "${arg}" in
     op|edge)
@@ -29,6 +32,9 @@ for arg in "$@"; do
       ;;
     --remote-laptop)
       remote_laptop=1
+      ;;
+    --ice)
+      ice=1
       ;;
     --reflect)
       echo "ERROR: --reflect echoes; it will not drive the robot. Omit it." >&2
@@ -55,7 +61,15 @@ if [[ -z "${role}" ]]; then
   exit 2
 fi
 
-if (( remote_laptop )); then
+if (( remote_laptop && ice )); then
+  echo "ERROR: pass either --remote-laptop or --ice, not both." >&2
+  exit 2
+fi
+
+if (( ice )); then
+  config="config/lab-${role}-ice.yaml"
+  path_name="ice"
+elif (( remote_laptop )); then
   config="config/lab-${role}-remote-laptop.yaml"
   path_name="tailscale0"
 else

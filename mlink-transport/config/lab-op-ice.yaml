@@ -1,0 +1,15 @@
+# Operator PC — one wifi NIC via ICE. App face matches lab-op.yaml.
+# WAN hop is the nominated socket (direct or coturn). No Tailscale.
+# ICE file: turn/config/local_op.yaml (gitignored). Video is not on this path.
+# Start: ./scripts/start_daemon.sh op --ice
+session_id: 1
+listen_app: "127.0.0.1:5501"
+send_app: "127.0.0.1:5502"
+# TURN ChannelData is 4 bytes; keep the mlink frame under a 1500-byte MTU.
+max_payload: 1400
+# Relay delay can exceed the 300 ms default and mark a live path down.
+down_timeout_us: 1500000
+paths:
+  - name: ice
+    transport: ice
+    ice_config: ../../turn/config/local_op.yaml

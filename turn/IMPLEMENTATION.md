@@ -46,9 +46,8 @@ finishes a milestone (and the user has verified the test steps):
   `T11` is the only milestone that edits mlink and the video path.
 
 **Hello-world first.** `T1`–`T5` are the 5-day slice (sheet subtasks
-1–3, 5, 7–8, 11, 19). They are done. Do not start `T6` until the
-user asks. Implement `T11` before `T6` when the user asks; leave
-the `T6`–`T10` rows where they are.
+1–3, 5, 7–8, 11, 19). They are done. `T11` control is done. Do not start `T6` until the
+user asks. Leave the `T6`–`T10` rows where they are.
 
 ---
 
@@ -73,11 +72,12 @@ then `done`.
 | T8 | Source filter, quality metrics, expire, unauth | 9, 12, 20, 21 | remaining | remaining |
 | T9 | NAT rebind + re-check | 15, 16 | remaining | remaining |
 | T10 | Path-fail vs loss + recovery | 17, 18 | remaining | remaining |
-| T11 | mlink + ICE, one ISP (control, then video) |  | remaining | remaining |
+| T11 | mlink + ICE, one wifi path (control on TURN) |  | done | done |
 
-**Next to implement:** `T11` when the user asks, before `T6`.
-Hello-world `T1`–`T5` is done. Do **not** start `T6` or `T11` until
-the user asks. Do not renumber `T6`–`T10`.
+**Next to implement:** `T6` when the user asks.
+Hello-world `T1`–`T5` is done. `T11` control is done (video stays on
+Tailscale). Do **not** start `T6` until the user asks. Do not renumber
+`T6`–`T10`.
 
 **Hello-world (T1–T5):** two NAT’d nodes, one NIC each, STUN,
 signalling, punch **or** TURN, echo `hello`. No mlink, no video, no
@@ -559,7 +559,7 @@ threshold counter.
 
 ---
 
-### T11 — mlink + ICE, one ISP — sheet (none) — STATUS: remaining
+### T11 — mlink + ICE, one ISP — sheet (none) — STATUS: done
 
 Not on the task sheet. Implement this when the user asks, **before
 `T6`**. Do not renumber `T6`–`T10`. Do not implement `T6`–`T10` here.
@@ -579,8 +579,8 @@ diagram). `mlink-transport/config/lab-op-remote-laptop.yaml` and
 motion wire).
 
 **Lab hosts.** Operator PC, role `controlling`, wifi `bind_ip`
-(confirm with `ip -4 route get 1.1.1.1`; lab value
-`192.168.222.43`). SO-ARM laptop, role `controlled`, wifi
+(confirm with `ip -4 route get 1.1.1.1`; 2026-09-23 run
+`192.168.222.56`). SO-ARM laptop, role `controlled`, wifi
 `10.255.254.58`. Coturn `3.227.234.95` UDP `3478`, relay
 `50000-50100`, user `labturn` (password only in gitignored yaml).
 Signalling `ws://ec2-3-227-234-95.compute-1.amazonaws.com:8765`.
@@ -654,8 +654,19 @@ watchdog safe-stops the gripper.
 is visible in the tab. Media counters show RTP on that same
 nominated peer.
 
-**When done:** `STATUS: done`, `commit: remaining`, list files,
-print these lab steps, stop. Do not start `T6`.
+**Lab result (2026-09-23).** Control passed. `g`/`h` moved Feetech id 6.
+Video stayed on Tailscale (`?cam=http://100.120.193.52:8889/cam`); RTP
+through mlink was not part of this run. Both daemons gathered host,
+srflx, and relay and joined room `so-arm101`. Signalling exchanged
+those candidates. Direct checks did not win. Nominated sends, both
+`path=turn`:
+
+- Operator relay `3.227.234.95:50014` → laptop relay `3.227.234.95:50071`
+- Laptop relay `3.227.234.95:50071` → operator srflx `43.246.227.66:47832`
+
+srflx was operator `43.246.227.66:47832` and laptop `86.98.43.27:21331`.
+mlink `ice=up`, loss 0, heartbeat RTT about 390–400 ms. Steps:
+`docs/t11_test_steps.md`. `commit: done`. Do not start `T6` until asked.
 
 ---
 

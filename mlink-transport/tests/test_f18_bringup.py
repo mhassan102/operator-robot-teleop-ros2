@@ -74,6 +74,27 @@ def test_start_daemon_remote_laptop_yaml() -> None:
     assert "reflect=no" in edge.stdout
 
 
+def test_start_daemon_ice_yaml() -> None:
+    op = _parse("op", "--ice")
+    assert op.returncode == 0, op.stderr
+    assert "config=config/lab-op-ice.yaml" in op.stdout
+    assert "path=ice" in op.stdout
+    assert "reflect=no" in op.stdout
+    assert "control=no" in op.stdout
+
+    edge = _parse("edge", "--ice")
+    assert edge.returncode == 0, edge.stderr
+    assert "config=config/lab-edge-ice.yaml" in edge.stdout
+    assert "path=ice" in edge.stdout
+    assert "tailscale" not in edge.stdout
+
+
+def test_start_daemon_rejects_ice_and_tailscale_together() -> None:
+    result = _parse("op", "--ice", "--remote-laptop")
+    assert result.returncode == 2
+    assert "not both" in result.stderr
+
+
 def test_start_daemon_rejects_reflect() -> None:
     result = _parse("edge", "--reflect")
     assert result.returncode == 2

@@ -2,6 +2,8 @@ __pycache__/
 .venv/
 .pytest_cache/
 config/local.yaml
+config/local_op.yaml
+config/local_edge.yaml
 config/generic.yaml
 config/no_turn.yaml
 scripts/coturn.env

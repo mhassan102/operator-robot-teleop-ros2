@@ -53,6 +53,7 @@ Two NAT’d nodes, one NIC each. No mlink, no video, no gripper.
 Lab steps (run yourself): [`docs/t3_test_steps.md`](docs/t3_test_steps.md),
 [`docs/t4_test_steps.md`](docs/t4_test_steps.md),
 [`docs/t5_test_steps.md`](docs/t5_test_steps.md).
+mlink control on that socket: [`docs/t11_test_steps.md`](docs/t11_test_steps.md).
 
 ## How to run (T1–T5)
 

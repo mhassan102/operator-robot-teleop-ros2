@@ -76,23 +76,27 @@ def _connect_fail_line(cfg: dict[str, Any], why: str) -> str:
     return f"ICE negotiation failed ({why}); direct punch did not nominate."
 
 
-async def run_session(cfg: dict[str, Any], *, hold: bool = False) -> dict[str, Any]:
-    """Gather, exchange ICE-PWD + candidates, connect, nominate, echo.
+class IceConnectError(RuntimeError):
+    """Gather, signalling, or nomination failed. The agent is already closed."""
 
-    ``ice_policy: relay`` nominates a coturn relay pair. ``all`` passes
-    turn_* into aioice and keeps host/srflx, so a direct pair can still win.
-    aioice consent checks are the light keepalive.
+
+async def connect_agent(cfg: dict[str, Any]) -> IceAgent:
+    """Gather, signal, and nominate. Caller owns the agent and must close it.
+
+    Does not send hello. aioice consent keepalive runs until ``close``.
+    On failure the agent is closed and ``IceConnectError`` is raised
+    (signalling / config errors propagate after close).
     """
     url, room = _require_signalling(cfg)
     role = cfg["role"]
-    agent = IceAgent(cfg)
-    result: dict[str, Any] = {"ok": False, "path": "none"}
+    agent: IceAgent | None = None
     try:
+        agent = IceAgent(cfg)
         cands = await agent.gather()
         _print_gather(cfg, cands, agent.bind_note)
         if not cands:
             print("no candidates", file=sys.stderr, flush=True)
-            return result
+            raise IceConnectError("no candidates")
         conn = agent.connection
         assert conn is not None
         async with SignallingClient(url) as sig:
@@ -104,14 +108,39 @@ async def run_session(cfg: dict[str, Any], *, hold: bool = False) -> dict[str, A
             await asyncio.wait_for(agent.connect(), CONNECT_TIMEOUT)
         except ConnectionError as exc:
             print(_connect_fail_line(cfg, str(exc)), file=sys.stderr, flush=True)
-            result["path"] = "failed"
-            return result
-        except asyncio.TimeoutError:
+            raise IceConnectError(str(exc)) from exc
+        except asyncio.TimeoutError as exc:
             print(_connect_fail_line(cfg, "timed out"), file=sys.stderr, flush=True)
+            raise IceConnectError("timed out") from exc
+        print(format_path(agent.path()), flush=True)
+        live = agent
+        agent = None
+        return live
+    except BaseException:
+        if agent is not None:
+            await agent.close()
+        raise
+
+
+async def run_session(cfg: dict[str, Any], *, hold: bool = False) -> dict[str, Any]:
+    """Gather, exchange ICE-PWD + candidates, connect, nominate, echo.
+
+    ``ice_policy: relay`` nominates a coturn relay pair. ``all`` passes
+    turn_* into aioice and keeps host/srflx, so a direct pair can still win.
+    aioice consent checks are the light keepalive.
+    """
+    result: dict[str, Any] = {"ok": False, "path": "none"}
+    try:
+        agent = await connect_agent(cfg)
+    except IceConnectError as exc:
+        if str(exc) != "no candidates":
             result["path"] = "failed"
-            return result
+        return result
+    except (SignallingError, asyncio.TimeoutError, RuntimeError) as exc:
+        print(f"run failed: {exc}", file=sys.stderr, flush=True)
+        return result
+    try:
         info = agent.path()
-        print(format_path(info), flush=True)
         result.update(
             {
                 "path": info["kind"],
@@ -119,7 +148,7 @@ async def run_session(cfg: dict[str, Any], *, hold: bool = False) -> dict[str, A
                 "remote_type": info.get("remote_type"),
             }
         )
-        echoed = await _echo(agent, role)
+        echoed = await _echo(agent, cfg["role"])
         result["ok"] = True
         result["echo"] = echoed
         if hold:

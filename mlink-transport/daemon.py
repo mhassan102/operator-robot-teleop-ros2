@@ -15,6 +15,7 @@ from pathlib import Path
 from proto.clock import Clock, SystemClock
 from proto.config import MlinkConfig, load_config
 from proto.header import TC_CONTROL, TC_MEDIA, PayloadTooLarge
+from proto.ice_link import IceSocketFactory, IceStopped
 from proto.session import MlinkSession
 from proto.sockets import SocketFactory, UdpSocketFactory
 
@@ -102,6 +103,40 @@ def _select_wait(socks: list[object], timeout: float) -> None:
         time.sleep(timeout)
 
 
+def _ice_role(role: str) -> str | None:
+    if role == "mlink-op":
+        return "controlling"
+    if role == "mlink-edge":
+        return "controlled"
+    return None
+
+
+def _show_nominated(session: MlinkSession) -> None:
+    """Log the pair ICE nominated and show it in the path line."""
+    for path in session.paths:
+        info = getattr(path.socket, "nominated", None)
+        if not isinstance(info, dict) or not info:
+            continue
+        local = str(info.get("local") or "")
+        remote = str(info.get("remote") or "")
+        kind = info.get("kind") or "none"
+        host, sep, port_s = local.rpartition(":")
+        if sep and host and port_s.isdigit():
+            path.bind_ip = host
+            path.bind_port = int(port_s)
+        host, sep, port_s = remote.rpartition(":")
+        if sep and host and port_s.isdigit():
+            path.peer_ip = host
+            path.peer_port = int(port_s)
+        log.info(
+            "path %s nominated path=%s local=%s remote=%s",
+            path.name,
+            kind,
+            local or "-",
+            remote or "-",
+        )
+
+
 def run(
     config: MlinkConfig | str | Path,
     *,
@@ -115,57 +150,34 @@ def run(
     if not isinstance(config, MlinkConfig):
         config = load_config(config)
     clock = clock or SystemClock()
-    factory: SocketFactory = socket_factory or UdpSocketFactory()
-    session = MlinkSession(config, clock, factory)
+    if socket_factory is None and any(p.transport == "ice" for p in config.paths):
+        log.info("ICE starting; start the other daemon within 60s")
+        factory = IceSocketFactory(expect_role=_ice_role(role), stop=stop)
+    else:
+        factory = socket_factory or UdpSocketFactory()
 
     listen_addr = parse_addr(config.listen_app)
     send_addr = parse_addr(config.send_app)
-    app_rx = _bind_udp(listen_addr)
-    app_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    app_tx.setblocking(False)
-    media_rx = _bind_udp(parse_addr(config.listen_media)) if config.listen_media else None
+    app_rx = None
+    app_tx = None
+    media_rx = None
     media_tx = None
     media_send_addr = parse_addr(config.send_media) if config.send_media else None
-    if media_send_addr is not None:
-        media_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        media_tx.setblocking(False)
-    control = _bind_udp(control_addr) if control_addr else None
-
-    log.info(
-        "%s session=%s listen_app=%s send_app=%s listen_media=%s send_media=%s "
-        "reflect=%s paths=%s",
-        role,
-        config.session_id,
-        config.listen_app,
-        config.send_app,
-        config.listen_media or "-",
-        config.send_media or "-",
-        reflect,
-        ", ".join(
-            f"{p.name} if={p.ifname or '-'} "
-            f"{p.bind_ip}:{p.bind_port}->{p.peer_ip}:{p.peer_port}"
-            for p in session.paths
-        ),
-    )
-    if control_addr:
-        log.info("control %s:%s (UDP text: down <path>)", control_addr[0], control_addr[1])
-
-    prev_up = {p.name: p.up for p in session.paths}
-    last_stats = 0.0
+    control = None
+    session: MlinkSession | None = None
 
     def cleanup() -> None:
-        app_rx.close()
-        app_tx.close()
-        if media_rx is not None:
-            media_rx.close()
-        if media_tx is not None:
-            media_tx.close()
-        if control is not None:
-            control.close()
+        for sock in (app_rx, app_tx, media_rx, media_tx, control):
+            if sock is None:
+                continue
+            try:
+                sock.close()
+            except OSError:
+                pass
         close_factory = getattr(factory, "close", None)
         if close_factory is not None:
             close_factory()
-        else:
+        elif session is not None:
             for p in session.paths:
                 c = getattr(p.socket, "close", None)
                 if c is not None:
@@ -175,6 +187,42 @@ def run(
                         pass
 
     try:
+        session = MlinkSession(config, clock, factory)
+        _show_nominated(session)
+        app_rx = _bind_udp(listen_addr)
+        app_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        app_tx.setblocking(False)
+        if config.listen_media:
+            media_rx = _bind_udp(parse_addr(config.listen_media))
+        if media_send_addr is not None:
+            media_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            media_tx.setblocking(False)
+        if control_addr:
+            control = _bind_udp(control_addr)
+
+        log.info(
+            "%s session=%s listen_app=%s send_app=%s listen_media=%s send_media=%s "
+            "reflect=%s paths=%s",
+            role,
+            config.session_id,
+            config.listen_app,
+            config.send_app,
+            config.listen_media or "-",
+            config.send_media or "-",
+            reflect,
+            ", ".join(
+                f"{p.name} if={p.ifname or '-'} "
+                f"{p.bind_ip}:{p.bind_port}->{p.peer_ip}:{p.peer_port}"
+                for p in session.paths
+            ),
+        )
+        if control_addr:
+            log.info(
+                "control %s:%s (UDP text: down <path>)", control_addr[0], control_addr[1]
+            )
+
+        prev_up = {p.name: p.up for p in session.paths}
+        last_stats = 0.0
         while stop is None or not stop.is_set():
             wait: list[object] = [app_rx]
             if media_rx is not None:
@@ -260,6 +308,8 @@ def run(
                         f"loss={p.loss():.2f} rtt={rtt} win={wins}"
                     )
                 log.info("stats %s", " ".join(bits))
+    except IceStopped:
+        log.info("stopped before ICE nominated")
     finally:
         cleanup()
 
