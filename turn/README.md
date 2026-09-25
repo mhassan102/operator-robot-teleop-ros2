@@ -52,7 +52,8 @@ Two NAT’d nodes, one NIC each. No mlink, no video, no gripper.
 
 Lab steps (run yourself): [`docs/t3_test_steps.md`](docs/t3_test_steps.md),
 [`docs/t4_test_steps.md`](docs/t4_test_steps.md),
-[`docs/t5_test_steps.md`](docs/t5_test_steps.md).
+[`docs/t5_test_steps.md`](docs/t5_test_steps.md),
+[`docs/t6_test_steps.md`](docs/t6_test_steps.md).
 mlink control on that socket: [`docs/t11_test_steps.md`](docs/t11_test_steps.md).
 
 ## How to run (T1–T5)
@@ -94,6 +95,11 @@ python3 -m agent run --config config/local.yaml
 # expect path=turn and hello-ack. Ctrl-C to stop.
 # Lab B — fallback. ice_policy: all, and drop direct host/srflx (firewall).
 # expect path=turn and hello-ack. If direct answers first, path=direct.
+
+# T6 NAT class, mapping TTL, keepalives. Manual lab: docs/t6_test_steps.md
+# Does not join a room. Does not start mlink.
+python3 -m agent nat --config config/local.yaml
+python3 -m agent nat-ttl --config config/local.yaml --holds 20,40,60
 ```
 
 aioice has no `ifname` argument. Gather binds `bind_ip` only (one NIC; never

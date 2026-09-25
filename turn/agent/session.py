@@ -18,6 +18,7 @@ from .ice import (
     ice_policy,
     turn_params,
 )
+from .nat import print_keepalive
 from .signalling_client import SignallingClient, SignallingError
 
 PEER_TIMEOUT = 60.0
@@ -127,7 +128,8 @@ async def run_session(cfg: dict[str, Any], *, hold: bool = False) -> dict[str, A
 
     ``ice_policy: relay`` nominates a coturn relay pair. ``all`` passes
     turn_* into aioice and keeps host/srflx, so a direct pair can still win.
-    aioice consent checks are the light keepalive.
+    aioice consent checks are the light keepalive. T6 prints the
+    NAT-mapping interval after ``path=`` and does not send a second refresh.
     """
     result: dict[str, Any] = {"ok": False, "path": "none"}
     try:
@@ -141,6 +143,8 @@ async def run_session(cfg: dict[str, Any], *, hold: bool = False) -> dict[str, A
         return result
     try:
         info = agent.path()
+        # Policy only. aioice consent (~5s) already refreshes the nominated pair.
+        print_keepalive(str(info["kind"]), cfg)
         result.update(
             {
                 "path": info["kind"],

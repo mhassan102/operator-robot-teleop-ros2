@@ -13,3 +13,9 @@ turn_password: changeme
 ice_policy: all
 signalling_url: ws://192.0.2.1:8765
 room: hello-world
+# T6 optional. Omit these and the file still loads.
+# stun_server_2 must differ from stun_server:stun_port.
+# stun_server_2: 192.0.2.1
+# stun_port_2: 3479
+# keepalive_s: 15
+# mapping_ttl_s: 40

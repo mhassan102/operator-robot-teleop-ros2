@@ -46,8 +46,9 @@ finishes a milestone (and the user has verified the test steps):
   `T11` is the only milestone that edits mlink and the video path.
 
 **Hello-world first.** `T1`–`T5` are the 5-day slice (sheet subtasks
-1–3, 5, 7–8, 11, 19). They are done. `T11` control is done. Do not start `T6` until the
-user asks. Leave the `T6`–`T10` rows where they are.
+1–3, 5, 7–8, 11, 19). They are done. `T11` control is done. `T6` is
+done. Do not start `T7` until the user asks. Do not renumber
+`T7`–`T10`.
 
 ---
 
@@ -67,17 +68,17 @@ then `done`.
 | T3 | STUN gather (mapped IP:port) | 2, 3 | done | done |
 | T4 | Punch + auth checks + nominate + echo | 7, 8, 11 | done | done |
 | T5 | TURN fallback when punch fails | 19 | done | done |
-| T6 | NAT type + mapping TTL + keepalives | 4, 13, 14 | remaining | remaining |
+| T6 | NAT type + mapping TTL + keepalives | 4, 13, 14 | done | done |
 | T7 | Channel/ISP tags + all NIC pairs | 6, 10 | remaining | remaining |
 | T8 | Source filter, quality metrics, expire, unauth | 9, 12, 20, 21 | remaining | remaining |
 | T9 | NAT rebind + re-check | 15, 16 | remaining | remaining |
 | T10 | Path-fail vs loss + recovery | 17, 18 | remaining | remaining |
 | T11 | mlink + ICE, one wifi path (control on TURN) |  | done | done |
 
-**Next to implement:** `T6` when the user asks.
-Hello-world `T1`–`T5` is done. `T11` control is done (video stays on
-Tailscale). Do **not** start `T6` until the user asks. Do not renumber
-`T6`–`T10`.
+**Next to implement:** `T7` when the user asks.
+Hello-world `T1`–`T5` is done. `T6` is done. `T11` control is done
+(video stays on Tailscale). Do **not** start `T7` until the user asks.
+Do not renumber `T7`–`T10`.
 
 **Hello-world (T1–T5):** two NAT’d nodes, one NIC each, STUN,
 signalling, punch **or** TURN, echo `hello`. No mlink, no video, no
@@ -478,7 +479,7 @@ Do not start T6 until the user asks.
 
 ---
 
-### T6 — NAT type, mapping TTL, keepalives — sheet 4, 13, 14 — STATUS: remaining
+### T6 — NAT type, mapping TTL, keepalives — sheet 4, 13, 14 — STATUS: done
 
 **Goal.** Classify NAT (endpoint-independent vs dependent). Measure
 mapping lifetime. Set keepalive **below** that TTL per path.
@@ -493,6 +494,51 @@ measured).
 for > 2× previous observed lifetime in a soak (manual).
 
 **Do not:** T7 multi-NIC matrix, T9 rebind, mlink.
+
+T6 landed: one UDP socket, two STUN Bindings (`agent/nat.py`).
+Class is `endpoint-independent`, `endpoint-dependent`, or `untested`.
+`port-independent` (same mapped ip:port, one server IP, two ports)
+prints class `endpoint-independent` and is not a two-IP proof.
+A changed port toward two server IPs, with no same-IP sample, is
+`address-dependent-unconfirmed` (class `endpoint-dependent`).
+`nat-ttl` holds and the refresh soak are manual and are not in
+default pytest. `run` prints the NAT-mapping policy after `path=`
+(`keepalive_s` default 15; measured `mapping_ttl_s` uses
+`min(configured, max(1, ttl//2))`). aioice consent stays ~5s; no
+second refresh is sent on that socket. `commit: done`.
+Lab: `docs/t6_test_steps.md`.
+
+**Lab (2026-09-25).** Both hosts, hello-world agent, no mlink. Coturn
+already answered STUN on UDP 3479, so `stun-respond` stayed stopped.
+The coturn container and the signalling process were left as they were.
+
+Operator wifi: class `endpoint-independent`, detail `port-independent`.
+One mapped address `43.246.227.66:37171` toward `3.227.234.95:3478`
+and `:3479`. A probe from EC2 source port `44426` was not received
+(`filtering=none`): a reply is accepted only from
+`3.227.234.95:3478`.
+
+Laptop wifi: class `endpoint-dependent`, detail
+`address-and-port-dependent`. Mapped `86.98.43.27:61111` toward
+`:3478` and `86.98.43.27:61113` toward `:3479`. A probe from EC2
+source port `46124` was not received.
+
+Idle holds of 20, 40, and 60 seconds were `inconclusive_within=60`
+on both sides. The same public port came back, which does not prove
+the hole stayed open. `mapping_ttl_s` stays unset. `keepalive_s`
+stays the default 15.
+
+Refresh soak: one STUN Binding every 15 seconds for 130 seconds
+(longer than twice the 60-second hold) kept the public port
+unchanged. Operator `43.246.227.66:34269`, laptop
+`86.98.43.27:63448`. On a live `path=turn` session, aioice consent
+already sends about every 5 seconds toward coturn, inside that
+15-second interval.
+
+A direct punch fits neither router. The laptop's public port belongs
+to the coturn port it was opened toward, and this PC drops a packet
+that did not come from `3.227.234.95:3478`. Coturn answers from
+`:3478`, so those replies get through.
 
 ---
 
@@ -801,7 +847,7 @@ When T11 works: set T11 STATUS done, keep commit remaining, list files, print th
 ## Out of this plan
 
 - Second ISP, and the `T7` all-NIC matrix (mlink bonding of two nominated sockets is later)
-- `T6` mapping TTL, `T9` rebind, `T10` fail-vs-loss (the robot watchdog covers a dead socket until those exist)
+- `T9` rebind, `T10` fail-vs-loss (the robot watchdog covers a dead socket until those exist). `T6` is done: the idle timeout was inconclusive within 60s, so `mapping_ttl_s` stays unset and the keepalive stays 15s.
 - Writing coturn / Twilio
 - F16 console TLS, F20 mlink payload crypto
 - Changing Linux default route; Tailscale as an ICE NIC
