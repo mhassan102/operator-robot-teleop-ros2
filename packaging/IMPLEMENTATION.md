@@ -51,7 +51,7 @@ then `done`.
 | ID | Milestone | STATUS | commit |
 | -- | --------- | ------ | ------ |
 | P0 | This plan and the architecture | done | done |
-| P1 | Registry (ID and password pairing) | remaining | remaining |
+| P1 | Registry (ID and password pairing) | done | done |
 | P2 | Robot window: ID, password, inventory | remaining | remaining |
 | P3 | Operator window: login | remaining | remaining |
 | P4 | Operator config page | remaining | remaining |
@@ -60,7 +60,7 @@ then `done`.
 | P7 | Operator supervisor and in-app console | remaining | remaining |
 | P8 | Debian packages | remaining | remaining |
 
-**Next to implement:** `P1`.
+**Next to implement:** `P2`.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -231,7 +231,7 @@ packaging/run/ice-edge.yaml
 
 ---
 
-### P1 — Registry — STATUS: remaining
+### P1 — Registry — STATUS: done
 
 **Goal.** Login, pairing, and session relay on the WebSocket server
 that already speaks ICE. One process, TCP 8765 on EC2. No second
@@ -276,6 +276,11 @@ cd /home/muhammadhassan/robots && PYTHONPATH=. python3 -m pytest -q packaging/te
 **When done:** do not edit the status board and do not commit.
 List files, print the pytest command, print manual test steps for
 this PC, the robot PC, and EC2, and stop.
+
+P1 landed. Login shares TCP 8765 with ICE `join`. Manual check of
+`packaging/docs/P1_usage.md`: robot `register`, operator `login`
+with that ID and password, `logged_in`, then inventory relayed.
+`commit: done`.
 
 **Session prompt:**
 

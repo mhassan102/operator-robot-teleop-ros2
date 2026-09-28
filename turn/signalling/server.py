@@ -1,4 +1,9 @@
-"""WebSocket signalling: two members per room exchange ICE credentials."""
+"""WebSocket signalling: ICE rooms, and desktop login on the same port.
+
+The first message selects the path. ``join`` keeps the two-member ICE
+room. ``register`` and ``login`` stay on this socket and use the
+packaging registry (ID, password, session relay).
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,7 @@ import argparse
 import asyncio
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from websockets.asyncio.server import Server, serve
@@ -62,24 +68,48 @@ class Room:
         return None
 
 
+def _new_registry() -> Any:
+    """One in-memory registry per process. ICE still runs if it is absent."""
+    root = Path(__file__).resolve().parents[2]
+    if str(root) not in sys.path:
+        sys.path.append(str(root))
+    try:
+        from packaging.registry import Registry
+    except ImportError:
+        return None
+    return Registry()
+
+
 class Hub:
     """Rooms of exactly two members (controlling + controlled)."""
 
     def __init__(self) -> None:
         self.rooms: dict[str, Room] = {}
+        self.registry = _new_registry()
 
     async def handle(self, websocket: Any) -> None:
         room: Room | None = None
+        first = True
         try:
             async for raw in websocket:
                 try:
                     msg = json.loads(raw)
                 except (json.JSONDecodeError, TypeError):
                     await _send_json(websocket, {"type": "error", "error": "bad_json"})
+                    first = False
                     continue
                 if not isinstance(msg, dict):
                     await _send_json(websocket, {"type": "error", "error": "bad_json"})
+                    first = False
                     continue
+                if (
+                    first
+                    and msg.get("type") in ("register", "login")
+                    and self.registry is not None
+                ):
+                    await self.registry.handle(websocket, msg)
+                    return
+                first = False
                 typ = msg.get("type")
                 if typ == "join":
                     room, err = self._join(websocket, msg, room)
