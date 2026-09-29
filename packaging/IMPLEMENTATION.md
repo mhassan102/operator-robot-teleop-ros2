@@ -52,7 +52,7 @@ then `done`.
 | -- | --------- | ------ | ------ |
 | P0 | This plan and the architecture | done | done |
 | P1 | Registry (ID and password pairing) | done | done |
-| P2 | Robot window: ID, password, inventory | remaining | remaining |
+| P2 | Robot terminal: ID, password, inventory | done | done |
 | P3 | Operator window: login | remaining | remaining |
 | P4 | Operator config page | remaining | remaining |
 | P5 | Serial port and camera arguments | remaining | remaining |
@@ -60,7 +60,7 @@ then `done`.
 | P7 | Operator supervisor and in-app console | remaining | remaining |
 | P8 | Debian packages | remaining | remaining |
 
-**Next to implement:** `P2`.
+**Next to implement:** `P3`.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -71,18 +71,22 @@ T7–T10.
 
 ## Locked decisions
 
-1. **Two apps, same signalling port.** `teleop-robot` on the
-   Ubuntu 24.04 robot PC. `teleop-operator` on the Ubuntu 22.04
-   operator PC. Login uses the signalling process already bound to
-   **TCP 8765** on the existing EC2 host. There is no TCP 8766, and
-   login does not use UDP 3479 or UDP 50000–50100. Coturn stays
-   UDP 3478, allocating relays from UDP 50000–50100. A `join`
-   message stays the ICE path. `register` and `login` are the
-   desktop path on that same socket. Tests bind `127.0.0.1` only.
+1. **Two programs, one desktop UI.** `teleop-robot` on the Ubuntu
+   24.04 robot PC is a terminal process. Start it over SSH on
+   Tailscale. It prints the ID and password and sends inventory
+   after login. It has no Qt window. `teleop-operator` on the
+   Ubuntu 22.04 operator PC is the only desktop UI. Login uses the
+   signalling process already bound to **TCP 8765** on the existing
+   EC2 host. There is no TCP 8766, and login does not use UDP 3479
+   or UDP 50000–50100. Coturn stays UDP 3478, allocating relays
+   from UDP 50000–50100. A `join` message stays the ICE path.
+   `register` is the robot terminal. `login` is the operator UI.
+   Tests bind `127.0.0.1` only.
 2. **Language.** Python 3.9-compatible registry (EC2 is 3.9).
-   Desktop apps use distro Python (3.10 on the operator, 3.12 on
-   the robot) and **PyQt5** from apt, not Miniforge and not a pip
-   install into system Python. Tests are pytest.
+   The operator UI uses distro Python 3.10 and **PyQt5** from apt.
+   The robot terminal uses distro Python 3.12 and does not import
+   PyQt. Neither side uses Miniforge or a pip install into system
+   Python. Tests are pytest. Later milestones do not add a robot GUI.
 3. **The registry pairs the apps and relays session JSON.** Gripper
    bytes and video do not pass through it. A registry disconnect
    after `ready` does not stop the arm. Closing the operator window
@@ -122,8 +126,10 @@ T7–T10.
     are unit-tested. `TELEOP_SUPERVISOR_DRY_RUN=1` prints the
     commands and does not exec them. The user runs the lab.
 12. **Packages.** `teleop-robot` and `teleop-operator`, amd64 `.deb`,
-    files under `/opt/teleop`, `.desktop` launchers. The ROS image
-    is a host prerequisite, not a payload of the package.
+    files under `/opt/teleop`. Only the operator package has a
+    `.desktop` launcher and depends on PyQt5. The robot package is
+    the terminal command. The ROS image is a host prerequisite, not
+    a payload of the package.
 
 ---
 
@@ -206,7 +212,7 @@ packaging/
   requirements.txt           # P1: websockets, pytest
   pyproject.toml             # P1: pytest testpaths
   registry/                  # P1 server
-  robot_app/                 # P2 window, P6 supervisor hooks
+  robot_app/                 # P2 terminal, P6 supervisor hooks
   operator_app/              # P3 login, P4 config, P7 console
   supervisor/                # P6–P7 command builders
   tests/
@@ -298,23 +304,25 @@ manual test steps for this PC, the robot PC, and EC2, and stop.
 
 ---
 
-### P2 — Robot window — STATUS: remaining
+### P2 — Robot terminal — STATUS: done
 
-**Goal.** A PyQt5 window that, on launch, generates an ID and
-password, shows them, registers with the registry URL, and publishes
-inventory when the operator attaches. No Start, no process spawn.
+**Goal.** A terminal program that, on launch, generates an ID and
+password, prints them, registers with the registry URL, and publishes
+inventory when the operator attaches. No PyQt and no display, so it
+runs over SSH on the robot PC (including a Jetson). No Start, no
+process spawn. The operator app stays a PyQt5 UI. The EC2 registry
+is unchanged.
 
-**Read:** P1 protocol, ARCHITECTURE "What the operator sees" (robot
-window) and the inventory JSON.
+**Read:** P1 protocol, ARCHITECTURE inventory JSON.
 
 **Implement:**
 
-- `packaging/robot_app/` — window plus pure functions:
+- `packaging/robot_app/` — terminal program plus pure functions:
   - `new_credentials()` → 9-digit ID and 8-character password from
     the alphabet in locked decision 4
   - `inventory_from(sysfs_text, links, serial_dir)` → the inventory
     object. Parse fixtures in tests. Do not require the real `/dev`
-    nodes for pytest. When the live window runs, read
+    nodes for pytest. When the live program runs, read
     `/sys/class/net`, `/sys/class/video4linux/*/name`, and
     `/dev/serial/by-id`.
   - Default-route NIC via the same data a test can fake.
@@ -325,16 +333,19 @@ window) and the inventory JSON.
     otherwise `""`.
 - Register URL default
   `ws://127.0.0.1:8765`, overridable with `--registry`.
-- Window shows ID, password, a button that generates a new password
-  and registers again, and the latest status (`registered`,
-  `operator_attached`, or the error code).
+- The terminal prints ID, password, the latest status (`registered`,
+  `operator_attached`, or the error code), and the inventory.
+  `n` then Enter generates a new password and registers again.
+  `q` or Ctrl-C quits.
 - On `operator_attached`, send `inventory`.
 - `packaging/tests/test_robot_inventory.py` for credentials shape,
   follower default selection helper, metadata skipped, local-only
   NIC flagged `default_route: false`.
 
-**Do not:** start scripts, Docker, mlink, the camera, the arm.
-**Do not** import the operator app.
+**Do not:** PyQt on the robot program. Do not start scripts, Docker,
+mlink, the camera, or the arm.
+**Do not** import the operator app. **Do not** change the operator
+UI plan or the EC2 signalling process.
 
 **Verify:**
 
@@ -342,7 +353,7 @@ window) and the inventory JSON.
 cd /home/muhammadhassan/robots && PYTHONPATH=. python3 -m pytest -q packaging/tests/test_robot_inventory.py packaging/tests/test_registry.py
 ```
 
-Launch (user, when a display is available):
+Launch (no display required):
 
 ```bash
 PYTHONPATH=. python3 -m packaging.robot_app --registry ws://127.0.0.1:8765
@@ -355,22 +366,31 @@ PYTHONPATH=. python3 -m packaging.robot_app --registry ws://127.0.0.1:8765
 ```text
 You are the implementer. Branch feature/packaging. Read
 packaging/IMPLEMENTATION.md and implement only milestone P2
-(robot window: ID, password, inventory). P1 is already in the
-tree. Use the protocol as written. Pytest inventory parsing with
-fixtures, not live /dev nodes. Do not spawn mlink, Docker, the
-camera, or the arm. Do not SSH. Do not commit or push. When P2
-works, do not edit the status board and do not commit. List
-files, print the pytest command, print manual test steps for this
-PC, the robot PC, and EC2, and stop.
+(robot terminal: ID, password, inventory). P1 is already in the
+tree. The robot program is a terminal app for SSH, not PyQt. The
+operator app stays a UI. Use the protocol as written. Pytest
+inventory parsing with fixtures, not live /dev nodes. Do not spawn
+mlink, Docker, the camera, or the arm. Do not SSH. Do not commit
+or push. When P2 works, do not edit the status board and do not
+commit. List files, print the pytest command, print manual test
+steps for this PC, the robot PC, and EC2, and stop.
 ```
+
+P2 landed. `python3 -m packaging.robot_app` prints the ID and
+password, registers, and sends inventory when the operator logs in.
+No PyQt. Manual check of `packaging/docs/P2_usage.md`: signalling
+on EC2, robot process over SSH, operator login with that ID and
+password, `logged_in` and inventory. `commit: done`.
 
 ---
 
 ### P3 — Operator login — STATUS: remaining
 
-**Goal.** A PyQt5 window with ID and password fields. Login success
-shows the robot hostname and a waiting state. Wrong password shows
-the error and stays on the form. No config widgets yet.
+**Goal.** The only GUI in this product. A PyQt5 window with ID and
+password fields. Login success shows the robot hostname and a
+waiting state. Wrong password shows the error and stays on the
+form. No config widgets yet. The robot side stays the P2 terminal.
+Do not add a robot window.
 
 **Read:** protocol `login`, `logged_in`, `error`.
 
@@ -401,13 +421,14 @@ cd /home/muhammadhassan/robots && QT_QPA_PLATFORM=offscreen PYTHONPATH=. python3
 
 ```text
 You are the implementer. Branch feature/packaging. Read
-packaging/IMPLEMENTATION.md and implement only milestone P3
-(operator login window). Use the existing registry. Offscreen Qt
-is enough for tests. Do not add the config page. Do not spawn
-mlink, Docker, the camera, or the arm. Do not SSH. Do not commit
-or push. When P3 works, do not edit the status board and do not
-commit. List files, print the pytest command, print manual test
-steps for this PC, the robot PC, and EC2, and stop.
+packaging/IMPLEMENTATION.md and packaging/ARCHITECTURE.md.
+Implement only milestone P3 (operator login window). The robot
+program stays the P2 terminal: no PyQt on the robot. Use the
+existing registry. Offscreen Qt is enough for tests. Do not add
+the config page. Do not spawn mlink, Docker, the camera, or the
+arm. Do not SSH. Do not commit or push. Do not change the status
+board. When P3 works, list files, print the pytest command, print
+manual test steps for this PC, the robot PC, and EC2, and stop.
 ```
 
 ---
@@ -664,7 +685,7 @@ cd /home/muhammadhassan/robots && QT_QPA_PLATFORM=offscreen PYTHONPATH=. python3
 **Lab, for the user after this milestone, not for the implementer:**
 
 1. Signalling already listening on EC2 TCP 8765. Desktop apps use `ws://ec2-3-227-234-95.compute-1.amazonaws.com:8765`.
-2. Robot app, then operator app, login with the ID and password on the robot window.
+2. Robot terminal over SSH, then the operator app. Log in with the ID and password printed by the robot terminal.
 3. Link Tailscale, Interface 2 None, follower serial, `USB2.0_CAM1`. Start.
 4. HUD CONNECTED, one tap `g` or `h`, then close the operator window and confirm the gripper torque goes off.
 5. Repeat with Link TURN only when coturn and ICE signalling are already up.
@@ -688,8 +709,10 @@ from the milestone, and stop.
 
 ### P8 — Debian packages — STATUS: remaining
 
-**Goal.** Two installable amd64 `.deb` files that put the apps on
-the application menu. Installing them does not start the arm.
+**Goal.** Two installable amd64 `.deb` files. The operator package
+adds an application-menu launcher. The robot package installs a
+terminal command and no GUI. Installing either does not start the
+arm.
 
 **Read:** ARCHITECTURE "Installable packages".
 
@@ -703,10 +726,13 @@ the application menu. Installing them does not start the arm.
   `__pycache__`), `turn/` without gitignored yaml and without
   `scripts/coturn.env`, `video/so-arm/`, and the teleoperation
   start scripts the supervisor calls. Install prefix `/opt/teleop`.
-- Robot `.desktop` runs the robot app. Operator `.desktop` runs the
-  operator app. Both use `/usr/bin/python3` with `PYTHONPATH=/opt/teleop`.
+- Operator `.desktop` runs the operator app. The robot package has
+  no `.desktop` file. Both use `/usr/bin/python3` with
+  `PYTHONPATH=/opt/teleop`. The robot command is
+  `python3 -m packaging.robot_app`.
 - Depends: `python3`. Operator also depends on `python3-pyqt5` and
-  `python3-pyqt5.qtwebengine`. Robot depends on `python3-pyqt5`.
+  `python3-pyqt5.qtwebengine`. The robot package does not depend
+  on PyQt.
   `websockets` is vendored or listed as a dependency that exists on
   both Ubuntu 22.04 and 24.04; if the distro package name differs,
   vendor the small library inside the package rather than using pip

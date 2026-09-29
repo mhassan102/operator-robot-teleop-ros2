@@ -1,9 +1,11 @@
 # Packaging architecture
 
-Operator and robot become installable Ubuntu desktop apps. A small
+The operator becomes an installable Ubuntu desktop app. The robot
+side is a terminal process started over SSH, because that machine
+is reached by Tailscale and does not need a local display. A small
 registry on the existing EC2 host pairs them with the ID and password
-shown on the robot. After the operator confirms the link and the
-devices, each app starts the processes this repo already uses.
+printed by the robot terminal. After the operator confirms the link
+and the devices, each side starts the processes this repo already uses.
 
 Read `packaging/IMPLEMENTATION.md` for the milestones. This file is
 the picture those milestones implement.
@@ -102,15 +104,16 @@ TURN changes gripper control only.
 
 ## New model
 
-Two desktop apps, plus the registry that lets them find each other
-from behind two NATs.
+A robot terminal and one operator desktop app. The registry lets
+them find each other from behind two NATs.
 
 ```text
-  ROBOT PC                                         OPERATOR PC
+  ROBOT PC (SSH over Tailscale)                    OPERATOR PC
   +---------------------------+                    +-----------------------------+
   | teleop-robot              |                    | teleop-operator             |
-  | window: ID + password     |                    | window: ID + password       |
-  | then status               |                    | then config, then console   |
+  | terminal: ID + password   |                    | window: ID + password       |
+  | then status lines         |                    | then config, then console   |
+  | no Qt, no display         |                    | the only GUI                |
   +-------------+-------------+                    +-------------+---------------+
                 | outbound                                     | outbound
                 v                                              v
@@ -146,9 +149,9 @@ does.
 
 Login is not a new port and not a new EC2 service. The process
 already listening on TCP 8765 accepts two kinds of client. An ICE
-agent sends `join` and exchanges candidates, as it does today. A
-desktop app sends `register` or `login`, and that same process
-forwards the inventory, config, and start messages. Coturn is the
+agent sends `join` and exchanges candidates, as it does today. The
+robot terminal sends `register`. The operator app sends `login`.
+That same process forwards the inventory, config, and start messages. Coturn is the
 other service, on UDP 3478, and it is used only when the operator
 picks TURN.
 
@@ -184,12 +187,13 @@ range coturn allocates from.
 ## Session flow
 
 ```text
-1. Install teleop-robot on the robot PC. Launch it.
-2. The window generates a 9-digit ID and an 8-character password
-   and registers them with the registry. The person at the robot
-   reads them off the window.
-3. Install teleop-operator on the operator PC. Launch it.
-4. Type that ID and password. The registry attaches the two apps.
+1. Install teleop-robot on the robot PC. Over SSH, start
+   `python3 -m packaging.robot_app`.
+2. The terminal prints a 9-digit ID and an 8-character password
+   and registers them with the registry. Read them from that SSH
+   session.
+3. Install teleop-operator on the operator PC. Launch the window.
+4. Type that ID and password. The registry attaches the two sides.
 5. The robot sends its inventory: network interfaces, serial
    adapters, capture devices, and the camera page URL.
 6. The operator window shows the config page. The operator picks
@@ -228,9 +232,9 @@ sequenceDiagram
 
 Three pages in one window.
 
-**Login.** ID and password from the robot window. Wrong password
-stays on this page. A second operator attaching to the same ID is
-rejected while the first is attached.
+**Login.** ID and password from the robot SSH terminal. Wrong
+password stays on this page. A second operator attaching to the
+same ID is rejected while the first is attached.
 
 **Config, after login.** This is the page to get right. The
 suggestion below is the layout P4 implements.
@@ -240,15 +244,15 @@ suggestion below is the layout P4 implements.
 g/h, the HUD, and the camera view stay the ones the web console
 already has. Packaging does not rewrite `operate.js`.
 
-The robot window is smaller. It shows the ID, the password, a
-regenerate-password action, and a status line (waiting, operator
-attached, starting, running, stopped, error). It lists the inventory
-it published so the person beside the arm can see which serial port
-and camera were selected. It does not ask them to approve Start a
-second time. The operator's Start is the confirmation. The robot
-window updates to the chosen values as soon as they arrive, before
-processes are spawned, so someone at the arm can stop the app if the
-selection is wrong.
+The robot has no window. Its SSH terminal prints the ID, the
+password, and a status line (waiting, operator attached, starting,
+running, stopped, error). `n` prints a new password and registers
+again. It lists the inventory it published so the person at that
+session can see which serial port and camera were selected. It does
+not ask them to approve Start a second time. The operator's Start
+is the confirmation. The terminal prints the chosen values as soon
+as they arrive, before processes are spawned, so someone at the arm
+can stop the process if the selection is wrong.
 
 ---
 
@@ -344,15 +348,15 @@ not write a Tailscale `100.x` address into `bind_ip`.
 
 Two Debian packages, both amd64:
 
-| Package | Installs on | Window |
+| Package | Installs on | What the user runs |
 | --- | --- | --- |
-| `teleop-robot` | Ubuntu 24.04 robot PC | ID and password |
+| `teleop-robot` | Ubuntu 24.04 robot PC | Terminal over SSH. No GUI. |
 | `teleop-operator` | Ubuntu 22.04 operator PC | Login, config, console |
 
-Each installs under `/opt/teleop`, adds a desktop launcher, and uses
-distro Python plus distro PyQt5. The robot package does not depend
-on Miniforge. The operator package includes Qt WebEngine so the
-console renders inside the app.
+Each installs under `/opt/teleop` and uses distro Python. The robot
+package does not depend on Miniforge or PyQt. The operator package
+is the only one with a desktop launcher, and it includes Qt
+WebEngine so the console renders inside the app.
 
 The packages do not contain the `ros2-teleop-poc:humble` image
 (about 3 GB) or a prebuilt `ros2_ws`. Those stay on the machine the
@@ -370,8 +374,9 @@ process. Amazon Linux has no `.deb` install of these apps.
 ## Boundaries
 
 - Gripper motion, safety clamping, and the 500 ms watchdog stay in
-  the existing robot container. The desktop apps spawn that
-  container. They do not publish `/gripper_safe` themselves.
+  the existing robot container. The operator app and the robot
+  terminal spawn that container. They do not publish
+  `/gripper_safe` themselves.
 - Joints 1–5, MoveIt Servo, and a second camera stay out.
 - Video-through-mlink stays out. `listen_media` stays unset.
 - Orin `lab-op.yaml` and `lab-edge.yaml` stay as they are.

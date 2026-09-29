@@ -10,7 +10,7 @@ The first WebSocket message chooses the path:
 | First `type` | Path |
 | --- | --- |
 | `join` | Existing ICE room (candidates exchanged as before) |
-| `register` | Robot desktop app. The registry stores a password hash. |
+| `register` | Robot terminal (SSH, no Qt). The registry stores a password hash. |
 | `login` | Operator desktop app. One operator per robot. |
 
 A later `register` or `login` on a connection that already joined an
