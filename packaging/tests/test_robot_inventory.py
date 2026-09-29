@@ -82,6 +82,9 @@ SERIAL = {
 FOLLOWER = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B61033180-if00"
 LEADER = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E090040-if00"
 
+# Taken as this module is imported, before the operator tests build a window.
+_ROBOT_MODULES = set(sys.modules)
+
 
 def test_terminal_commands_and_no_qt() -> None:
     assert command_for("n") == "new-password"
@@ -90,7 +93,7 @@ def test_terminal_commands_and_no_qt() -> None:
     assert command_for("quit") == "quit"
     assert command_for("") is None
     assert command_for("password") is None
-    assert "PyQt5" not in sys.modules
+    assert "PyQt5" not in _ROBOT_MODULES
 
 
 def test_credentials_match_the_alphabet() -> None:

@@ -85,6 +85,10 @@ def _login(
     return {"v": 1, "type": "login", "robot_id": robot_id, "password": password}
 
 
+def _logged_in(hostname: str = "AUTOOS-DEV-MUHAMMADOSAMA") -> dict[str, Any]:
+    return {"v": 1, "type": "logged_in", "hostname": hostname}
+
+
 async def _send(ws: Any, msg: dict[str, Any]) -> None:
     await ws.send(json.dumps(msg))
 
@@ -159,7 +163,7 @@ async def _register_login_relays_inventory(uri: str) -> None:
         await _send(robot, _register())
         assert await _recv(robot) == {"v": 1, "type": "registered"}
         await _send(operator, _login())
-        assert await _recv(operator) == {"v": 1, "type": "logged_in"}
+        assert await _recv(operator) == _logged_in()
         assert await _recv(robot) == {"v": 1, "type": "operator_attached"}
         await _send(robot, INVENTORY)
         assert await _recv(operator) == INVENTORY
@@ -202,7 +206,7 @@ async def _wrong_password_does_not_relay(uri: str) -> None:
         await _send(bad, _login(password="WRONGPWD"))
         assert await _recv(bad) == {"v": 1, "type": "error", "code": "auth"}
         await _send(good, _login())
-        assert await _recv(good) == {"v": 1, "type": "logged_in"}
+        assert await _recv(good) == _logged_in()
         assert await _recv(robot) == {"v": 1, "type": "operator_attached"}
         await _send(robot, INVENTORY)
         assert await _recv(good) == INVENTORY
@@ -248,7 +252,7 @@ async def _second_operator_is_busy(uri: str) -> None:
         await _send(robot, _register())
         assert await _recv(robot) == {"v": 1, "type": "registered"}
         await _send(first, _login())
-        assert await _recv(first) == {"v": 1, "type": "logged_in"}
+        assert await _recv(first) == _logged_in()
         assert await _recv(robot) == {"v": 1, "type": "operator_attached"}
         await _send(second, _login())
         assert await _recv(second) == {"v": 1, "type": "error", "code": "busy"}
@@ -268,7 +272,7 @@ async def _second_operator_is_busy(uri: str) -> None:
         for _ in range(10):
             await _send(second, _login())
             msg = await _recv(second)
-            if msg == {"v": 1, "type": "logged_in"}:
+            if msg == _logged_in():
                 logged_in = True
                 break
             assert msg == {"v": 1, "type": "error", "code": "busy"}
@@ -296,7 +300,7 @@ async def _reregister_replaces_robot_socket(uri: str) -> None:
         await _send(old_robot, _register(password="AB23CD45"))
         assert await _recv(old_robot) == {"v": 1, "type": "registered"}
         await _send(operator, _login(password="AB23CD45"))
-        assert await _recv(operator) == {"v": 1, "type": "logged_in"}
+        assert await _recv(operator) == _logged_in()
         assert await _recv(old_robot) == {"v": 1, "type": "operator_attached"}
         await _send(new_robot, _register(password="ZZ99YY88"))
         assert await _recv(new_robot) == {"v": 1, "type": "registered"}
@@ -325,7 +329,7 @@ async def _robot_disconnect_is_offline(uri: str) -> None:
         await _send(robot, _register())
         assert await _recv(robot) == {"v": 1, "type": "registered"}
         await _send(operator, _login())
-        assert await _recv(operator) == {"v": 1, "type": "logged_in"}
+        assert await _recv(operator) == _logged_in()
         assert await _recv(robot) == {"v": 1, "type": "operator_attached"}
         await robot.close()
         assert await _recv(operator) == {"v": 1, "type": "error", "code": "offline"}
@@ -390,8 +394,8 @@ async def _two_robots_do_not_cross(uri: str) -> None:
         assert await _recv(robot_b) == {"v": 1, "type": "registered"}
         await _send(op_a, _login(robot_id="111111111", password="AAAAAAAA"))
         await _send(op_b, _login(robot_id="222222222", password="BBBBBBBB"))
-        assert await _recv(op_a) == {"v": 1, "type": "logged_in"}
-        assert await _recv(op_b) == {"v": 1, "type": "logged_in"}
+        assert await _recv(op_a) == _logged_in()
+        assert await _recv(op_b) == _logged_in()
         assert await _recv(robot_a) == {"v": 1, "type": "operator_attached"}
         assert await _recv(robot_b) == {"v": 1, "type": "operator_attached"}
         await _send(robot_a, inv_a)
@@ -438,7 +442,7 @@ async def _ice_join_still_reaches_room(uri: str) -> None:
         assert peer["candidates"] == CANDIDATES["candidates"]
         async with connect(uri) as operator:
             await _send(operator, _login())
-            assert await _recv(operator) == {"v": 1, "type": "logged_in"}
+            assert await _recv(operator) == _logged_in()
             assert await _recv(robot) == {"v": 1, "type": "operator_attached"}
 
 

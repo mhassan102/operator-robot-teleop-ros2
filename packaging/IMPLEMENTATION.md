@@ -53,14 +53,14 @@ then `done`.
 | P0 | This plan and the architecture | done | done |
 | P1 | Registry (ID and password pairing) | done | done |
 | P2 | Robot terminal: ID, password, inventory | done | done |
-| P3 | Operator window: login | remaining | remaining |
+| P3 | Operator window: login | done | done |
 | P4 | Operator config page | remaining | remaining |
 | P5 | Serial port and camera arguments | remaining | remaining |
 | P6 | Robot supervisor (start and stop) | remaining | remaining |
 | P7 | Operator supervisor and in-app console | remaining | remaining |
 | P8 | Debian packages | remaining | remaining |
 
-**Next to implement:** `P3`.
+**Next to implement:** `P4`.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -122,9 +122,15 @@ T7–T10.
     inventory / config / start / stop / status to the packaging
     registry. ICE `join` and candidate exchange stay as they are.
     Generated yaml goes in a runtime directory and is gitignored.
-11. **Implementer sessions do not drive the arm.** Command builders
-    are unit-tested. `TELEOP_SUPERVISOR_DRY_RUN=1` prints the
-    commands and does not exec them. The user runs the lab.
+11. **Implementer sessions do not drive the arm.** They never start
+    the Feetech driver, never open `/dev/ttyACM0`, and never send
+    `g` or `h`. P4 only reviews config. P5 is parse-only. P6 plans
+    commands under `TELEOP_SUPERVISOR_DRY_RUN=1` and does not exec
+    them. The first lab that may start the real driver is P7, and
+    only the user runs it, after the gripper is clear on the table.
+    That test is one tap of `g` or `h`. Each implementer writes the
+    steps in `packaging/docs/P<N>_usage.md` and does not run them
+    on the robot.
 12. **Packages.** `teleop-robot` and `teleop-operator`, amd64 `.deb`,
     files under `/opt/teleop`. Only the operator package has a
     `.desktop` launcher and depends on PyQt5. The robot package is
@@ -384,7 +390,7 @@ password, `logged_in` and inventory. `commit: done`.
 
 ---
 
-### P3 — Operator login — STATUS: remaining
+### P3 — Operator login — STATUS: done
 
 **Goal.** The only GUI in this product. A PyQt5 window with ID and
 password fields. Login success shows the robot hostname and a
@@ -431,13 +437,20 @@ board. When P3 works, list files, print the pytest command, print
 manual test steps for this PC, the robot PC, and EC2, and stop.
 ```
 
+P3 landed. The operator window is PyQt5 login. After the ID and
+password from the robot terminal, it shows that robot's hostname.
+Manual check of `packaging/docs/P3_usage.md`. The arm stayed stopped.
+`commit: done`.
+
 ---
 
 ### P4 — Config page — STATUS: remaining
 
 **Goal.** After login, the operator window shows Link, Interface 1,
 Interface 2, Arm, and Video. Choosing values sends `config`. The
-robot replies `config_ok` or `bad_config`. Nothing is spawned.
+robot terminal prints the choice and replies `config_ok` or
+`bad_config`. Nothing is spawned. This milestone does not start
+mlink, the camera, or the arm driver.
 
 **Read:** ARCHITECTURE "Suggestion for the config page". Locked
 decisions 5–7.
@@ -467,7 +480,9 @@ decisions 5–7.
 - Tests: widget values from a fixture inventory, JSON that hits
   `config_ok`, and one `bad_config` (unknown video path).
 
-**Do not:** spawn processes. Do not treat Interface 2 as bonded.
+**Do not:** spawn processes. Do not open a serial port. Do not start
+mlink, Docker, the camera, or the arm. Do not treat Interface 2 as
+bonded. Write the manual steps in `packaging/docs/P4_usage.md`.
 
 **Verify:**
 
@@ -484,10 +499,13 @@ You are the implementer. Branch feature/packaging. Read
 packaging/IMPLEMENTATION.md and packaging/ARCHITECTURE.md section
 "Suggestion for the config page". Implement only milestone P4.
 Review sends config and does not spawn processes. Interface 2
-may be selected at review; do not bond it. Do not SSH. Do not
-commit or push. When P4 works, do not edit the status board and
-do not commit. List files, print the pytest command, print manual
+may be selected at review; do not bond it. Do not start mlink,
+Docker, the camera, or the arm. Do not open a serial port. Do not
+send g or h. The real gripper is not part of this milestone.
+Do not SSH. Do not commit or push. Do not change the status board.
+When P4 works, list files, print the pytest command, print manual
 test steps for this PC, the robot PC, and EC2, and stop.
+Please also write lab test steps in file packaging/docs/P4_usage.md.
 ```
 
 ---

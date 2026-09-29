@@ -27,7 +27,7 @@ It does not read the fields inside those messages, and it does not
 carry gripper bytes or video. Passwords are not written to logs.
 Sessions are memory only: a new `register` for an ID replaces the
 previous robot socket and the stored hash. `logged_in` is
-`{"v":1,"type":"logged_in"}` (no hostname yet).
+`{"v":1,"type":"logged_in","hostname":"<name from register>"}`.
 
 Reply codes: `bad_id`, `auth`, `busy`, `offline`. A malformed frame
 is `bad_json`. A frame whose `v` or `type` is not part of this

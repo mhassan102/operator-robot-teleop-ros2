@@ -4,9 +4,8 @@ Passwords are stored as a salted hash and checked with a constant-time
 compare. Sessions live in memory only. The plaintext password is never
 logged and never copied into an outbound message.
 
-``logged_in`` does not include the robot hostname. The name is kept on
-the session so a later milestone can add that field without a new
-register shape.
+``logged_in`` includes the hostname from the robot's ``register`` so the
+operator window can show it. The field is extra; ``v`` stays 1.
 """
 
 from __future__ import annotations
@@ -232,6 +231,7 @@ class Registry:
         if session is None or session.robot_ws is None:
             await _send(ws, _error("offline"))
             return None
+        hostname = ""
         async with session.lock:
             if session.robot_ws is None:
                 code = "offline"
@@ -242,10 +242,11 @@ class Registry:
             else:
                 session.operator_ws = ws
                 code = ""
+                hostname = session.hostname if isinstance(session.hostname, str) else ""
         if code:
             await _send(ws, _error(code))
             return None
-        await _send(ws, {"v": 1, "type": "logged_in"})
+        await _send(ws, {"v": 1, "type": "logged_in", "hostname": hostname})
         async with session.lock:
             robot = session.robot_ws if session.operator_ws is ws else None
         if robot is not None:
