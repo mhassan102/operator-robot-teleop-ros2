@@ -54,13 +54,13 @@ then `done`.
 | P1 | Registry (ID and password pairing) | done | done |
 | P2 | Robot terminal: ID, password, inventory | done | done |
 | P3 | Operator window: login | done | done |
-| P4 | Operator config page | remaining | remaining |
+| P4 | Operator config page | done | done |
 | P5 | Serial port and camera arguments | remaining | remaining |
 | P6 | Robot supervisor (start and stop) | remaining | remaining |
 | P7 | Operator supervisor and in-app console | remaining | remaining |
 | P8 | Debian packages | remaining | remaining |
 
-**Next to implement:** `P4`.
+**Next to implement:** `P5`.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -444,7 +444,7 @@ Manual check of `packaging/docs/P3_usage.md`. The arm stayed stopped.
 
 ---
 
-### P4 — Config page — STATUS: remaining
+### P4 — Config page — STATUS: done
 
 **Goal.** After login, the operator window shows Link, Interface 1,
 Interface 2, Arm, and Video. Choosing values sends `config`. The
@@ -507,6 +507,11 @@ When P4 works, list files, print the pytest command, print manual
 test steps for this PC, the robot PC, and EC2, and stop.
 Please also write lab test steps in file packaging/docs/P4_usage.md.
 ```
+
+P4 landed. After login the operator window reviews Link, Interface 1,
+Interface 2, Arm, and Video. The robot terminal prints the choice and
+replies `config_ok`. Manual check of `packaging/docs/P4_usage.md`.
+mlink, the camera, and the arm stayed stopped. `commit: done`.
 
 ---
 

@@ -11,7 +11,7 @@ from packaging.operator_app.login import DEFAULT_REGISTRY
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python3 -m packaging.operator_app",
-        description="Operator login",
+        description="Operator login and config",
     )
     parser.add_argument(
         "--registry",

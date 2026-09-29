@@ -1,9 +1,9 @@
 """Terminal robot program.
 
 Prints the generated ID and password, registers with the signalling
-server, and prints inventory when an operator attaches. No PyQt and
-no display, so it runs over SSH. It does not start mlink, Docker,
-the camera, or the arm.
+server, and prints inventory when an operator attaches. A reviewed
+config is printed and answered. No PyQt and no display, so it runs
+over SSH. It does not start mlink, Docker, the camera, or the arm.
 """
 
 from __future__ import annotations
@@ -46,6 +46,9 @@ def launch(registry_url: str) -> int:
     def on_status(status: str) -> None:
         emit(_summary(state, status))
 
+    def on_config(line: str) -> None:
+        emit(line)
+
     def publish() -> dict:
         inv = live_inventory()
         emit(format_inventory(inv))
@@ -82,7 +85,9 @@ def launch(registry_url: str) -> int:
     reader.start()
     try:
         asyncio.run(
-            run_robot_session(registry_url, state, publish, on_status)
+            run_robot_session(
+                registry_url, state, publish, on_status, on_config=on_config
+            )
         )
     except KeyboardInterrupt:
         state.stop()

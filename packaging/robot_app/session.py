@@ -1,8 +1,9 @@
 """Register the robot and publish inventory when an operator attaches.
 
-This module does not start mlink, Docker, the camera, or the arm.
-Messages other than ``registered``, ``operator_attached``, and
-``error`` are ignored.
+A ``config`` message is checked against the last inventory and answered
+with ``config_ok`` or ``bad_config``. The choice is only recorded.
+``start`` and ``stop`` are ignored. This module does not start mlink,
+Docker, the camera, or the arm.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from typing import Any
 
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
+
+from packaging.robot_app.config import review_config
 
 DEFAULT_REGISTRY = "ws://127.0.0.1:8765"
 _CLOSED = object()
@@ -78,11 +81,17 @@ def register_message(robot_id: str, password: str, hostname: str) -> dict[str, A
 
 
 class Incoming:
-    """What the window should do with one server frame."""
+    """What the terminal should do with one server frame."""
 
-    def __init__(self, status: str | None, send_inventory: bool) -> None:
+    def __init__(
+        self,
+        status: str | None,
+        send_inventory: bool,
+        config: dict[str, Any] | None = None,
+    ) -> None:
         self.status = status
         self.send_inventory = send_inventory
+        self.config = config
 
 
 def interpret(raw: str | bytes) -> Incoming:
@@ -108,6 +117,8 @@ def interpret(raw: str | bytes) -> Incoming:
         if isinstance(code, str) and code:
             return Incoming(code, False)
         return Incoming("error", False)
+    if kind == "config":
+        return Incoming(None, False, config=msg)
     return Incoming(None, False)
 
 
@@ -141,6 +152,7 @@ async def _hold(
     inventory_fn: Callable[[], dict[str, Any]],
     on_status: Callable[[str], None],
     on_inventory: Callable[[dict[str, Any]], None] | None,
+    on_config: Callable[[str], None] | None,
 ) -> None:
     incoming: asyncio.Queue[Any] = asyncio.Queue()
 
@@ -155,6 +167,7 @@ async def _hold(
 
     reader_task = asyncio.create_task(reader())
     sent_rev = -1
+    last_inventory: dict[str, Any] | None = None
     try:
         while not state.stopped():
             password, rev = state.snapshot()
@@ -175,9 +188,19 @@ async def _hold(
                 on_status(event.status)
             if event.send_inventory:
                 payload = inventory_fn()
+                last_inventory = payload
                 await ws.send(json.dumps(payload))
                 if on_inventory is not None:
                     on_inventory(payload)
+            if event.config is not None:
+                # Record the choice and answer. Do not spawn a process here.
+                reply, line = review_config(event.config, last_inventory)
+                if on_config is not None:
+                    on_config(line)
+                on_status(
+                    "config_ok" if reply.get("type") == "config_ok" else "bad_config"
+                )
+                await ws.send(json.dumps(reply))
     finally:
         reader_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -190,6 +213,7 @@ async def run_robot_session(
     inventory_fn: Callable[[], dict[str, Any]],
     on_status: Callable[[str], None],
     on_inventory: Callable[[dict[str, Any]], None] | None = None,
+    on_config: Callable[[str], None] | None = None,
 ) -> None:
     """Stay registered. Send inventory on each ``operator_attached``."""
     wake = asyncio.Event()
@@ -199,7 +223,9 @@ async def run_robot_session(
             async with connect(url, open_timeout=5) as ws:
                 if state.stopped():
                     return
-                await _hold(ws, state, wake, inventory_fn, on_status, on_inventory)
+                await _hold(
+                    ws, state, wake, inventory_fn, on_status, on_inventory, on_config
+                )
         except asyncio.CancelledError:
             raise
         except Exception:

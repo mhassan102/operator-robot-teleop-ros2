@@ -1,1 +1,1 @@
-"""Robot terminal: generated ID, password, and inventory."""
+"""Robot terminal: generated ID, password, inventory, and config review."""

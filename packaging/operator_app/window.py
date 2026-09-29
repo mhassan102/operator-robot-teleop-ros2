@@ -1,7 +1,8 @@
-"""PyQt5 login window.
+"""PyQt5 operator window.
 
-Success shows the robot hostname and a waiting state. A refused login
-stays on the form. There is no config page in this milestone.
+Login shows the robot hostname and waits for inventory. The config
+page then sends the choice when Review is pressed. A refused login
+stays on the form. Review does not start mlink, the camera, or the arm.
 """
 
 from __future__ import annotations
@@ -21,26 +22,33 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from packaging.operator_app.config import local_default_nic, review_text
+from packaging.operator_app.config_page import ConfigPage
 from packaging.operator_app.login import LoginResult, message_for
 from packaging.operator_app.session import OperatorSession
 
 
 class _ResultBus(QObject):
     arrived = pyqtSignal(object)
+    inbound = pyqtSignal(object)
 
 
 class LoginWindow(QWidget):
-    def __init__(self, registry_url: str) -> None:
+    def __init__(self, registry_url: str, operator_nic: str | None = None) -> None:
         super().__init__()
         self.registry_url = registry_url
         self.logged_in = False
         self.hostname = ""
+        self._operator_nic = operator_nic
         self._client: OperatorSession | None = None
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ready = threading.Event()
         self._closing = False
         self._shut = False
+        self._reader_started = False
+        self._reader_task: asyncio.Task[None] | None = None
+        self.config_page: ConfigPage | None = None
 
         self.setWindowTitle("Teleop operator")
         self.id_edit = QLineEdit()
@@ -95,6 +103,7 @@ class LoginWindow(QWidget):
 
         self._bus = _ResultBus(self)
         self._bus.arrived.connect(self.present)
+        self._bus.inbound.connect(self.present_inbound)
 
     @property
     def session(self) -> OperatorSession | None:
@@ -134,11 +143,59 @@ class LoginWindow(QWidget):
             self.waiting_label.setText("Waiting for the robot.")
             self.password_edit.clear()
             self.stack.setCurrentWidget(self.waiting_page)
+            self._start_reader()
             return
         self.logged_in = False
         self.login_button.setEnabled(True)
         self.status_label.setText(message_for(result.code))
         self.stack.setCurrentWidget(self.form_page)
+
+    def show_inventory(
+        self, inventory: dict[str, Any], operator_nic: str | None = None
+    ) -> None:
+        """Show Link, the robot NICs, arm, and video. Nothing is spawned."""
+        if not self.logged_in or self._closing or not isinstance(inventory, dict):
+            return
+        nic = self._operator_nic if operator_nic is None else operator_nic
+        if nic is None:
+            nic = local_default_nic()
+        if self.config_page is None:
+            self.config_page = ConfigPage()
+            self.config_page.review_button.clicked.connect(self.review)
+            self.stack.addWidget(self.config_page)
+        self.config_page.apply(inventory, nic, self.hostname)
+        self.stack.setCurrentWidget(self.config_page)
+        self.resize(760, 520)
+
+    def present_inbound(self, msg: object) -> None:
+        if self._closing or not isinstance(msg, dict):
+            return
+        kind = msg.get("type")
+        if kind == "inventory":
+            self.show_inventory(msg)
+            return
+        page = self.config_page
+        if page is None:
+            return
+        if kind == "config_ok" or (
+            kind == "error" and msg.get("code") in {"bad_config", "unreachable"}
+        ):
+            page.set_status(review_text(msg))
+
+    def review(self) -> None:
+        """Send the current choice. This does not start a process."""
+        page = self.config_page
+        if page is None or self._closing:
+            return
+        message = page.current_config()
+        client = self._client
+        loop = self._loop
+        if client is None or loop is None or not loop.is_running():
+            page.set_status("Cannot reach the registry.")
+            return
+        page.set_status("Sending...")
+        future = asyncio.run_coroutine_threadsafe(client.send_json(message), loop)
+        future.add_done_callback(self._on_review_sent)
 
     def shutdown(self) -> None:
         if self._shut:
@@ -149,6 +206,7 @@ class LoginWindow(QWidget):
         client = self._client
         thread = self._thread
         if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(self._cancel_reader)
             if client is not None:
                 closing = asyncio.run_coroutine_threadsafe(client.close(), loop)
                 try:
@@ -199,6 +257,61 @@ class LoginWindow(QWidget):
         if pending:
             loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         loop.close()
+
+    def _start_reader(self) -> None:
+        if self._reader_started:
+            return
+        loop = self._loop
+        if loop is None or self._client is None or not loop.is_running():
+            return
+        self._reader_started = True
+        asyncio.run_coroutine_threadsafe(self._reader(), loop)
+
+    def _cancel_reader(self) -> None:
+        task = self._reader_task
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _reader(self) -> None:
+        client = self._client
+        if client is None:
+            return
+        self._reader_task = asyncio.current_task()
+        try:
+            while not self._closing:
+                msg = await client.next_message()
+                if msg is None or self._closing:
+                    return
+                try:
+                    self._bus.inbound.emit(msg)
+                except RuntimeError:
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+        finally:
+            self._reader_task = None
+
+    def _on_review_sent(self, future: asyncio.Future[Any]) -> None:
+        if self._closing:
+            return
+        try:
+            future.result()
+        except Exception:
+            if self._closing:
+                return
+            try:
+                self._bus.inbound.emit(
+                    {
+                        "v": 1,
+                        "type": "error",
+                        "code": "unreachable",
+                        "detail": "Cannot reach the registry.",
+                    }
+                )
+            except RuntimeError:
+                return
 
     def _on_future(self, future: asyncio.Future[LoginResult]) -> None:
         if self._closing:

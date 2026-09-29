@@ -1,1 +1,1 @@
-"""Operator desktop app. This milestone is the login window only."""
+"""Operator desktop app. Login, then the config page."""
