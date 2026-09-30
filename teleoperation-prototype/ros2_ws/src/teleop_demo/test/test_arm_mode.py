@@ -23,6 +23,8 @@ from teleop_demo.arm_mode import (
     gripper_only_from_env,
     key_direction_allowed,
     parse_teleop_arm,
+    real_arm_gripper_log,
+    serial_port_from_env,
 )
 
 
@@ -123,6 +125,7 @@ def _parse_start_script(*args, extra_env=None) -> subprocess.CompletedProcess:
     root = _prototype_root()
     env = os.environ.copy()
     env.pop("TELEOP_ARM", None)
+    env.pop("TELEOP_SERIAL_PORT", None)
     env["TELEOP_ARM_PARSE_ONLY"] = "1"
     if extra_env:
         env.update(extra_env)
@@ -165,6 +168,22 @@ def test_real_arm_log_is_exact() -> None:
     assert REAL_ARM_SERIAL_PORT == "/dev/ttyACM0"
 
 
+def test_default_serial_port_when_unset(monkeypatch) -> None:
+    monkeypatch.delenv("TELEOP_SERIAL_PORT", raising=False)
+    assert serial_port_from_env() == "/dev/ttyACM0"
+    assert real_arm_gripper_log() == REAL_ARM_GRIPPER_LOG
+    assert serial_port_from_env("  ") == "/dev/ttyACM0"
+
+
+def test_serial_port_from_env_names_the_port(monkeypatch) -> None:
+    monkeypatch.setenv("TELEOP_SERIAL_PORT", "/dev/serial/by-id/example-if00")
+    assert serial_port_from_env() == "/dev/serial/by-id/example-if00"
+    assert real_arm_gripper_log() == (
+        "TELEOP_ARM=real; feetech gripper on /dev/serial/by-id/example-if00"
+    )
+    assert serial_port_from_env("/dev/ttyACM1") == "/dev/ttyACM1"
+
+
 def test_start_script_default_is_gazebo() -> None:
     result = _parse_start_script()
     assert result.returncode == 0, result.stderr
@@ -177,6 +196,41 @@ def test_start_script_real_arm_flag() -> None:
     assert result.returncode == 0, result.stderr
     assert "TELEOP_ARM=real" in result.stdout
     assert REAL_ARM_GRIPPER_LOG in result.stdout
+
+
+def test_start_script_serial_port_flag_is_parse_only() -> None:
+    path = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B61033180-if00"
+    result = _parse_start_script("--real-arm", "--serial-port", path)
+    assert result.returncode == 0, result.stderr
+    assert f"TELEOP_ARM=real; feetech gripper on {path}" in result.stdout
+    assert "missing" not in result.stderr
+    assert "/dev/ttyACM0" not in result.stdout
+
+
+def test_start_script_serial_port_env() -> None:
+    result = _parse_start_script(
+        "--real-arm",
+        extra_env={"TELEOP_SERIAL_PORT": "/dev/ttyACM1"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "feetech gripper on /dev/ttyACM1" in result.stdout
+
+
+def test_start_script_serial_port_flag_overrides_env() -> None:
+    result = _parse_start_script(
+        "--serial-port",
+        "/dev/ttyACM2",
+        "--real-arm",
+        extra_env={"TELEOP_SERIAL_PORT": "/dev/ttyACM1"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "feetech gripper on /dev/ttyACM2" in result.stdout
+
+
+def test_start_script_serial_port_requires_path() -> None:
+    result = _parse_start_script("--real-arm", "--serial-port")
+    assert result.returncode == 2
+    assert "--serial-port requires a path" in result.stderr
 
 
 def test_start_script_env_real_without_flag() -> None:
@@ -288,8 +342,10 @@ def test_robot_mlink_compose_gazebo_has_no_serial() -> None:
 def test_real_arm_compose_overlay_mounts_serial_only() -> None:
     root = _prototype_root()
     overlay = (root / REAL_ARM_COMPOSE_OVERLAY).read_text(encoding="utf-8")
-    assert "/dev/ttyACM0:/dev/ttyACM0" in overlay
-    assert "TELEOP_SERIAL_PORT: /dev/ttyACM0" in overlay
+    mounted = "${TELEOP_SERIAL_PORT:-/dev/ttyACM0}:${TELEOP_SERIAL_PORT:-/dev/ttyACM0}"
+    assert mounted in overlay
+    assert "TELEOP_SERIAL_PORT: ${TELEOP_SERIAL_PORT:-/dev/ttyACM0}" in overlay
+    assert "/dev/ttyACM0" in overlay
     start = (root / "scripts" / "start_robot_mlink.sh").read_text(encoding="utf-8")
     assert REAL_ARM_COMPOSE_OVERLAY in start
     assert "compose.robot-mlink.yaml" in start
@@ -339,7 +395,8 @@ def test_launch_file_wires_feetech_gripper_for_real() -> None:
         Path(__file__).resolve().parents[1] / "launch" / "robot_sim.launch.py"
     ).read_text(encoding="utf-8")
     assert "feetech_gripper" in launch_text
-    assert "REAL_ARM_GRIPPER_LOG" in launch_text
+    assert "real_arm_gripper_log" in launch_text
+    assert "serial_port_from_env" in launch_text
     assert "parse_teleop_arm" in launch_text
     assert "gripper_id" in launch_text
 
@@ -347,6 +404,7 @@ def test_launch_file_wires_feetech_gripper_for_real() -> None:
 def test_real_launch_graph_is_receiver_and_gripper(monkeypatch) -> None:
     module = _load_launch_module()
     monkeypatch.setenv("TELEOP_ARM", "real")
+    monkeypatch.delenv("TELEOP_SERIAL_PORT", raising=False)
     monkeypatch.delenv("TELEOP_MLINK", raising=False)
     executables, includes, logs = _graph(module.generate_launch_description())
     assert executables == {"robot_receiver", "feetech_gripper"}
@@ -358,11 +416,28 @@ def test_real_launch_graph_is_receiver_and_gripper(monkeypatch) -> None:
 def test_real_launch_graph_with_mlink(monkeypatch) -> None:
     module = _load_launch_module()
     monkeypatch.setenv("TELEOP_ARM", "real")
+    monkeypatch.delenv("TELEOP_SERIAL_PORT", raising=False)
     monkeypatch.setenv("TELEOP_MLINK", "1")
     executables, includes, _logs = _graph(module.generate_launch_description())
     assert executables == {"robot_receiver", "feetech_gripper", "robot_mlink_bridge"}
     assert includes == []
     assert executables.isdisjoint(GAZEBO_MOTION_EXECUTABLES)
+
+
+def test_real_launch_graph_names_serial_port(monkeypatch) -> None:
+    module = _load_launch_module()
+    monkeypatch.setenv("TELEOP_ARM", "real")
+    monkeypatch.setenv(
+        "TELEOP_SERIAL_PORT",
+        "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B61033180-if00",
+    )
+    monkeypatch.delenv("TELEOP_MLINK", raising=False)
+    _executables, _includes, logs = _graph(module.generate_launch_description())
+    assert any(
+        "feetech gripper on /dev/serial/by-id/usb-1a86_USB_Single_Serial_5B61033180-if00"
+        in log
+        for log in logs
+    )
 
 
 def test_invalid_arm_raises_at_launch(monkeypatch) -> None:

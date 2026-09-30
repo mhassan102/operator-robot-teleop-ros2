@@ -1,9 +1,9 @@
 # Overlay for TELEOP_ARM=real only. start_robot_mlink.sh --real-arm adds this
-# file. Gazebo compose (compose.robot-mlink.yaml alone) must not require
-# /dev/ttyACM0.
+# file. Device and TELEOP_SERIAL_PORT default to /dev/ttyACM0.
+# Gazebo compose (compose.robot-mlink.yaml alone) must not mount a serial device.
 services:
   robot:
     devices:
-      - /dev/ttyACM0:/dev/ttyACM0
+      - ${TELEOP_SERIAL_PORT:-/dev/ttyACM0}:${TELEOP_SERIAL_PORT:-/dev/ttyACM0}
     environment:
-      TELEOP_SERIAL_PORT: /dev/ttyACM0
+      TELEOP_SERIAL_PORT: ${TELEOP_SERIAL_PORT:-/dev/ttyACM0}

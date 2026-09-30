@@ -2,7 +2,8 @@
 # Robot host (Orin nvidia-3 default, or SO-ARM laptop with --real-arm).
 # Operator stays on the PC. Requires mlink-edge already running.
 # Default TELEOP_ARM=gazebo (headless, Orin). --real-arm: receiver + Feetech
-# gripper (+ mlink), no Gazebo. Mounts /dev/ttyACM0 only in real mode.
+# gripper (+ mlink), no Gazebo. Real mode mounts TELEOP_SERIAL_PORT
+# (default /dev/ttyACM0). Gazebo mode mounts no serial device.
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,18 +12,46 @@ cd "${project_dir}"
 export TELEOP_GAZEBO_GUI="${TELEOP_GAZEBO_GUI:-false}"
 
 real_arm_flag=0
-for arg in "$@"; do
+serial_port="${TELEOP_SERIAL_PORT:-/dev/ttyACM0}"
+args=("$@")
+index=0
+while (( index < ${#args[@]} )); do
+  arg="${args[$index]}"
   case "${arg}" in
     --real-arm)
       real_arm_flag=1
       ;;
+    --serial-port)
+      index=$((index + 1))
+      if (( index >= ${#args[@]} )); then
+        echo "ERROR: --serial-port requires a path" >&2
+        echo "Usage: $0 [--real-arm] [--serial-port PATH]" >&2
+        exit 2
+      fi
+      serial_port="${args[$index]}"
+      if [[ -z "${serial_port}" || "${serial_port}" == -* ]]; then
+        echo "ERROR: --serial-port requires a path" >&2
+        echo "Usage: $0 [--real-arm] [--serial-port PATH]" >&2
+        exit 2
+      fi
+      ;;
+    --serial-port=*)
+      serial_port="${arg#--serial-port=}"
+      if [[ -z "${serial_port}" || "${serial_port}" == -* ]]; then
+        echo "ERROR: --serial-port requires a path" >&2
+        echo "Usage: $0 [--real-arm] [--serial-port PATH]" >&2
+        exit 2
+      fi
+      ;;
     *)
       echo "ERROR: unknown argument: ${arg}" >&2
-      echo "Usage: $0 [--real-arm]" >&2
+      echo "Usage: $0 [--real-arm] [--serial-port PATH]" >&2
       exit 2
       ;;
   esac
+  index=$((index + 1))
 done
+export TELEOP_SERIAL_PORT="${serial_port}"
 
 if (( real_arm_flag )); then
   existing="${TELEOP_ARM:-}"
@@ -46,7 +75,7 @@ esac
 
 echo "TELEOP_ARM=${TELEOP_ARM}"
 if [[ "${TELEOP_ARM}" == "real" ]]; then
-  echo "TELEOP_ARM=real; feetech gripper on /dev/ttyACM0"
+  echo "TELEOP_ARM=real; feetech gripper on ${TELEOP_SERIAL_PORT}"
 fi
 
 if [[ "${TELEOP_ARM_PARSE_ONLY:-}" == "1" ]]; then
@@ -56,13 +85,13 @@ fi
 compose=(docker compose -f compose.robot-mlink.yaml)
 if [[ "${TELEOP_ARM}" == "real" ]]; then
   compose+=(-f compose.robot-mlink.real-arm.yaml)
-  if [[ ! -e /dev/ttyACM0 ]]; then
-    echo "ERROR: /dev/ttyACM0 missing; refusing to fall back to Gazebo" >&2
+  if [[ ! -e "${TELEOP_SERIAL_PORT}" ]]; then
+    echo "ERROR: ${TELEOP_SERIAL_PORT} missing; refusing to fall back to Gazebo" >&2
     exit 1
   fi
   if python3 -c "
 import glob, os, sys
-port = '/dev/ttyACM0'
+port = os.environ.get('TELEOP_SERIAL_PORT', '/dev/ttyACM0')
 try:
     target = os.stat(port)
 except OSError:
@@ -88,7 +117,7 @@ sys.exit(0)
 "; then
     :
   else
-    echo "ERROR: /dev/ttyACM0 is busy (another process owns it, e.g. LeRobot); refusing to fall back to Gazebo" >&2
+    echo "ERROR: ${TELEOP_SERIAL_PORT} is busy (another process owns it, e.g. LeRobot); refusing to fall back to Gazebo" >&2
     exit 1
   fi
 fi

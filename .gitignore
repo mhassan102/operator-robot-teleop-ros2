@@ -12,5 +12,7 @@ artifacts/
 video/bin/mediamtx
 video/logs/
 video/run/
+video/so-arm/logs/
+video/so-arm/run/
 **/__pycache__/
 *.py[cod]

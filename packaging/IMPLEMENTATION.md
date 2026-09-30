@@ -55,12 +55,12 @@ then `done`.
 | P2 | Robot terminal: ID, password, inventory | done | done |
 | P3 | Operator window: login | done | done |
 | P4 | Operator config page | done | done |
-| P5 | Serial port and camera arguments | remaining | remaining |
+| P5 | Serial port and camera arguments | done | done |
 | P6 | Robot supervisor (start and stop) | remaining | remaining |
 | P7 | Operator supervisor and in-app console | remaining | remaining |
 | P8 | Debian packages | remaining | remaining |
 
-**Next to implement:** `P5`.
+**Next to implement:** `P6`.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -515,7 +515,7 @@ mlink, the camera, and the arm stayed stopped. `commit: done`.
 
 ---
 
-### P5 — Serial port and camera arguments — STATUS: remaining
+### P5 — Serial port and camera arguments — STATUS: done
 
 **Goal.** The existing robot start path accepts a chosen serial
 device, and the SO-ARM camera launcher accepts a chosen capture
@@ -589,6 +589,13 @@ files, print the verify commands, print manual test steps for this
 PC, the robot PC, and EC2, and stop.
 ```
 
+P5 landed. `start_robot_mlink.sh --serial-port` and
+`video/so-arm/start.sh` take the chosen paths. Defaults stay
+`/dev/ttyACM0` and `/dev/video2` (that default must be
+`USB2.0_CAM1`). Parse-only does not open the arm or MediaMTX.
+Local pytest passed. The robot-PC steps in
+`packaging/docs/P5_usage.md` were not run. `commit: done`.
+
 ---
 
 ### P6 — Robot supervisor — STATUS: remaining
@@ -633,7 +640,9 @@ and the status messages. The implementer runs dry-run only.
 
 **Do not:** exec Docker or mlink in tests. Do not SSH. Do not edit
 `lab-edge.yaml`. Do not log TURN passwords (copy the yaml without
-printing it).
+printing it). Do not open a serial port or send `g` or `h`. Write
+the manual steps in `packaging/docs/P6_usage.md`. Those steps stay
+on dry-run.
 
 **Verify:**
 
@@ -650,11 +659,13 @@ You are the implementer. Branch feature/packaging. Read
 packaging/IMPLEMENTATION.md and implement only milestone P6
 (robot supervisor command plan and dry-run). Tests call the pure
 planner. TELEOP_SUPERVISOR_DRY_RUN=1 must not exec. Refuse
-Interface 2 and any 100.x bind address. Do not start the arm.
-Do not SSH. Do not commit or push. When P6 works, do not edit the
-status board and do not commit. List files, print the pytest
-command, print manual test steps for this PC, the robot PC, and
-EC2, and stop.
+Interface 2 and any 100.x bind address. Do not start mlink, Docker,
+the camera, or the arm. Do not open a serial port. Do not send g
+or h. Do not SSH. Do not commit or push. Do not change the status
+board. When P6 works, list files, print the pytest command, print
+manual test steps for this PC, the robot PC, and EC2, and stop.
+Please also write those lab test steps in packaging/docs/P6_usage.md.
+The steps must stay on dry-run and must not start teleop or move the gripper.
 ```
 
 ---

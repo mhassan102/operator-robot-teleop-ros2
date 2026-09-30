@@ -7,6 +7,8 @@ TELEOP_GRIPPER_ONLY on the operator ignores Cartesian keys / named poses.
 
 from __future__ import annotations
 
+import os
+
 ARM_GAZEBO = "gazebo"
 ARM_REAL = "real"
 VALID_ARM_MODES = (ARM_GAZEBO, ARM_REAL)
@@ -34,6 +36,31 @@ GAZEBO_MOTION_EXECUTABLES = frozenset(
 
 class InvalidArmMode(ValueError):
     """TELEOP_ARM was set to something other than gazebo|real."""
+
+
+def serial_port_from_env(raw: str | None = None) -> str:
+    """Serial device for the real arm.
+
+    ``None`` reads ``TELEOP_SERIAL_PORT``. Unset or blank stays
+    ``/dev/ttyACM0``.
+    """
+    if raw is None:
+        raw = os.environ.get("TELEOP_SERIAL_PORT")
+    if raw is None:
+        return REAL_ARM_SERIAL_PORT
+    value = raw.strip()
+    if value == "":
+        return REAL_ARM_SERIAL_PORT
+    return value
+
+
+def real_arm_gripper_log(port: str | None = None) -> str:
+    """Gripper log line naming the serial port in use."""
+    if port is None:
+        chosen = serial_port_from_env()
+    else:
+        chosen = port.strip() or REAL_ARM_SERIAL_PORT
+    return f"TELEOP_ARM=real; feetech gripper on {chosen}"
 
 
 def parse_teleop_arm(raw: str | None) -> str:

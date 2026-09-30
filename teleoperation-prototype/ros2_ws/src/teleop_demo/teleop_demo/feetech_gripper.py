@@ -6,7 +6,6 @@ addressed. Missing/busy serial exits without starting Gazebo.
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 
@@ -15,6 +14,7 @@ from teleop_demo_msgs.msg import TeleopState
 import rclpy
 from rclpy.node import Node
 
+from teleop_demo.arm_mode import serial_port_from_env
 from teleop_demo.feetech_bus import (
     FeetechBus,
     FeetechBusError,
@@ -38,7 +38,7 @@ class FeetechGripper(Node):
     def __init__(self, bus: FeetechBus | None = None) -> None:
         super().__init__("feetech_gripper")
         declare_teleop_parameters(self)
-        default_port = os.environ.get("TELEOP_SERIAL_PORT", "/dev/ttyACM0")
+        default_port = serial_port_from_env()
         self.declare_parameter("serial_port", default_port)
         self.declare_parameter("baudrate", 1_000_000)
         self.declare_parameter("gripper_id", VERIFIED_GRIPPER_ID)
