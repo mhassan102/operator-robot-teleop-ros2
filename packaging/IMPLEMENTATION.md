@@ -56,11 +56,11 @@ then `done`.
 | P3 | Operator window: login | done | done |
 | P4 | Operator config page | done | done |
 | P5 | Serial port and camera arguments | done | done |
-| P6 | Robot supervisor (start and stop) | remaining | remaining |
+| P6 | Robot supervisor (start and stop) | done | done |
 | P7 | Operator supervisor and in-app console | remaining | remaining |
 | P8 | Debian packages | remaining | remaining |
 
-**Next to implement:** `P6`.
+**Next to implement:** `P7`.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -598,7 +598,7 @@ Local pytest passed. The robot-PC steps in
 
 ---
 
-### P6 — Robot supervisor — STATUS: remaining
+### P6 — Robot supervisor — STATUS: done
 
 **Goal.** Given a `config` that already passed review, build the
 robot command list and, when not in dry-run, the robot app will be
@@ -668,6 +668,14 @@ Please also write those lab test steps in packaging/docs/P6_usage.md.
 The steps must stay on dry-run and must not start teleop or move the gripper.
 ```
 
+P6 landed. The robot terminal can build the start commands from the
+reviewed config: mlink (Tailscale or TURN), the SO-ARM camera, and
+`start_robot_mlink.sh --real-arm --serial-port`. Dry-run prints them
+and does not exec. Interface 2 and a `100.x` bind address are
+refused. Local pytest passed. The manual dry-run in
+`packaging/docs/P6_usage.md` was not run; the real start is the P7
+lab. `commit: done`.
+
 ---
 
 ### P7 — Operator supervisor and console — STATUS: remaining
@@ -708,7 +716,10 @@ messages.
   the local stop function (stubbed).
 
 **Do not:** run the real compose in tests. Do not SSH. Do not point
-the camera at coturn. Do not rewrite `web/operate.js`.
+the camera at coturn. Do not rewrite `web/operate.js`. Do not open
+a serial port or send `g` or `h`. Write the lab steps in
+`packaging/docs/P7_usage.md`, including the user's real-start check
+below. The implementer does not run that check.
 
 **Verify:**
 
@@ -733,10 +744,15 @@ List files, print the pytest command, print the lab steps, and stop.
 You are the implementer. Branch feature/packaging. Read
 packaging/IMPLEMENTATION.md and implement only milestone P7
 (operator supervisor and in-app console). Dry-run and pytest
-only. Do not start Docker or the arm. Do not SSH. Do not commit
-or push. When P7 works, do not edit the status board and do not
-commit. List files, print the pytest command and the lab steps
-from the milestone, and stop.
+only. TELEOP_SUPERVISOR_DRY_RUN=1 must not exec and must not load
+the console against a live server. Do not start mlink, Docker, the
+camera, or the arm. Do not open a serial port. Do not send g or h.
+Do not SSH. Do not commit or push. Do not change the status board.
+When P7 works, list files, print the pytest command, print the lab
+steps from the milestone, and stop.
+Please also write those lab test steps in packaging/docs/P7_usage.md.
+The real start, including one tap of g or h, is for the user after
+the gripper is clear. The implementer does not run it.
 ```
 
 ---

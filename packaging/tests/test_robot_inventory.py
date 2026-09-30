@@ -320,7 +320,11 @@ def test_interpret_sends_inventory_only_when_the_operator_attaches() -> None:
     assert error.send_inventory is False
     assert "AB23CD45" not in (error.status or "")
     assert interpret("{").status == "bad_json"
-    assert interpret(b'{"v":1,"type":"start"}').status is None
+    start = interpret(b'{"v":1,"type":"start"}')
+    assert start.status is None
+    assert start.config is None
+    assert start.action == "start"
+    assert interpret('{"v":1,"type":"stop"}').action == "stop"
     assert interpret('{"v":2,"type":"inventory"}').send_inventory is False
 
 
@@ -396,12 +400,13 @@ async def _attach_sends_inventory(uri: str) -> None:
             assert "AB23CD45" not in json.dumps(msg)
             assert msg["interfaces"][1]["default_route"] is False
             await operator.send(json.dumps({"v": 1, "type": "start"}))
-            late = asyncio.create_task(operator.recv())
-            done, _pending = await asyncio.wait({late}, timeout=0.4)
-            assert not done
-            late.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await late
+            refused = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            assert refused == {
+                "v": 1,
+                "type": "status",
+                "phase": "error",
+                "detail": "no config",
+            }
             state.set_password("ZZ99YY88")
             again = json.loads(await asyncio.wait_for(operator.recv(), 2))
             assert again == inv
@@ -427,7 +432,13 @@ async def _attach_sends_inventory(uri: str) -> None:
             await task
 
 
-def test_attach_sends_inventory() -> None:
+def test_attach_sends_inventory(monkeypatch: Any) -> None:
+    def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("start must not spawn")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    monkeypatch.setattr(subprocess, "run", boom)
+
     async def body() -> None:
         async with _listening() as uri:
             await _attach_sends_inventory(uri)

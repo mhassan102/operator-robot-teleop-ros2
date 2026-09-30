@@ -3,7 +3,8 @@
 Prints the generated ID and password, registers with the signalling
 server, and prints inventory when an operator attaches. A reviewed
 config is printed and answered. No PyQt and no display, so it runs
-over SSH. It does not start mlink, Docker, the camera, or the arm.
+over SSH. ``TELEOP_SUPERVISOR_DRY_RUN=1`` answers start and stop and
+does not spawn mlink, Docker, the camera, or the arm.
 """
 
 from __future__ import annotations
@@ -86,7 +87,12 @@ def launch(registry_url: str) -> int:
     try:
         asyncio.run(
             run_robot_session(
-                registry_url, state, publish, on_status, on_config=on_config
+                registry_url,
+                state,
+                publish,
+                on_status,
+                on_config=on_config,
+                on_line=emit,
             )
         )
     except KeyboardInterrupt:

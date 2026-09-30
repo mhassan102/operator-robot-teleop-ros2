@@ -1,9 +1,9 @@
 """Register the robot and publish inventory when an operator attaches.
 
 A ``config`` message is checked against the last inventory and answered
-with ``config_ok`` or ``bad_config``. The choice is only recorded.
-``start`` and ``stop`` are ignored. This module does not start mlink,
-Docker, the camera, or the arm.
+with ``config_ok`` or ``bad_config``. ``start`` and ``stop`` use the
+supervisor plan. ``TELEOP_SUPERVISOR_DRY_RUN=1`` sends status and does
+not spawn. Without that variable the live path runs the plan.
 """
 
 from __future__ import annotations
@@ -11,14 +11,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from packaging.robot_app.config import review_config
+from packaging.supervisor.robot_commands import decide_start, status_message
+from packaging.supervisor.robot_stop import decide_stop
 
 DEFAULT_REGISTRY = "ws://127.0.0.1:8765"
 _CLOSED = object()
@@ -88,10 +92,12 @@ class Incoming:
         status: str | None,
         send_inventory: bool,
         config: dict[str, Any] | None = None,
+        action: str | None = None,
     ) -> None:
         self.status = status
         self.send_inventory = send_inventory
         self.config = config
+        self.action = action
 
 
 def interpret(raw: str | bytes) -> Incoming:
@@ -119,7 +125,133 @@ def interpret(raw: str | bytes) -> Incoming:
         return Incoming("error", False)
     if kind == "config":
         return Incoming(None, False, config=msg)
+    if kind == "start":
+        return Incoming(None, False, action="start")
+    if kind == "stop":
+        return Incoming(None, False, action="stop")
     return Incoming(None, False)
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def dry_run_enabled() -> bool:
+    return os.environ.get("TELEOP_SUPERVISOR_DRY_RUN") == "1"
+
+
+def _status_line(message: Mapping[str, Any]) -> str:
+    detail = message.get("detail")
+    shown = detail if isinstance(detail, str) and detail else "-"
+    phase = message.get("phase")
+    phase_text = phase if isinstance(phase, str) else "-"
+    return f"Status  phase {phase_text}  detail {shown}"
+
+
+def _accepted(msg: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "link": msg.get("link"),
+        "iface1": msg.get("iface1"),
+        "iface2": msg.get("iface2"),
+        "arm": msg.get("arm"),
+        "video": msg.get("video"),
+    }
+
+
+async def _announce(
+    ws: Any,
+    message: Mapping[str, Any],
+    on_status: Callable[[str], None],
+    on_line: Callable[[str], None] | None,
+) -> None:
+    if on_line is not None:
+        on_line(_status_line(message))
+    phase = message.get("phase")
+    if isinstance(phase, str) and phase:
+        on_status(phase)
+    await ws.send(json.dumps(dict(message)))
+
+
+async def _run_live(
+    ws: Any,
+    commands: tuple[Any, ...],
+    on_status: Callable[[str], None],
+    on_line: Callable[[str], None] | None,
+    root: Path,
+    *,
+    announce: bool,
+    done: dict[str, Any],
+) -> None:
+    from packaging.supervisor import robot_exec
+
+    for command in commands:
+        if announce and command.label:
+            await _announce(
+                ws,
+                status_message("starting", command.label),
+                on_status,
+                on_line,
+            )
+        try:
+            await asyncio.to_thread(robot_exec.execute_command, command, root)
+        except Exception:
+            detail = command.label or "start failed"
+            await _announce(
+                ws, status_message("error", detail), on_status, on_line
+            )
+            return
+    await _announce(ws, done, on_status, on_line)
+
+
+async def _on_start(
+    ws: Any,
+    accepted: Mapping[str, Any] | None,
+    inventory: Mapping[str, Any] | None,
+    root: Path,
+    on_status: Callable[[str], None],
+    on_line: Callable[[str], None] | None,
+) -> None:
+    decision = decide_start(
+        accepted,
+        inventory,
+        root,
+        dry_run=dry_run_enabled(),
+    )
+    if decision.commands is None:
+        if decision.status is not None:
+            await _announce(ws, decision.status, on_status, on_line)
+        return
+    await _run_live(
+        ws,
+        decision.commands,
+        on_status,
+        on_line,
+        root,
+        announce=True,
+        done=status_message("ready", ""),
+    )
+
+
+async def _on_stop(
+    ws: Any,
+    root: Path,
+    on_status: Callable[[str], None],
+    on_line: Callable[[str], None] | None,
+) -> None:
+    decision = decide_stop(root, dry_run=dry_run_enabled())
+    if decision.commands is None:
+        if decision.status is not None:
+            await _announce(ws, decision.status, on_status, on_line)
+        return
+    await _run_live(
+        ws,
+        decision.commands,
+        on_status,
+        on_line,
+        root,
+        announce=False,
+        done=status_message("stopped", ""),
+    )
 
 
 async def _next(
@@ -153,6 +285,8 @@ async def _hold(
     on_status: Callable[[str], None],
     on_inventory: Callable[[dict[str, Any]], None] | None,
     on_config: Callable[[str], None] | None,
+    on_line: Callable[[str], None] | None,
+    root: Path,
 ) -> None:
     incoming: asyncio.Queue[Any] = asyncio.Queue()
 
@@ -168,6 +302,7 @@ async def _hold(
     reader_task = asyncio.create_task(reader())
     sent_rev = -1
     last_inventory: dict[str, Any] | None = None
+    accepted: dict[str, Any] | None = None
     try:
         while not state.stopped():
             password, rev = state.snapshot()
@@ -193,14 +328,23 @@ async def _hold(
                 if on_inventory is not None:
                     on_inventory(payload)
             if event.config is not None:
-                # Record the choice and answer. Do not spawn a process here.
                 reply, line = review_config(event.config, last_inventory)
+                if reply.get("type") == "config_ok":
+                    accepted = _accepted(event.config)
+                else:
+                    accepted = None
                 if on_config is not None:
                     on_config(line)
                 on_status(
                     "config_ok" if reply.get("type") == "config_ok" else "bad_config"
                 )
                 await ws.send(json.dumps(reply))
+            if event.action == "start":
+                await _on_start(
+                    ws, accepted, last_inventory, root, on_status, on_line
+                )
+            elif event.action == "stop":
+                await _on_stop(ws, root, on_status, on_line)
     finally:
         reader_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -214,8 +358,11 @@ async def run_robot_session(
     on_status: Callable[[str], None],
     on_inventory: Callable[[dict[str, Any]], None] | None = None,
     on_config: Callable[[str], None] | None = None,
+    on_line: Callable[[str], None] | None = None,
+    root: Path | None = None,
 ) -> None:
     """Stay registered. Send inventory on each ``operator_attached``."""
+    repo = root if root is not None else repo_root()
     wake = asyncio.Event()
     state.attach_loop(asyncio.get_running_loop(), wake)
     while not state.stopped():
@@ -224,7 +371,15 @@ async def run_robot_session(
                 if state.stopped():
                     return
                 await _hold(
-                    ws, state, wake, inventory_fn, on_status, on_inventory, on_config
+                    ws,
+                    state,
+                    wake,
+                    inventory_fn,
+                    on_status,
+                    on_inventory,
+                    on_config,
+                    on_line,
+                    repo,
                 )
         except asyncio.CancelledError:
             raise
