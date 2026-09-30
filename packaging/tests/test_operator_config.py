@@ -396,7 +396,9 @@ def test_config_page_values() -> None:
         assert page.operator_network.text() == "Operator network: wlo1"
         assert page.findChildren(QLineEdit) == []
         assert [button.text() for button in page.findChildren(QPushButton)] == [
-            "Review"
+            "Review",
+            "Start",
+            "Stop",
         ]
         message = page.current_config()
         assert message == _good()

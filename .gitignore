@@ -16,5 +16,5 @@ video/so-arm/logs/
 video/so-arm/run/
 **/__pycache__/
 *.py[cod]
-# Supervisor runtime copies. ice-edge.yaml may contain a TURN password.
+# Supervisor runtime copies. ice-edge.yaml and ice-op.yaml may contain a TURN password.
 packaging/run/

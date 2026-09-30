@@ -1,7 +1,7 @@
-"""Config page: Link, two robot NICs, arm, video, and Review.
+"""Config page: Link, two robot NICs, arm, video, Review, Start, and Stop.
 
-Review is the only action. Interface 2 may be chosen. This page does
-not start mlink, the camera, or the arm, and it does not bond Interface 2.
+Review sends the choice. Start and Stop are wired by the window. This
+page does not spawn processes and does not bond Interface 2.
 """
 
 from __future__ import annotations
@@ -73,10 +73,18 @@ class ConfigPage(QWidget):
 
         self.review_button = QPushButton("Review")
         self.review_button.setObjectName("review")
+        self.start_button = QPushButton("Start")
+        self.start_button.setObjectName("start")
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setObjectName("stop")
         self.review_status = QLabel("")
         self.review_status.setObjectName("review_status")
         self.review_status.setWordWrap(True)
         self.review_status.setTextFormat(Qt.PlainText)
+        self.session_status = QLabel("")
+        self.session_status.setObjectName("session_status")
+        self.session_status.setWordWrap(True)
+        self.session_status.setTextFormat(Qt.PlainText)
 
         link_box = QWidget()
         link_layout = QVBoxLayout(link_box)
@@ -101,13 +109,23 @@ class ConfigPage(QWidget):
         root.addWidget(caption)
         root.addWidget(self.hostname_label)
         root.addLayout(form)
+        actions = QHBoxLayout()
+        actions.addWidget(self.review_button)
+        actions.addWidget(self.start_button)
+        actions.addWidget(self.stop_button)
+        actions.addStretch(1)
+
         root.addWidget(self.operator_network)
-        root.addWidget(self.review_button)
+        root.addLayout(actions)
         root.addWidget(self.review_status)
+        root.addWidget(self.session_status)
         root.addStretch(1)
 
     def set_status(self, text: str) -> None:
         self.review_status.setText(text)
+
+    def set_session_status(self, text: str) -> None:
+        self.session_status.setText(text)
 
     def apply(
         self, inventory: Mapping[str, Any], operator_nic: str, hostname: str

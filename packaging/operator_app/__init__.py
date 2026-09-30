@@ -1,1 +1,1 @@
-"""Operator desktop app. Login, then the config page."""
+"""Operator desktop app. Login, config, then the console after ready."""

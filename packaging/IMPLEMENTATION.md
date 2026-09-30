@@ -57,10 +57,10 @@ then `done`.
 | P4 | Operator config page | done | done |
 | P5 | Serial port and camera arguments | done | done |
 | P6 | Robot supervisor (start and stop) | done | done |
-| P7 | Operator supervisor and in-app console | remaining | remaining |
+| P7 | Operator supervisor and in-app console | done | done |
 | P8 | Debian packages | remaining | remaining |
 
-**Next to implement:** `P7`.
+**Next to implement:** `P8`.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -678,7 +678,7 @@ lab. `commit: done`.
 
 ---
 
-### P7 — Operator supervisor and console — STATUS: remaining
+### P7 — Operator supervisor and console — STATUS: done
 
 **Goal.** After the robot reports `ready`, the operator app starts
 its half and shows `http://127.0.0.1:8090/` inside the window.
@@ -754,6 +754,13 @@ Please also write those lab test steps in packaging/docs/P7_usage.md.
 The real start, including one tap of g or h, is for the user after
 the gripper is clear. The implementer does not run it.
 ```
+
+P7 landed. After login and config, the operator window starts the
+existing stacks and shows the console at `http://127.0.0.1:8090/`.
+Manual check of `packaging/docs/P7_usage.md`: signalling on EC2,
+robot terminal, operator app, Tailscale, follower serial,
+`USB2.0_CAM1`. HUD connected. One tap of `g` or `h` moved the
+gripper. `commit: done`.
 
 ---
 
