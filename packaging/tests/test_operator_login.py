@@ -302,6 +302,23 @@ def test_window_shows_errors_and_hostname() -> None:
         window.show()
         assert window.login_button.text() == "Log in"
         assert window.password_edit.echoMode() == QLineEdit.Password
+        window.password_edit.setText(_PASSWORD)
+        assert window.password_edit.displayText() != _PASSWORD
+        window.password_edit.clear()
+        from packaging.operator_app.theme import (
+            ACCENT,
+            BG,
+            LINE,
+            MUTED,
+            PANEL,
+            PANEL_2,
+            STOP,
+            TEXT,
+        )
+
+        sheet = window.styleSheet()
+        for color in (BG, PANEL, PANEL_2, TEXT, MUTED, ACCENT, STOP, LINE):
+            assert color in sheet
         assert window.findChildren(QComboBox) == []
         assert window.findChildren(QRadioButton) == []
         assert window.stack.currentWidget() is window.form_page

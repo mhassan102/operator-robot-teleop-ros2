@@ -21,11 +21,11 @@ from typing import Any
 
 from PyQt5.QtCore import QEventLoop, QObject, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
 from packaging.operator_app.config import local_default_nic, review_text
 from packaging.operator_app.config_page import ConfigPage
 from packaging.operator_app.login import LoginResult, message_for
+from packaging.operator_app.theme import accent_dot, install_theme, section_label
 from packaging.operator_app.session import OperatorSession
 from packaging.supervisor.operator_commands import (
     OperatorDecision,
@@ -119,15 +120,19 @@ class LoginWindow(QWidget):
         self.console_view: QWidget | None = None
 
         self.setWindowTitle("Teleop operator")
+        self.setObjectName("operator_window")
         self.id_edit = QLineEdit()
         self.id_edit.setObjectName("robot_id")
-        self.id_edit.setPlaceholderText("9-digit ID")
+        self.id_edit.setPlaceholderText("ID")
         self.password_edit = QLineEdit()
         self.password_edit.setObjectName("password")
         self.password_edit.setEchoMode(QLineEdit.Password)
         self.password_edit.setPlaceholderText("Password")
         self.login_button = QPushButton("Log in")
         self.login_button.setObjectName("login")
+        self.login_button.setCursor(Qt.PointingHandCursor)
+        self.login_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.login_button.setFixedSize(120, 36)
         self.login_button.clicked.connect(self.submit)
         self.id_edit.returnPressed.connect(self.submit)
         self.password_edit.returnPressed.connect(self.submit)
@@ -135,6 +140,8 @@ class LoginWindow(QWidget):
         self.status_label.setObjectName("status")
         self.status_label.setWordWrap(True)
         self.registry_label = QLabel(registry_url)
+        self.registry_label.setObjectName("registry")
+        self.registry_label.setWordWrap(True)
         self.registry_label.setTextFormat(Qt.PlainText)
 
         self.hostname_label = QLabel("")
@@ -142,47 +149,91 @@ class LoginWindow(QWidget):
         self.hostname_label.setTextFormat(Qt.PlainText)
         self.waiting_label = QLabel("")
         self.waiting_label.setObjectName("waiting")
+        self.waiting_label.setWordWrap(True)
         self.waiting_label.setTextFormat(Qt.PlainText)
 
         self.form_page = QWidget()
-        form_layout = QVBoxLayout(self.form_page)
-        fields = QFormLayout()
-        fields.addRow("Robot ID", self.id_edit)
-        fields.addRow("Password", self.password_edit)
-        form_layout.addLayout(fields)
-        form_layout.addWidget(self.login_button)
+        self.form_page.setObjectName("form_page")
+        form_outer = QVBoxLayout(self.form_page)
+        form_outer.setContentsMargins(16, 28, 16, 16)
+        card = QWidget()
+        card.setObjectName("panel")
+        card.setFixedWidth(340)
+        form_layout = QVBoxLayout(card)
+        form_layout.setContentsMargins(20, 18, 20, 18)
+        form_layout.setSpacing(8)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(12)
+        brand = QLabel("Teleop")
+        brand.setObjectName("brand")
+        brand.setTextFormat(Qt.PlainText)
+        brand_row.addWidget(brand, 0, Qt.AlignVCenter)
+        brand_row.addWidget(accent_dot(), 0, Qt.AlignVCenter)
+        brand_row.addStretch(1)
+        form_layout.addLayout(brand_row)
+        form_layout.addSpacing(4)
+        form_layout.addWidget(self.id_edit)
+        form_layout.addWidget(self.password_edit)
+        form_layout.addSpacing(12)
+        form_layout.addWidget(self.login_button, 0, Qt.AlignLeft)
         form_layout.addWidget(self.status_label)
         form_layout.addWidget(self.registry_label)
+        form_row = QHBoxLayout()
+        form_row.addStretch(1)
+        form_row.addWidget(card)
+        form_row.addStretch(1)
+        form_outer.addLayout(form_row)
+        form_outer.addStretch(1)
 
         self.waiting_page = QWidget()
-        waiting_layout = QVBoxLayout(self.waiting_page)
-        caption = QLabel("Robot")
-        caption.setTextFormat(Qt.PlainText)
-        waiting_layout.addWidget(caption)
+        self.waiting_page.setObjectName("waiting_page")
+        waiting_outer = QVBoxLayout(self.waiting_page)
+        waiting_outer.setContentsMargins(16, 16, 16, 16)
+        waiting_card = QWidget()
+        waiting_card.setObjectName("panel")
+        waiting_layout = QVBoxLayout(waiting_card)
+        waiting_layout.setContentsMargins(16, 14, 16, 16)
+        waiting_layout.setSpacing(8)
+        waiting_layout.addWidget(section_label("ROBOT"))
         waiting_layout.addWidget(self.hostname_label)
         waiting_layout.addWidget(self.waiting_label)
+        waiting_outer.addWidget(waiting_card)
+        waiting_outer.addStretch(1)
 
         self.stack = QStackedWidget()
+        self.stack.setObjectName("pages")
         self.stack.addWidget(self.form_page)
         self.stack.addWidget(self.waiting_page)
 
         self.session_bar = QWidget()
         self.session_bar.setObjectName("session_bar")
+        self.session_bar.setMinimumHeight(48)
         bar_layout = QHBoxLayout(self.session_bar)
-        bar_layout.setContentsMargins(0, 0, 0, 0)
+        bar_layout.setContentsMargins(20, 8, 20, 8)
+        bar_layout.setSpacing(8)
+        bar_brand = QLabel("Teleop")
+        bar_brand.setObjectName("brand")
+        bar_brand.setTextFormat(Qt.PlainText)
         self.stop_button = QPushButton("Stop")
         self.stop_button.setObjectName("stop")
+        self.stop_button.setCursor(Qt.PointingHandCursor)
         self.logout_button = QPushButton("Logout")
         self.logout_button.setObjectName("logout")
+        self.logout_button.setCursor(Qt.PointingHandCursor)
         self.bar_status = QLabel("")
         self.bar_status.setObjectName("bar_status")
         self.bar_status.setWordWrap(True)
+        self.bar_status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.bar_status.setTextFormat(Qt.PlainText)
+        self.bar_status.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.stop_button.clicked.connect(self.stop_session)
         self.logout_button.clicked.connect(self.logout_session)
-        bar_layout.addWidget(self.stop_button)
-        bar_layout.addWidget(self.logout_button)
-        bar_layout.addWidget(self.bar_status, 1)
+        bar_layout.addWidget(bar_brand, 0, Qt.AlignVCenter)
+        bar_layout.addWidget(accent_dot(), 0, Qt.AlignVCenter)
+        bar_layout.addStretch(1)
+        bar_layout.addWidget(self.stop_button, 0, Qt.AlignVCenter)
+        bar_layout.addWidget(self.logout_button, 0, Qt.AlignVCenter)
+        bar_layout.addWidget(self.bar_status, 0, Qt.AlignVCenter)
         self.session_bar.hide()
 
         self._stop_timer = QTimer(self)
@@ -193,9 +244,12 @@ class LoginWindow(QWidget):
         self._logout_timer.timeout.connect(self._on_logout_timeout)
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
         root.addWidget(self.session_bar)
-        root.addWidget(self.stack)
-        self.resize(440, 240)
+        root.addWidget(self.stack, 1)
+        self.resize(520, 400)
+        install_theme(self)
 
         self._bus = _ResultBus(self)
         self._bus.arrived.connect(self.present)
@@ -270,7 +324,7 @@ class LoginWindow(QWidget):
         self.config_page.apply(inventory, nic, self.hostname)
         self.session_bar.show()
         self.stack.setCurrentWidget(self.config_page)
-        self.resize(760, 520)
+        self.resize(1100, 640)
 
     def present_inbound(self, msg: object) -> None:
         if self._closing or not isinstance(msg, dict):
@@ -489,7 +543,7 @@ class LoginWindow(QWidget):
             self.status_label.setText("Logged out. " + _UNCONFIRMED)
         else:
             self.status_label.setText("Logged out.")
-        self.resize(440, 240)
+        self.resize(520, 400)
 
     def _close_session_socket(self) -> None:
         loop = self._loop
@@ -665,6 +719,11 @@ class LoginWindow(QWidget):
         if self._closing:
             return
         self.bar_status.setText(text)
+        filled = "true" if text else "false"
+        if self.bar_status.property("filled") != filled:
+            self.bar_status.setProperty("filled", filled)
+            self.bar_status.style().unpolish(self.bar_status)
+            self.bar_status.style().polish(self.bar_status)
         page = self.config_page
         if page is not None:
             page.set_session_status(text)
