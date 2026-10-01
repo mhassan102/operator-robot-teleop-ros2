@@ -203,8 +203,11 @@ range coturn allocates from.
 9. The operator window shows the existing console
    (http://127.0.0.1:8090/) inside the desktop app.
 10. Keys g and h move the gripper the same way they do today.
-    Closing the operator window stops the operator stack so the
-    500 ms watchdog can torque the gripper off.
+    Stop and Logout stay visible on the console. Stop brings both
+    sides down and leaves the login in place, so Start can run
+    again with the same config. Logout brings both sides down and
+    returns to the login page. Closing the window does the same
+    cleanup as Stop, then exits.
 ```
 
 ```mermaid
@@ -334,8 +337,13 @@ Operator, only after the robot reports ready:
 | 3 | Load `http://127.0.0.1:8090/` in the window | same |
 
 Stop runs the operator stack down first, then the robot stack
-(container, mlink daemon, camera). That matches today's
-torque-off order.
+(container, mlink daemon, camera). That is the torque-off order:
+operator heartbeats end, the 500 ms watchdog releases the gripper,
+then the robot container, mlink-edge, and the camera stop. The
+Stop and Logout buttons stay on screen after the console replaces
+the config page. Logout also detaches this operator. The robot
+terminal keeps its ID and password, so a later login can attach
+again.
 
 Generated ICE yaml is a runtime copy of the gitignored
 `turn/config/local_op.yaml` and `local_edge.yaml` with `bind_ip`

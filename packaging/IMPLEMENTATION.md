@@ -58,9 +58,10 @@ then `done`.
 | P5 | Serial port and camera arguments | done | done |
 | P6 | Robot supervisor (start and stop) | done | done |
 | P7 | Operator supervisor and in-app console | done | done |
+| P9 | Stop, start again, and logout | remaining | remaining |
 | P8 | Debian packages | remaining | remaining |
 
-**Next to implement:** `P8`.
+**Next to implement:** `P9`. P8 waits until P9 is done.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -764,7 +765,108 @@ gripper. `commit: done`.
 
 ---
 
+### P9 — Stop, start again, and logout — STATUS: remaining
+
+**Goal.** Stop and Logout stay on screen after the console replaces
+the config page. Stop brings the operator stack and the robot stack
+down, then Start can run again on the same login with the config
+already accepted. Logout does that stop and returns to the login
+page. Closing the window stops both sides, then exits.
+
+**Why.** Today Stop sits on the config page, so it disappears when
+the console is shown. Closing the window stops only the operator
+container and mlink-op. The robot container, mlink-edge, and the
+camera stay up until someone runs `stop_mlink.sh`, kills
+`packaging/run/mlink-edge.pid`, and runs `video/so-arm/stop.sh`.
+
+**Read:** `packaging/operator_app/window.py`,
+`packaging/supervisor/robot_stop.py`,
+`packaging/robot_app/session.py`.
+
+**Implement:**
+
+- A bar above the page stack, visible on the config page and on
+  the console, with **Stop**, **Logout**, and a status line.
+- **Stop**, same login, same accepted config:
+  1. Stop the operator stack first (existing local operator stop).
+  2. Send `{"v":1,"type":"stop"}`.
+  3. The robot runs the existing stop plan in order:
+     `teleoperation-prototype/scripts/stop_mlink.sh`, then the
+     `packaging/run/mlink-edge.pid` process, then
+     `video/so-arm/stop.sh`. It replies
+     `{"v":1,"type":"status","phase":"stopped","detail":""}`.
+  4. The operator waits for `stopped`, up to 30 seconds. On timeout
+     the status line says the robot did not confirm.
+  5. Hide the console and show the config page. Start is enabled.
+  6. Start again sends `start`. The robot uses the config already
+     accepted. Review is required again only when a dropdown
+     changes. No second login.
+- **Logout:**
+  1. The same both-sides stop as Stop.
+  2. Send `{"v":1,"type":"logout"}`.
+  3. The registry detaches this operator and keeps the robot
+     registration and password.
+  4. The window returns to the login page. Start is not available.
+     The session socket is closed.
+  5. A new login with the ID and password still printed by the
+     robot terminal works. Logout does not make the robot generate
+     a new password.
+- **Window close** does the Stop cleanup (operator first, then
+  `stop`, brief wait for `stopped`) and then exits. It does not
+  leave the robot stack running. It is not a Logout.
+- Robot process: SIGINT and SIGTERM run that same robot stop plan,
+  then the process exits.
+- A second Start after `stopped` must work. The robot keeps the
+  accepted config across Stop.
+
+**Do not:** hide Stop or Logout behind the console. Do not stop the
+robot container before the operator stack. Do not clear the robot
+ID or password on logout. Do not start mlink, Docker, the camera,
+or the arm in this session. Do not open a serial port. Do not send
+`g` or `h`. Do not SSH. Do not implement P8. Write the lab steps in
+`packaging/docs/P9_usage.md`. The real run is for the user: Start,
+one tap of `g` or `h` with the gripper clear, Stop, confirm the
+robot container and camera are down, Start again without logging
+in, one tap of `g` or `h`, Logout, confirm Start is unavailable
+until login.
+
+**Verify:**
+
+```bash
+cd /home/muhammadhassan/robots && QT_QPA_PLATFORM=offscreen PYTHONPATH=. python3 -m pytest -q packaging/tests
+```
+
+**When done:** do not edit the status board and do not commit. List files, print the pytest command, print manual test steps for this PC, the robot PC, and EC2, and stop.
+
+**Session prompt:**
+
+```text
+You are the implementer. Branch feature/packaging. Read
+packaging/IMPLEMENTATION.md milestone P9 and packaging/ARCHITECTURE.md
+"What Start launches". Implement only P9 (Stop, start again, and
+logout). Stop and Logout stay visible when the console is showing.
+Stop brings the operator stack down first, then the robot stack,
+and returns to the config page so Start can run again with the
+accepted config. Logout does that stop, detaches the operator, and
+returns to the login page. The robot keeps its ID and password.
+Closing the window stops both sides, then exits. SIGINT on the
+robot process runs the same robot stop. Dry-run and offscreen
+pytest only. Do not start mlink, Docker, the camera, or the arm.
+Do not open a serial port. Do not send g or h. Do not SSH. Do not
+commit or push. Do not change the status board. Do not implement
+P8. When P9 works, list files, print the pytest command, print
+manual test steps for this PC, the robot PC, and EC2, and stop.
+Please also write those lab test steps in packaging/docs/P9_usage.md.
+The real start, Stop, start-again, and Logout, including one tap
+of g or h, are for the user after the gripper is clear. The
+implementer does not run them.
+```
+
+---
+
 ### P8 — Debian packages — STATUS: remaining
+
+Do not start P8 until P9 is done.
 
 **Goal.** Two installable amd64 `.deb` files. The operator package
 adds an application-menu launcher. The robot package installs a
@@ -836,5 +938,6 @@ commit. List files, print the dpkg-deb commands, and stop.
 
 The person at the robot watches the arm. First motion is one tap of
 `g` or `h` with the gripper clear, after the HUD says CONNECTED.
-Closing the operator app is the soft stop. Packaging sessions do
-not run that lab; the user does, after P7.
+Stop and closing the operator window bring the operator stack down
+first, then the robot stack. Packaging sessions do not run that
+lab; the user does.
