@@ -19,12 +19,13 @@ _TURN = Path(__file__).resolve().parents[2] / "turn"
 if str(_TURN) not in sys.path:
     sys.path.insert(0, str(_TURN))
 
-from packaging.robot_app.cli import command_for  # noqa: E402
-from packaging.robot_app.credentials import (  # noqa: E402
-    PASSWORD_ALPHABET,
-    new_credentials,
-    new_password,
+from packaging.robot_app.cli import (  # noqa: E402
+    apply_new_password,
+    command_for,
+    prompt_password,
+    status_line,
 )
+from packaging.robot_app.credentials import new_id  # noqa: E402
 from packaging.robot_app.inventory import (  # noqa: E402
     camera_page_for,
     collect_links,
@@ -96,40 +97,131 @@ def test_terminal_commands_and_no_qt() -> None:
     assert "PyQt5" not in _ROBOT_MODULES
 
 
-def test_credentials_match_the_alphabet() -> None:
-    assert PASSWORD_ALPHABET == "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    assert set("IO01").isdisjoint(PASSWORD_ALPHABET)
+def test_new_id_is_nine_digits() -> None:
     ids: set[str] = set()
-    passwords: set[str] = set()
     for _ in range(40):
-        robot_id, password = new_credentials()
+        robot_id = new_id()
         assert len(robot_id) == 9
         assert robot_id.isdigit()
-        assert len(password) == 8
-        assert set(password) <= set(PASSWORD_ALPHABET)
         ids.add(robot_id)
-        passwords.add(password)
-        again = new_password()
-        assert len(again) == 8
-        assert set(again) <= set(PASSWORD_ALPHABET)
     assert len(ids) > 1
-    assert len(passwords) > 1
 
 
-def test_new_password_keeps_the_same_id() -> None:
-    robot_id, password = new_credentials()
-    state = RobotState(robot_id, password, "unit-test")
-    fresh = new_password()
-    state.set_password(fresh)
-    assert state.robot_id == robot_id
-    assert state.snapshot() == (fresh, 2)
-    assert register_message(robot_id, fresh, "unit-test") == {
+def test_prompt_repeats_until_the_entries_match() -> None:
+    answers = iter(["", "x", "one", "two", "chosen-secret", "chosen-secret"])
+    prompts: list[str] = []
+    notes: list[str] = []
+
+    def read(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(answers)
+
+    got = prompt_password(read, notes.append)
+    assert got == "chosen-secret"
+    assert prompts == [
+        "New password: ",
+        "Retype new password: ",
+        "New password: ",
+        "Retype new password: ",
+        "New password: ",
+        "Retype new password: ",
+    ]
+    assert notes == [
+        "No password supplied.",
+        "Sorry, passwords do not match.",
+        "Password updated.",
+    ]
+    joined = "\n".join(notes)
+    assert "chosen-secret" not in joined
+    assert "one" not in joined
+    assert "two" not in joined
+    assert "x" not in joined
+
+
+def test_password_is_not_stripped() -> None:
+    answers = iter(["  secret", "secret", "  secret", "  secret"])
+
+    def read(_prompt: str) -> str:
+        return next(answers)
+
+    notes: list[str] = []
+    got = prompt_password(read, notes.append)
+    assert got == "  secret"
+    assert notes == ["Sorry, passwords do not match.", "Password updated."]
+    assert "secret" not in "\n".join(notes)
+
+
+def test_interrupt_during_prompt_does_not_print() -> None:
+    def read(_prompt: str) -> str:
+        raise KeyboardInterrupt
+
+    notes: list[str] = []
+    assert prompt_password(read, notes.append) is None
+    assert notes == []
+
+
+def test_status_line_has_the_id_and_not_the_password() -> None:
+    secret = "not-printed"
+    line = status_line("123456789", "registered")
+    assert line == "ID 123456789  status registered"
+    assert secret not in line
+    assert "Password" not in line
+
+
+def test_replacement_keeps_the_id_and_is_not_printed(capsys: Any) -> None:
+    state = RobotState("123456789", "previous-secret", "unit-test")
+    answers = iter(["", "", "next-secret", "next-secret"])
+
+    def read(_prompt: str) -> str:
+        return next(answers)
+
+    assert apply_new_password(state, read, print) is True
+    assert state.robot_id == "123456789"
+    password, revision = state.snapshot()
+    assert revision == 2
+    assert password == "next-secret"
+    assert register_message(state.robot_id, password, state.hostname) == {
         "v": 1,
         "type": "register",
-        "robot_id": robot_id,
-        "password": fresh,
+        "robot_id": "123456789",
+        "password": "next-secret",
         "hostname": "unit-test",
     }
+    printed = capsys.readouterr().out
+    assert printed == "No password supplied.\nPassword updated.\n"
+    assert "previous-secret" not in printed
+    assert "next-secret" not in printed
+    assert "next-secret" not in status_line(state.robot_id, "registered")
+    assert "previous-secret" not in repr(state)
+    assert "next-secret" not in repr(state)
+
+
+def test_closed_prompt_keeps_the_previous_password() -> None:
+    state = RobotState("123456789", "previous-secret", "unit-test")
+
+    def read(_prompt: str) -> str:
+        raise EOFError
+
+    notes: list[str] = []
+    assert apply_new_password(state, read, notes.append) is False
+    assert state.snapshot() == ("previous-secret", 1)
+    assert notes == []
+    assert "previous-secret" not in repr(state)
+
+
+def test_missing_tty_does_not_read_a_password(monkeypatch: Any) -> None:
+    import packaging.robot_app.cli as robot_cli
+
+    monkeypatch.setattr(robot_cli, "_have_tty", lambda: False)
+
+    def forbid(_prompt: str) -> str:
+        raise AssertionError("password was read without a terminal")
+
+    monkeypatch.setattr(robot_cli.getpass, "getpass", forbid)
+    notes: list[str] = []
+    assert robot_cli.prompt_password(robot_cli._tty_secret, notes.append) is None
+    assert notes == []
+    assert robot_cli._prompt_active is False
 
 
 def test_inventory_fixture_hides_metadata_and_flags_local_nic() -> None:

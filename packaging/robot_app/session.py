@@ -42,6 +42,9 @@ class RobotState:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._wake: asyncio.Event | None = None
 
+    def __repr__(self) -> str:
+        return f"RobotState({self.robot_id!r}, hostname={self.hostname!r})"
+
     def attach_loop(
         self, loop: asyncio.AbstractEventLoop, wake: asyncio.Event
     ) -> None:

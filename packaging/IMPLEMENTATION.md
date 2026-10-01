@@ -61,9 +61,8 @@ then `done`.
 | P9 | Stop, start again, and logout | done | done |
 | P8 | Debian packages | remaining | remaining |
 
-**Next to implement:** `P8`. Before that package, the robot SSH
-prompt takes the password instead of printing one. That change is
-not a milestone.
+**Next to implement:** `P8`. The robot SSH prompt now takes the
+password instead of printing one. That change is not a milestone.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -103,7 +102,10 @@ T7–T10.
    printed, not written to a file on the robot, and not stored as
    plaintext on the signalling server. The server keeps a hash in
    memory only. `n` asks for a replacement the same way and keeps
-   the same ID.
+   the same ID. Landed. Manual check of
+   `packaging/docs/robot_password.md`: the ID is printed, the
+   password is typed with no echo, and the operator logs in with
+   that pair.
 5. **Link is one of `tailscale` or `turn`.** The supervisor passes
    `--remote-laptop` or `--ice`. It never passes both. Interface 2
    set to anything other than None refuses Start in this slice.
@@ -878,8 +880,8 @@ and password logged in again. `commit: done`.
 
 ### P8 — Debian packages — STATUS: remaining
 
-P9 is done. Before this package, the robot password is typed at
-the SSH prompt. That change is not a milestone.
+P9 is done. The robot password is typed at the SSH prompt. That
+change has landed and is not a milestone.
 
 **Goal.** Two installable amd64 `.deb` files. The operator package
 adds an application-menu launcher. The robot package installs a

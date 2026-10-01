@@ -609,6 +609,45 @@ def test_sigint_and_sigterm_request_the_same_stop() -> None:
         signal.signal(signal.SIGTERM, previous[1])
 
 
+def test_sigint_discards_tty_input_only_during_the_password_prompt(
+    monkeypatch: Any,
+) -> None:
+    import signal
+
+    import packaging.robot_app.cli as robot_cli
+
+    calls: list[str] = []
+    monkeypatch.setattr(robot_cli, "restore_tty_echo", lambda: calls.append("restore"))
+    previous = (
+        signal.getsignal(signal.SIGINT),
+        signal.getsignal(signal.SIGTERM),
+    )
+    robot_cli._prompt_active = False
+    try:
+        idle = RobotState("123456789", "kept-secret", "unit-test")
+        handler = robot_cli.install_exit_signals(idle)
+        handler(signal.SIGTERM, None)
+        assert calls == []
+        assert idle.stopped()
+        assert "kept-secret" not in repr(idle)
+
+        prompting = RobotState("123456789", "kept-secret", "unit-test")
+        handler = robot_cli.install_exit_signals(prompting)
+        robot_cli._prompt_active = True
+        try:
+            handler(signal.SIGINT, None)
+        except KeyboardInterrupt:
+            pass
+        else:
+            raise AssertionError("SIGINT did not interrupt")
+        assert calls == ["restore"]
+        assert prompting.stopped()
+    finally:
+        robot_cli._prompt_active = False
+        signal.signal(signal.SIGINT, previous[0])
+        signal.signal(signal.SIGTERM, previous[1])
+
+
 def test_dry_run_session_does_not_spawn(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
     monkeypatch.setattr(subprocess, "Popen", _boom)
