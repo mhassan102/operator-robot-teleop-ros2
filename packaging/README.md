@@ -23,6 +23,11 @@ The message list is in `IMPLEMENTATION.md`. The registry checks
 | --- | --- |
 | `inventory`, `config_ok`, `status`, `error` | `config`, `start`, `stop` |
 
+`logout` is not relayed. The registry detaches that operator, replies
+`logged_out`, and tells the robot `operator_detached`. The robot id
+and password hash stay, so the same password can log in again. Closing
+the operator socket detaches the same way.
+
 It does not read the fields inside those messages, and it does not
 carry gripper bytes or video. Passwords are not written to logs.
 Sessions are memory only: a new `register` for an ID replaces the

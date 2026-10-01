@@ -58,10 +58,12 @@ then `done`.
 | P5 | Serial port and camera arguments | done | done |
 | P6 | Robot supervisor (start and stop) | done | done |
 | P7 | Operator supervisor and in-app console | done | done |
-| P9 | Stop, start again, and logout | remaining | remaining |
+| P9 | Stop, start again, and logout | done | done |
 | P8 | Debian packages | remaining | remaining |
 
-**Next to implement:** `P9`. P8 waits until P9 is done.
+**Next to implement:** `P8`. Before that package, the robot SSH
+prompt takes the password instead of printing one. That change is
+not a milestone.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -74,8 +76,9 @@ T7–T10.
 
 1. **Two programs, one desktop UI.** `teleop-robot` on the Ubuntu
    24.04 robot PC is a terminal process. Start it over SSH on
-   Tailscale. It prints the ID and password and sends inventory
-   after login. It has no Qt window. `teleop-operator` on the
+   Tailscale. It prints the ID. The person at that SSH session
+   types the password, with no echo. It sends inventory after
+   login. It has no Qt window. `teleop-operator` on the
    Ubuntu 22.04 operator PC is the only desktop UI. Login uses the
    signalling process already bound to **TCP 8765** on the existing
    EC2 host. There is no TCP 8766, and login does not use UDP 3479
@@ -93,10 +96,14 @@ T7–T10.
    after `ready` does not stop the arm. Closing the operator window
    stops the operator stack so the existing 500 ms watchdog can
    torque the gripper off.
-4. **ID and password are generated when the robot app starts.**
-   ID is 9 digits. Password is 8 characters from
-   `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`. The registry stores a hash.
-   Passwords are not written to git, logs, or this file.
+4. **The robot prints the ID. The person at the SSH session types
+   the password.** The ID is 9 digits and is generated when the
+   robot app starts. The password is read with no echo and
+   confirmed, the way a new user password is set. It is not
+   printed, not written to a file on the robot, and not stored as
+   plaintext on the signalling server. The server keeps a hash in
+   memory only. `n` asks for a replacement the same way and keeps
+   the same ID.
 5. **Link is one of `tailscale` or `turn`.** The supervisor passes
    `--remote-laptop` or `--ice`. It never passes both. Interface 2
    set to anything other than None refuses Start in this slice.
@@ -765,7 +772,7 @@ gripper. `commit: done`.
 
 ---
 
-### P9 — Stop, start again, and logout — STATUS: remaining
+### P9 — Stop, start again, and logout — STATUS: done
 
 **Goal.** Stop and Logout stay on screen after the console replaces
 the config page. Stop brings the operator stack and the robot stack
@@ -808,9 +815,8 @@ camera stay up until someone runs `stop_mlink.sh`, kills
      registration and password.
   4. The window returns to the login page. Start is not available.
      The session socket is closed.
-  5. A new login with the ID and password still printed by the
-     robot terminal works. Logout does not make the robot generate
-     a new password.
+  5. A new login with the same ID and the password set on the robot
+     works. Logout does not change that password.
 - **Window close** does the Stop cleanup (operator first, then
   `stop`, brief wait for `stopped`) and then exits. It does not
   leave the robot stack running. It is not a Logout.
@@ -862,11 +868,18 @@ of g or h, are for the user after the gripper is clear. The
 implementer does not run them.
 ```
 
+P9 landed. Stop and Logout stay on the top bar after the console
+loads. Manual check: `g`/`h` moved the gripper, Stop brought both
+sides down and returned to the config page, Start again worked on
+the same login, Logout returned to the login page, and the same ID
+and password logged in again. `commit: done`.
+
 ---
 
 ### P8 — Debian packages — STATUS: remaining
 
-Do not start P8 until P9 is done.
+P9 is done. Before this package, the robot password is typed at
+the SSH prompt. That change is not a milestone.
 
 **Goal.** Two installable amd64 `.deb` files. The operator package
 adds an application-menu launcher. The robot package installs a

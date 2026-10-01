@@ -1,7 +1,9 @@
-"""Config page: Link, two robot NICs, arm, video, Review, Start, and Stop.
+"""Config page: Link, two robot NICs, arm, video, Review, and Start.
 
-Review sends the choice. Start and Stop are wired by the window. This
-page does not spawn processes and does not bond Interface 2.
+Review sends the choice. Start is wired by the window. Stop and Logout
+stay on the window bar so they remain visible when the console is
+showing. This page does not spawn processes and does not bond
+Interface 2.
 """
 
 from __future__ import annotations
@@ -75,8 +77,6 @@ class ConfigPage(QWidget):
         self.review_button.setObjectName("review")
         self.start_button = QPushButton("Start")
         self.start_button.setObjectName("start")
-        self.stop_button = QPushButton("Stop")
-        self.stop_button.setObjectName("stop")
         self.review_status = QLabel("")
         self.review_status.setObjectName("review_status")
         self.review_status.setWordWrap(True)
@@ -112,7 +112,6 @@ class ConfigPage(QWidget):
         actions = QHBoxLayout()
         actions.addWidget(self.review_button)
         actions.addWidget(self.start_button)
-        actions.addWidget(self.stop_button)
         actions.addStretch(1)
 
         root.addWidget(self.operator_network)

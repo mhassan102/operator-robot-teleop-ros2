@@ -268,6 +268,7 @@ async def _second_operator_is_busy(uri: str) -> None:
         with contextlib.suppress(asyncio.CancelledError, ConnectionClosed):
             await leaked
         await first.close()
+        assert await _recv(robot) == {"v": 1, "type": "operator_detached"}
         logged_in = False
         for _ in range(10):
             await _send(second, _login())
@@ -285,6 +286,59 @@ def test_second_operator_is_busy() -> None:
     async def _body() -> None:
         async with _listening() as uri:
             await _second_operator_is_busy(uri)
+
+    _run(_body())
+
+
+async def _logout_keeps_the_robot_password(uri: str) -> None:
+    async with connect(uri) as robot, connect(uri) as operator:
+        await _send(robot, _register())
+        assert await _recv(robot) == {"v": 1, "type": "registered"}
+        await _send(operator, _login())
+        assert await _recv(operator) == _logged_in()
+        assert await _recv(robot) == {"v": 1, "type": "operator_attached"}
+        await _send(operator, {"v": 1, "type": "logout"})
+        assert await _recv(operator) == {"v": 1, "type": "logged_out"}
+        assert await _recv(robot) == {"v": 1, "type": "operator_detached"}
+        await _send(robot, {"v": 1, "type": "register", "robot_id": "123456789"})
+        assert await _recv(robot) == {"v": 1, "type": "error", "code": "bad_id"}
+        await _send(operator, _login())
+        assert await _recv(operator) == _logged_in()
+        assert await _recv(robot) == {"v": 1, "type": "operator_attached"}
+        async with connect(uri) as other:
+            await _send(other, _login(password="WRONGPWD"))
+            assert await _recv(other) == {"v": 1, "type": "error", "code": "auth"}
+            await _send(other, _login())
+            assert await _recv(other) == {"v": 1, "type": "error", "code": "busy"}
+
+
+def test_logout_keeps_the_robot_password() -> None:
+    async def _body() -> None:
+        async with _listening() as uri:
+            await _logout_keeps_the_robot_password(uri)
+
+    _run(_body())
+
+
+async def _operator_close_detaches_and_keeps_the_robot(uri: str) -> None:
+    async with connect(uri) as robot, connect(uri) as operator:
+        await _send(robot, _register())
+        assert await _recv(robot) == {"v": 1, "type": "registered"}
+        await _send(operator, _login())
+        assert await _recv(operator) == _logged_in()
+        assert await _recv(robot) == {"v": 1, "type": "operator_attached"}
+        await operator.close()
+        assert await _recv(robot) == {"v": 1, "type": "operator_detached"}
+        async with connect(uri) as again:
+            await _send(again, _login())
+            assert await _recv(again) == _logged_in()
+            assert await _recv(robot) == {"v": 1, "type": "operator_attached"}
+
+
+def test_operator_close_detaches_and_keeps_the_robot() -> None:
+    async def _body() -> None:
+        async with _listening() as uri:
+            await _operator_close_detaches_and_keeps_the_robot(uri)
 
     _run(_body())
 

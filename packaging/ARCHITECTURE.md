@@ -111,7 +111,7 @@ them find each other from behind two NATs.
   ROBOT PC (SSH over Tailscale)                    OPERATOR PC
   +---------------------------+                    +-----------------------------+
   | teleop-robot              |                    | teleop-operator             |
-  | terminal: ID + password   |                    | window: ID + password       |
+  | terminal: ID, hidden pass |                    | window: ID + password       |
   | then status lines         |                    | then config, then console   |
   | no Qt, no display         |                    | the only GUI                |
   +-------------+-------------+                    +-------------+---------------+
@@ -189,9 +189,10 @@ range coturn allocates from.
 ```text
 1. Install teleop-robot on the robot PC. Over SSH, start
    `python3 -m packaging.robot_app`.
-2. The terminal prints a 9-digit ID and an 8-character password
-   and registers them with the registry. Read them from that SSH
-   session.
+2. The terminal prints a 9-digit ID. The person at that SSH
+   session types a password with no echo, then confirms it. The
+   app registers the ID and a hash of that password. The password
+   is not printed and not saved as plaintext.
 3. Install teleop-operator on the operator PC. Launch the window.
 4. Type that ID and password. The registry attaches the two sides.
 5. The robot sends its inventory: network interfaces, serial
@@ -247,10 +248,11 @@ suggestion below is the layout P4 implements.
 g/h, the HUD, and the camera view stay the ones the web console
 already has. Packaging does not rewrite `operate.js`.
 
-The robot has no window. Its SSH terminal prints the ID, the
-password, and a status line (waiting, operator attached, starting,
-running, stopped, error). `n` prints a new password and registers
-again. It lists the inventory it published so the person at that
+The robot has no window. Its SSH terminal prints the ID and a
+status line (waiting, operator attached, starting, running,
+stopped, error). The password is typed at startup with no echo.
+`n` asks for a replacement the same way and keeps the same ID.
+It lists the inventory it published so the person at that
 session can see which serial port and camera were selected. It does
 not ask them to approve Start a second time. The operator's Start
 is the confirmation. The terminal prints the chosen values as soon

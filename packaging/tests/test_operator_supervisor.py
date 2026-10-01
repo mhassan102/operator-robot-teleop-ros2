@@ -403,7 +403,10 @@ def test_close_after_a_live_start_passes_live(
     assert calls == [True]
 
 
-def test_stop_sends_then_calls_local_stop(monkeypatch: Any, tmp_path: Path) -> None:
+def test_stop_stops_operator_before_the_robot(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
     window_mod = _load_window()
     order: list[object] = []
 
@@ -418,11 +421,150 @@ def test_stop_sends_then_calls_local_stop(monkeypatch: Any, tmp_path: Path) -> N
     monkeypatch.setattr(window_mod, "stop_operator_local", fake_stop)
     window = _open(window_mod, _inventory(), tmp_path)
     try:
+        from PyQt5.QtWidgets import QWidget
+
+        window.show()
+        cover = QWidget()
+        window.stack.addWidget(cover)
+        window.stack.setCurrentWidget(cover)
+        _qapp().processEvents()
+        assert window.stop_button.isVisible()
+        assert window.logout_button.isVisible()
+        assert window.config_page is not None
+        assert not window.config_page.isVisible()
+        window._accepted_config = window.config_page.current_config()
         window.stop_session()
-        assert order == [{"v": 1, "type": "stop"}, ("local", False)]
+        assert order == [("local", False), {"v": 1, "type": "stop"}]
+        assert window._stop_timer.isActive()
+        assert window._stop_timer.interval() == window_mod.STOP_CONFIRM_MS
+        window.present_inbound(
+            {"v": 1, "type": "status", "phase": "stopped", "detail": ""}
+        )
+        assert window.stack.currentWidget() is window.config_page
+        assert window.config_page.start_button.isEnabled()
+        assert window.stop_button.isVisible()
+        assert window._accepted_config is not None
+        assert {"v": 1, "type": "logout"} not in order
     finally:
         window.close()
         _qapp().processEvents()
+
+
+def test_stop_timeout_says_the_robot_did_not_confirm(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
+    window_mod = _load_window()
+    monkeypatch.setattr(window_mod.LoginWindow, "_try_send", lambda *_a, **_k: True)
+    monkeypatch.setattr(window_mod, "stop_operator_local", lambda *_a, **_k: None)
+    window = _open(window_mod, _inventory(), tmp_path)
+    try:
+        window.stop_session()
+        window._on_stop_timeout()
+        assert window.bar_status.text() == "The robot did not confirm stop."
+        assert window.stack.currentWidget() is window.config_page
+        assert window.config_page is not None
+        assert window.config_page.start_button.isEnabled()
+    finally:
+        window.close()
+        _qapp().processEvents()
+
+
+def test_start_again_uses_the_accepted_config(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
+    _forbid_spawn(monkeypatch)
+    window_mod = _load_window()
+    sent: list[dict[str, Any]] = []
+
+    def fake_send(_self: Any, message: dict[str, Any]) -> bool:
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(window_mod.LoginWindow, "_try_send", fake_send)
+    monkeypatch.setattr(window_mod, "stop_operator_local", lambda *_a, **_k: None)
+    window = _open(window_mod, _inventory(), tmp_path)
+    try:
+        page = window.config_page
+        assert page is not None
+        window._accepted_config = page.current_config()
+        page.link_turn.setChecked(True)
+        window.start_session()
+        assert sent == []
+        assert page.session_status.text() == "Review the changed config before Start."
+        page.link_tailscale.setChecked(True)
+        window.start_session()
+        assert sent == [{"v": 1, "type": "start"}]
+    finally:
+        window.close()
+        _qapp().processEvents()
+
+
+def test_logout_returns_to_login_and_keeps_the_robot_id(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
+    window_mod = _load_window()
+    order: list[object] = []
+
+    def fake_send(_self: Any, message: dict[str, Any]) -> bool:
+        order.append(dict(message))
+        return True
+
+    def fake_stop(_repo: Path, *, live: bool = False) -> None:
+        order.append(("local", live))
+
+    monkeypatch.setattr(window_mod.LoginWindow, "_try_send", fake_send)
+    monkeypatch.setattr(window_mod, "stop_operator_local", fake_stop)
+    window = _open(window_mod, _inventory(), tmp_path)
+    try:
+        window.show()
+        window.id_edit.setText("123456789")
+        page = window.config_page
+        assert page is not None
+        window._accepted_config = page.current_config()
+        window.logout_session()
+        assert order == [("local", False), {"v": 1, "type": "stop"}]
+        window.present_inbound(
+            {"v": 1, "type": "status", "phase": "stopped", "detail": ""}
+        )
+        assert order[-1] == {"v": 1, "type": "logout"}
+        window.present_inbound({"v": 1, "type": "logged_out"})
+        _qapp().processEvents()
+        assert window.stack.currentWidget() is window.form_page
+        assert window.logged_in is False
+        assert not window.session_bar.isVisible()
+        assert not page.start_button.isEnabled()
+        assert window.id_edit.text() == "123456789"
+        assert window._accepted_config is None
+        assert window.status_label.text() == "Logged out."
+    finally:
+        window.close()
+        _qapp().processEvents()
+
+
+def test_close_stops_both_sides_and_does_not_logout(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
+    window_mod = _load_window()
+    order: list[object] = []
+
+    def fake_send(_self: Any, message: dict[str, Any]) -> bool:
+        order.append(dict(message))
+        return True
+
+    def fake_stop(_repo: Path, *, live: bool = False) -> None:
+        order.append(("local", live))
+
+    monkeypatch.setattr(window_mod.LoginWindow, "_try_send", fake_send)
+    monkeypatch.setattr(window_mod, "stop_operator_local", fake_stop)
+    window = _open(window_mod, _inventory(), tmp_path)
+    window._operator_started = True
+    window.close()
+    _qapp().processEvents()
+    assert order == [("local", True), {"v": 1, "type": "stop"}]
 
 
 def test_dry_run_start_still_sends(monkeypatch: Any, tmp_path: Path) -> None:

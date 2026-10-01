@@ -4,8 +4,10 @@ Login shows the robot hostname and waits for inventory. Review sends
 the choice. Start sends ``start`` and, once the robot reports ready,
 runs the operator plan and loads the console. ``TELEOP_SUPERVISOR_DRY_RUN=1``
 still sends ``start`` and shows the robot status, and it does not spawn
-or load the console. Stop sends ``stop`` and then stops the local
-operator stack. Closing the window does that local stop.
+or load the console. Stop and Logout stay above the page. Stop brings
+the operator stack down first, then asks the robot to stop, and returns
+to the config page. Logout does that stop, detaches this operator, and
+returns to login. Closing the window does the stop, then exits.
 """
 
 from __future__ import annotations
@@ -17,9 +19,10 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import QObject, Qt, pyqtSignal
+from PyQt5.QtCore import QEventLoop, QObject, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -41,6 +44,16 @@ from packaging.supervisor.operator_commands import (
     stop_operator_local,
 )
 from packaging.supervisor.robot_commands import PlanError
+
+STOP_CONFIRM_MS = 30_000
+CLOSE_CONFIRM_MS = 3_000
+LOGOUT_CONFIRM_MS = 5_000
+_UNCONFIRMED = "The robot did not confirm stop."
+_CHOICE_KEYS = ("link", "iface1", "iface2", "arm", "video")
+
+
+def _choice_tuple(message: dict[str, Any]) -> tuple[Any, ...]:
+    return tuple(message.get(key) for key in _CHOICE_KEYS)
 
 
 def repo_root() -> Path:
@@ -91,6 +104,17 @@ class LoginWindow(QWidget):
         self._allow_console = False
         self._inventory: dict[str, Any] | None = None
         self._accepted_config: dict[str, Any] | None = None
+        self._stop_busy = False
+        self._stop_sent = False
+        self._stop_finished = False
+        self._awaiting_stopped = False
+        self._after_stop = ""
+        self._close_requested = False
+        self._logout_busy = False
+        self._awaiting_logout = False
+        self._returned_to_login = False
+        self._robot_unconfirmed = False
+        self._stop_wait_hook: Any = None
         self.config_page: ConfigPage | None = None
         self.console_view: QWidget | None = None
 
@@ -141,7 +165,35 @@ class LoginWindow(QWidget):
         self.stack = QStackedWidget()
         self.stack.addWidget(self.form_page)
         self.stack.addWidget(self.waiting_page)
+
+        self.session_bar = QWidget()
+        self.session_bar.setObjectName("session_bar")
+        bar_layout = QHBoxLayout(self.session_bar)
+        bar_layout.setContentsMargins(0, 0, 0, 0)
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setObjectName("stop")
+        self.logout_button = QPushButton("Logout")
+        self.logout_button.setObjectName("logout")
+        self.bar_status = QLabel("")
+        self.bar_status.setObjectName("bar_status")
+        self.bar_status.setWordWrap(True)
+        self.bar_status.setTextFormat(Qt.PlainText)
+        self.stop_button.clicked.connect(self.stop_session)
+        self.logout_button.clicked.connect(self.logout_session)
+        bar_layout.addWidget(self.stop_button)
+        bar_layout.addWidget(self.logout_button)
+        bar_layout.addWidget(self.bar_status, 1)
+        self.session_bar.hide()
+
+        self._stop_timer = QTimer(self)
+        self._stop_timer.setSingleShot(True)
+        self._stop_timer.timeout.connect(self._on_stop_timeout)
+        self._logout_timer = QTimer(self)
+        self._logout_timer.setSingleShot(True)
+        self._logout_timer.timeout.connect(self._on_logout_timeout)
+
         root = QVBoxLayout(self)
+        root.addWidget(self.session_bar)
         root.addWidget(self.stack)
         self.resize(440, 240)
 
@@ -184,10 +236,13 @@ class LoginWindow(QWidget):
             return
         if result.ok:
             self.logged_in = True
+            self._returned_to_login = False
+            self._logout_busy = False
             self.hostname = result.hostname
             self.hostname_label.setText(result.hostname)
             self.waiting_label.setText("Waiting for the robot.")
             self.password_edit.clear()
+            self.session_bar.show()
             self.stack.setCurrentWidget(self.waiting_page)
             self._start_reader()
             return
@@ -210,9 +265,10 @@ class LoginWindow(QWidget):
             self.config_page = ConfigPage()
             self.config_page.review_button.clicked.connect(self.review)
             self.config_page.start_button.clicked.connect(self.start_session)
-            self.config_page.stop_button.clicked.connect(self.stop_session)
             self.stack.addWidget(self.config_page)
+        self.config_page.start_button.setEnabled(True)
         self.config_page.apply(inventory, nic, self.hostname)
+        self.session_bar.show()
         self.stack.setCurrentWidget(self.config_page)
         self.resize(760, 520)
 
@@ -220,6 +276,19 @@ class LoginWindow(QWidget):
         if self._closing or not isinstance(msg, dict):
             return
         kind = msg.get("type")
+        if kind == "logged_out":
+            self._return_to_login()
+            return
+        if kind == "error" and msg.get("code") == "offline" and self._awaiting_stopped:
+            self._robot_unconfirmed = True
+            self._awaiting_stopped = False
+            self._stop_timer.stop()
+            self._set_session_status(_UNCONFIRMED)
+            if self._close_requested:
+                self._release_stop_wait(False)
+                return
+            self._finish_after_stop()
+            return
         if kind == "inventory":
             self.show_inventory(msg)
             return
@@ -259,36 +328,212 @@ class LoginWindow(QWidget):
         if (
             page is None
             or self._closing
+            or self._close_requested
             or self._start_busy
+            or self._stop_busy
+            or self._logout_busy
             or self._operator_started
         ):
+            return
+        accepted = self._accepted_config
+        if accepted is not None and _choice_tuple(page.current_config()) != _choice_tuple(
+            accepted
+        ):
+            self._set_session_status("Review the changed config before Start.")
             return
         try:
             camera_page_of(self._inventory)
         except PlanError as exc:
-            page.set_session_status(exc.detail)
+            self._set_session_status(exc.detail)
             return
         if not dry_run_enabled() and not webengine_installed():
-            page.set_session_status("Qt WebEngine is not installed.")
+            self._set_session_status("Qt WebEngine is not installed.")
             return
         if not self._try_send({"v": 1, "type": "start"}):
-            page.set_session_status("Cannot reach the registry.")
+            self._set_session_status("Cannot reach the registry.")
             return
         self._awaiting_ready = True
         self._start_busy = True
         page.start_button.setEnabled(False)
-        page.set_session_status("starting")
+        self._set_session_status("starting")
 
     def stop_session(self) -> None:
-        """Send ``stop``, then stop the local operator stack."""
-        page = self.config_page
-        if page is None or self._closing:
+        """Stop the operator stack, then the robot, and show the config page."""
+        if (
+            self._closing
+            or self._close_requested
+            or self._logout_busy
+            or not self.logged_in
+        ):
             return
+        if self._stop_busy:
+            self._after_stop = "config"
+            return
+        self._begin_stop("config")
+
+    def logout_session(self) -> None:
+        """Stop both sides, detach this operator, and return to login."""
+        if self._closing or self._close_requested or not self.logged_in:
+            return
+        if self._logout_busy:
+            return
+        if self._stop_busy:
+            self._after_stop = "logout"
+            return
+        self._begin_stop("logout")
+
+    def _begin_stop(self, after: str) -> None:
+        self._stop_busy = True
+        self._stop_finished = False
+        self._after_stop = after
+        self._robot_unconfirmed = False
         self._awaiting_ready = False
-        if not self._try_send({"v": 1, "type": "stop"}):
-            page.set_session_status("Cannot reach the registry.")
-        self._request_local_stop()
-        self.stack.setCurrentWidget(page)
+        self._allow_console = False
+        page = self.config_page
+        if page is not None:
+            page.start_button.setEnabled(False)
+        self._set_session_status("stopping")
+        try:
+            self._request_local_stop()
+        except Exception as exc:
+            print(f"operator stop failed: {exc}", file=sys.stderr)
+        if self._signal_robot_stop():
+            self._stop_timer.start(STOP_CONFIRM_MS)
+            return
+        self._finish_after_stop()
+
+    def _signal_robot_stop(self) -> bool:
+        """Send ``stop`` once. The operator stack has already been stopped."""
+        if self._stop_sent:
+            return self._awaiting_stopped
+        if self._try_send({"v": 1, "type": "stop"}):
+            self._stop_sent = True
+            self._awaiting_stopped = True
+            return True
+        self._set_session_status("Cannot reach the registry.")
+        return False
+
+    def _on_stop_timeout(self) -> None:
+        if self._close_requested or not self._awaiting_stopped:
+            return
+        self._awaiting_stopped = False
+        self._robot_unconfirmed = True
+        self._set_session_status(_UNCONFIRMED)
+        self._finish_after_stop()
+
+    def _finish_after_stop(self) -> None:
+        if self._stop_finished or self._close_requested:
+            return
+        self._stop_finished = True
+        self._stop_busy = False
+        self._awaiting_stopped = False
+        self._stop_timer.stop()
+        self._stop_sent = False
+        after = self._after_stop
+        self._after_stop = ""
+        if after == "logout":
+            self._begin_logout()
+            return
+        self._show_config_again()
+
+    def _show_config_again(self) -> None:
+        """Hide the console. Start can use the config already accepted."""
+        self._operator_started = False
+        self._start_busy = False
+        self._awaiting_ready = False
+        self._allow_console = False
+        page = self.config_page
+        if page is not None:
+            page.start_button.setEnabled(True)
+            self.stack.setCurrentWidget(page)
+        if self.logged_in:
+            self.session_bar.show()
+
+    def _begin_logout(self) -> None:
+        self._logout_busy = True
+        if not self._try_send({"v": 1, "type": "logout"}):
+            self._return_to_login()
+            return
+        self._awaiting_logout = True
+        self._logout_timer.start(LOGOUT_CONFIRM_MS)
+
+    def _on_logout_timeout(self) -> None:
+        if self._awaiting_logout and not self._close_requested:
+            self._return_to_login()
+
+    def _return_to_login(self) -> None:
+        if self._returned_to_login or self._close_requested:
+            return
+        self._returned_to_login = True
+        self._awaiting_logout = False
+        self._logout_busy = False
+        self._stop_busy = False
+        self._logout_timer.stop()
+        self._stop_timer.stop()
+        self._close_session_socket()
+        self.logged_in = False
+        self._accepted_config = None
+        self._inventory = None
+        self._operator_started = False
+        self._start_busy = False
+        self._awaiting_ready = False
+        self._allow_console = False
+        self._reader_started = False
+        self.session_bar.hide()
+        page = self.config_page
+        if page is not None:
+            page.start_button.setEnabled(False)
+        self.login_button.setEnabled(True)
+        self.stack.setCurrentWidget(self.form_page)
+        if self._robot_unconfirmed:
+            self.status_label.setText("Logged out. " + _UNCONFIRMED)
+        else:
+            self.status_label.setText("Logged out.")
+        self.resize(440, 240)
+
+    def _close_session_socket(self) -> None:
+        loop = self._loop
+        client = self._client
+        if loop is None or client is None or not loop.is_running():
+            self._cancel_reader()
+            return
+        loop.call_soon_threadsafe(self._cancel_reader)
+        closing = asyncio.run_coroutine_threadsafe(client.close(), loop)
+        try:
+            closing.result(timeout=2)
+        except Exception:
+            pass
+
+    def _loop_is_running(self) -> bool:
+        loop = self._loop
+        return loop is not None and loop.is_running()
+
+    def _release_stop_wait(self, ok: bool) -> None:
+        hook = self._stop_wait_hook
+        if hook is not None:
+            hook(ok)
+
+    def _wait_for_stopped(self, timeout_s: float) -> bool:
+        """Pump Qt events until the robot reports stopped, or the brief wait ends."""
+        if not self._loop_is_running():
+            return False
+        waiter = QEventLoop()
+        result = {"ok": False}
+
+        def finish(ok: bool) -> None:
+            result["ok"] = ok
+            if waiter.isRunning():
+                waiter.quit()
+
+        self._stop_wait_hook = finish
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: finish(False))
+        timer.start(int(timeout_s * 1000))
+        waiter.exec_()
+        timer.stop()
+        self._stop_wait_hook = None
+        return bool(result["ok"])
 
     def _on_status(self, msg: dict[str, Any]) -> None:
         phase = msg.get("phase")
@@ -296,9 +541,18 @@ class LoginWindow(QWidget):
         phase_text = phase if isinstance(phase, str) else ""
         detail_text = detail if isinstance(detail, str) else ""
         shown = detail_text if detail_text else phase_text
+        if shown:
+            self._set_session_status(shown)
+        if phase_text == "stopped" and self._awaiting_stopped:
+            self._awaiting_stopped = False
+            self._stop_timer.stop()
+            self._start_busy = False
+            if self._close_requested:
+                self._release_stop_wait(True)
+                return
+            self._finish_after_stop()
+            return
         page = self.config_page
-        if page is not None and shown:
-            page.set_session_status(shown)
         if phase_text in {"error", "stopped", "ready"}:
             self._start_busy = False
             if page is not None:
@@ -328,8 +582,8 @@ class LoginWindow(QWidget):
             bind_ip=default_route_ipv4(),
         )
         if decision.commands is None:
-            if decision.detail and page is not None:
-                page.set_session_status(decision.detail)
+            if decision.detail:
+                self._set_session_status(decision.detail)
             return
         self._allow_console = True
         self._operator_started = True
@@ -385,9 +639,7 @@ class LoginWindow(QWidget):
             from PyQt5.QtCore import QUrl
             from PyQt5.QtWebEngineWidgets import QWebEngineView
         except ImportError:
-            page = self.config_page
-            if page is not None:
-                page.set_session_status("Qt WebEngine is not installed.")
+            self._set_session_status("Qt WebEngine is not installed.")
             return
         view = self.console_view
         if view is None:
@@ -412,6 +664,7 @@ class LoginWindow(QWidget):
     def _set_session_status(self, text: str) -> None:
         if self._closing:
             return
+        self.bar_status.setText(text)
         page = self.config_page
         if page is not None:
             page.set_session_status(text)
@@ -448,6 +701,8 @@ class LoginWindow(QWidget):
             return
         self._shut = True
         self._closing = True
+        self._stop_timer.stop()
+        self._logout_timer.stop()
         loop = self._loop
         client = self._client
         thread = self._thread
@@ -468,10 +723,17 @@ class LoginWindow(QWidget):
             thread.join(timeout=2)
 
     def closeEvent(self, event: Any) -> None:
-        try:
-            self._request_local_stop()
-        except Exception as exc:
-            print(f"operator stop failed: {exc}", file=sys.stderr)
+        """Stop the operator stack, then the robot, then exit. Not a logout."""
+        if not self._close_requested:
+            self._close_requested = True
+            try:
+                self._request_local_stop()
+            except Exception as exc:
+                print(f"operator stop failed: {exc}", file=sys.stderr)
+            self._signal_robot_stop()
+            if self._awaiting_stopped and self._loop_is_running():
+                self._wait_for_stopped(CLOSE_CONFIRM_MS / 1000.0)
+            self._awaiting_stopped = False
         self.shutdown()
         from PyQt5.QtWidgets import QApplication
 

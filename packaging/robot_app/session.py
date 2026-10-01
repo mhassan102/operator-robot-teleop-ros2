@@ -2,8 +2,9 @@
 
 A ``config`` message is checked against the last inventory and answered
 with ``config_ok`` or ``bad_config``. ``start`` and ``stop`` use the
-supervisor plan. ``TELEOP_SUPERVISOR_DRY_RUN=1`` sends status and does
-not spawn. Without that variable the live path runs the plan.
+supervisor plan. Stop keeps the accepted config. ``operator_detached``
+clears it. ``TELEOP_SUPERVISOR_DRY_RUN=1`` sends status and does not
+spawn. Without that variable the live path runs the plan.
 """
 
 from __future__ import annotations
@@ -129,6 +130,8 @@ def interpret(raw: str | bytes) -> Incoming:
         return Incoming(None, False, action="start")
     if kind == "stop":
         return Incoming(None, False, action="stop")
+    if kind == "operator_detached":
+        return Incoming("operator_detached", False, action="detach")
     return Incoming(None, False)
 
 
@@ -345,6 +348,8 @@ async def _hold(
                 )
             elif event.action == "stop":
                 await _on_stop(ws, root, on_status, on_line)
+            elif event.action == "detach":
+                accepted = None
     finally:
         reader_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):

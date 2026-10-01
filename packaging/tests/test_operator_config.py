@@ -398,8 +398,11 @@ def test_config_page_values() -> None:
         assert [button.text() for button in page.findChildren(QPushButton)] == [
             "Review",
             "Start",
-            "Stop",
         ]
+        assert window.stop_button.text() == "Stop"
+        assert window.logout_button.text() == "Logout"
+        assert window.stop_button.isVisible()
+        assert window.logout_button.isVisible()
         message = page.current_config()
         assert message == _good()
         assert "wlo1" not in json.dumps(message)

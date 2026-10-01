@@ -452,6 +452,163 @@ async def _dry_run_start_and_stop(uri: str, tmp_path: Path) -> None:
             await task
 
 
+async def _stop_keeps_config_until_logout(uri: str, tmp_path: Path) -> None:
+    state = RobotState("123456789", "AB23CD45", "unit-test")
+    statuses: list[str] = []
+    task = asyncio.create_task(
+        run_robot_session(
+            uri,
+            state,
+            _inventory,
+            statuses.append,
+            root=tmp_path,
+        )
+    )
+    try:
+        async with connect(uri) as operator:
+            await _login(operator)
+            assert json.loads(await asyncio.wait_for(operator.recv(), 2))["type"] == (
+                "inventory"
+            )
+            await operator.send(json.dumps(_config()))
+            assert json.loads(await asyncio.wait_for(operator.recv(), 2)) == {
+                "v": 1,
+                "type": "config_ok",
+            }
+            await operator.send(json.dumps({"v": 1, "type": "start"}))
+            assert json.loads(await asyncio.wait_for(operator.recv(), 2))["phase"] == (
+                "ready"
+            )
+            await operator.send(json.dumps({"v": 1, "type": "stop"}))
+            assert json.loads(await asyncio.wait_for(operator.recv(), 2))["phase"] == (
+                "stopped"
+            )
+            await operator.send(json.dumps({"v": 1, "type": "start"}))
+            again = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            assert again == {
+                "v": 1,
+                "type": "status",
+                "phase": "ready",
+                "detail": "dry-run",
+            }
+            await operator.send(json.dumps({"v": 1, "type": "logout"}))
+            assert json.loads(await asyncio.wait_for(operator.recv(), 2)) == {
+                "v": 1,
+                "type": "logged_out",
+            }
+            for _ in range(20):
+                if "operator_detached" in statuses:
+                    break
+                await asyncio.sleep(0.05)
+            assert "operator_detached" in statuses
+            await operator.send(
+                json.dumps(
+                    {
+                        "v": 1,
+                        "type": "login",
+                        "robot_id": "123456789",
+                        "password": "AB23CD45",
+                    }
+                )
+            )
+            assert json.loads(await asyncio.wait_for(operator.recv(), 2))["type"] == (
+                "logged_in"
+            )
+            assert json.loads(await asyncio.wait_for(operator.recv(), 2))["type"] == (
+                "inventory"
+            )
+            await operator.send(json.dumps({"v": 1, "type": "start"}))
+            refused = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            assert refused == {
+                "v": 1,
+                "type": "status",
+                "phase": "error",
+                "detail": "no config",
+            }
+        assert state.robot_id == "123456789"
+        assert state.snapshot()[0] == "AB23CD45"
+        assert not (tmp_path / "packaging" / "run" / "mlink-edge.pid").exists()
+    finally:
+        state.stop()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+def test_stop_keeps_config_until_logout(monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    monkeypatch.setattr(subprocess, "run", _boom)
+
+    async def body() -> None:
+        async with _listening() as uri:
+            await _stop_keeps_config_until_logout(uri, tmp_path)
+
+    asyncio.run(asyncio.wait_for(body(), 10))
+
+
+def test_exit_stop_runs_container_then_edge_then_camera(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("TELEOP_SUPERVISOR_DRY_RUN", raising=False)
+    labels: list[str] = []
+
+    def fake(command: Any, _root: Path) -> None:
+        labels.append(command.label)
+        if command.label == "robot-container":
+            raise RuntimeError("down failed")
+
+    def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("stop spawned a process")
+
+    import packaging.supervisor.robot_exec as robot_exec
+    from packaging.robot_app.cli import run_robot_stop
+
+    monkeypatch.setattr(robot_exec, "execute_command", fake)
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    monkeypatch.setattr(subprocess, "run", boom)
+    run_robot_stop(tmp_path)
+    assert labels == ["robot-container", "mlink-edge", "camera"]
+
+
+def test_dry_run_exit_stop_does_not_spawn(monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    monkeypatch.setattr(subprocess, "run", _boom)
+    from packaging.robot_app.cli import run_robot_stop
+
+    run_robot_stop(tmp_path)
+
+
+def test_sigint_and_sigterm_request_the_same_stop() -> None:
+    import signal
+
+    from packaging.robot_app.cli import install_exit_signals
+
+    previous = (
+        signal.getsignal(signal.SIGINT),
+        signal.getsignal(signal.SIGTERM),
+    )
+    try:
+        state = RobotState("123456789", "AB23CD45", "unit-test")
+        handler = install_exit_signals(state)
+        assert signal.getsignal(signal.SIGTERM) is handler
+        try:
+            handler(signal.SIGINT, None)
+        except KeyboardInterrupt:
+            pass
+        else:
+            raise AssertionError("SIGINT did not interrupt")
+        assert state.stopped()
+        other = RobotState("123456789", "AB23CD45", "unit-test")
+        handler = install_exit_signals(other)
+        handler(signal.SIGTERM, None)
+        assert other.stopped()
+    finally:
+        signal.signal(signal.SIGINT, previous[0])
+        signal.signal(signal.SIGTERM, previous[1])
+
+
 def test_dry_run_session_does_not_spawn(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
     monkeypatch.setattr(subprocess, "Popen", _boom)

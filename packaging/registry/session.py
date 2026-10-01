@@ -156,6 +156,8 @@ class Registry:
                     session = await self._accept_login(ws, msg)
                 else:
                     await _send(ws, _error("unknown_type"))
+            elif msg.get("v") == 1 and msg.get("type") == "logout":
+                await self._logout(session, ws)
             else:
                 await self._forward(session, ws, "operator", msg)
             msg = _loads(await ws.recv())
@@ -254,6 +256,24 @@ class Registry:
                 await _send(robot, {"v": 1, "type": "operator_attached"})
         return session
 
+    async def _logout(self, session: Session, ws: Any) -> None:
+        """Detach this operator. The robot id and password hash stay."""
+        robot: Any = None
+        async with session.lock:
+            if session.operator_ws is not ws:
+                attached = False
+            else:
+                session.operator_ws = None
+                robot = session.robot_ws
+                attached = True
+        if not attached:
+            await _send(ws, _error("offline"))
+            return
+        if robot is not None:
+            with contextlib.suppress(ConnectionClosed):
+                await _send(robot, {"v": 1, "type": "operator_detached"})
+        await _send(ws, {"v": 1, "type": "logged_out"})
+
     async def _forward(
         self, session: Session, ws: Any, side: str, msg: dict[str, Any]
     ) -> None:
@@ -294,6 +314,7 @@ class Registry:
             return
         session, side = found
         notify: Any = None
+        notify_robot: Any = None
         async with session.lock:
             if side == "robot" and session.robot_ws is ws:
                 session.robot_ws = None
@@ -303,6 +324,7 @@ class Registry:
                     self.sessions.pop(session.robot_id, None)
             elif side == "operator" and session.operator_ws is ws:
                 session.operator_ws = None
+                notify_robot = session.robot_ws
                 if (
                     session.robot_ws is None
                     and self.sessions.get(session.robot_id) is session
@@ -313,3 +335,6 @@ class Registry:
         if notify is not None and notify is not ws:
             with contextlib.suppress(ConnectionClosed):
                 await _send(notify, _error("offline"))
+        if notify_robot is not None and notify_robot is not ws:
+            with contextlib.suppress(ConnectionClosed):
+                await _send(notify_robot, {"v": 1, "type": "operator_detached"})
