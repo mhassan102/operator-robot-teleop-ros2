@@ -883,10 +883,16 @@ and password logged in again. `commit: done`.
 P9 is done. The robot password is typed at the SSH prompt. That
 change has landed and is not a milestone.
 
-**Goal.** Two installable amd64 `.deb` files. The operator package
-adds an application-menu launcher. The robot package installs a
-terminal command and no GUI. Installing either does not start the
-arm.
+**Goal.** Two amd64 `.deb` files, installed with `dpkg -i` on
+Ubuntu 22.04 and 24.04. After install the person launches one
+command. The operator command opens the Qt window. The robot
+command opens the terminal program. They do not type the repo
+scripts. Installing either does not start the arm.
+
+These are not single compiled binaries. `dpkg -i` unpacks files
+onto the PC, under `/opt/teleop`, plus a short command in
+`/usr/bin`. Qt and Python come from Ubuntu packages. The ROS image
+is not inside the `.deb`.
 
 **Read:** ARCHITECTURE "Installable packages".
 
@@ -899,31 +905,37 @@ arm.
 - Payload is the `packaging/` Python tree, `mlink-transport/` (no
   `__pycache__`), `turn/` without gitignored yaml and without
   `scripts/coturn.env`, `video/so-arm/`, and the teleoperation
-  start scripts the supervisor calls. Install prefix `/opt/teleop`.
-- Operator `.desktop` runs the operator app. The robot package has
-  no `.desktop` file. Both use `/usr/bin/python3` with
-  `PYTHONPATH=/opt/teleop`. The robot command is
-  `python3 -m packaging.robot_app`.
-- Depends: `python3`. Operator also depends on `python3-pyqt5` and
-  `python3-pyqt5.qtwebengine`. The robot package does not depend
-  on PyQt.
+  start scripts the app calls. Install prefix `/opt/teleop`.
+- `/usr/bin/teleop-operator` starts the Qt app.
+  `/usr/share/applications/teleop-operator.desktop` does the same.
+  `/usr/bin/teleop-robot` starts the terminal program. The robot
+  package has no GUI launcher. Both wrappers use `/usr/bin/python3`
+  and `PYTHONPATH=/opt/teleop`.
+- Operator `Depends`: `python3`, `python3-pyqt5`,
+  `python3-pyqt5.qtwebengine`. Robot `Depends`: `python3`. The
+  robot package does not depend on PyQt. `dpkg -i` must fail, and
+  name the missing package, when those are absent.
   `websockets` is vendored or listed as a dependency that exists on
-  both Ubuntu 22.04 and 24.04; if the distro package name differs,
-  vendor the small library inside the package rather than using pip
-  at install time.
+  both Ubuntu 22.04 and 24.04. Do not pip-install during install.
 - If `video/bin/mediamtx` exists at build time, copy it into the
   robot package at `/opt/teleop/video/so-arm/bin/mediamtx`. Do not
   `git add` the binary.
-- `postinst` does not start processes. A `--check` flag on each app
-  prints whether `docker` and image `ros2-teleop-poc:humble` are
-  present, and exits 0 even when they are absent (the Start button
-  surfaces that later).
+- `postinst` does not start the arm, mlink, or the camera. It
+  checks `docker` and image `ros2-teleop-poc:humble`. If either is
+  missing it prints what is missing and exits non-zero. Those two
+  are not apt packages, so they cannot be a `Depends` line. The
+  Humble image stays on the machine. It is about 3 GB and is not
+  packed into the `.deb`.
 - `build.sh` runs `dpkg-deb -I` and `dpkg-deb -c` and fails if
-  either package is empty or if a secret filename (`local_op.yaml`,
-  `local_edge.yaml`, `coturn.env`) is inside.
+  either package is empty, if `/usr/bin/teleop-operator` or
+  `/usr/bin/teleop-robot` is missing from the matching package, or
+  if a secret filename (`local_op.yaml`, `local_edge.yaml`,
+  `coturn.env`) is inside.
 
-**Do not:** `apt install` on the robot over SSH. Do not include the
-ROS image. Do not push.
+**Do not:** `apt install` or `dpkg -i` on the robot over SSH. Do not
+include the ROS image. Do not push. Do not claim the package works
+on every Ubuntu release or on arm64. The targets are amd64 22.04
+and 24.04.
 
 **Verify:**
 
@@ -939,12 +951,25 @@ dpkg-deb -I packaging/dist/teleop-robot_*_amd64.deb
 
 ```text
 You are the implementer. Branch feature/packaging. Read
-packaging/IMPLEMENTATION.md and implement only milestone P8
-(two .deb packages). build.sh must succeed locally. Do not apt
-install on the robot, do not SSH, do not include secret yaml or
-the ROS image, and do not git add mediamtx. Do not commit or
-push. When P8 works, do not edit the status board and do not
-commit. List files, print the dpkg-deb commands, and stop.
+packaging/IMPLEMENTATION.md milestone P8. Implement only P8
+(two amd64 .deb packages for Ubuntu 22.04 and 24.04). build.sh
+must succeed locally. dpkg -i is how they install. After install,
+teleop-operator opens the Qt window and teleop-robot opens the
+terminal program. The user does not type the repo scripts. The
+packages unpack files under /opt/teleop plus those two commands.
+They are not one compiled binary. Operator Depends must include
+python3-pyqt5 and python3-pyqt5.qtwebengine so dpkg fails and
+names the package when Qt WebEngine is missing. The robot package
+must not depend on PyQt. postinst must not start the arm. It must
+exit non-zero, with a clear line, when docker or the image
+ros2-teleop-poc:humble is missing. Do not put that image inside
+the deb. Do not dpkg -i on the robot, do not SSH, do not include
+secret yaml, and do not git add mediamtx. Do not commit or push.
+Do not change the status board. When P8 works, list files, print
+the dpkg-deb commands, print manual install steps for this PC and
+the robot PC, and stop.
+Please also write those steps in packaging/docs/P8_usage.md. Do
+not install the packages on the robot yourself.
 ```
 
 ---
