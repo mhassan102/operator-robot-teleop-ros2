@@ -1,0 +1,21 @@
+#!/bin/sh
+# Check host prerequisites. Do not start the arm, mlink, the camera,
+# or any container. The ROS image is not inside this package.
+set -u
+
+if [ "${1:-}" != "configure" ]; then
+  exit 0
+fi
+
+failed=0
+if ! command -v docker >/dev/null 2>&1; then
+  echo "@PKG@: docker is missing" >&2
+  failed=1
+else
+  if ! docker image inspect ros2-teleop-poc:humble >/dev/null 2>&1; then
+    echo "@PKG@: image ros2-teleop-poc:humble is missing" >&2
+    failed=1
+  fi
+fi
+
+exit "$failed"

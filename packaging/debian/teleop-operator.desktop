@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Teleop Operator
+Comment=Open the teleop operator window
+Exec=/usr/bin/teleop-operator
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=true

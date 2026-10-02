@@ -59,10 +59,11 @@ then `done`.
 | P6 | Robot supervisor (start and stop) | done | done |
 | P7 | Operator supervisor and in-app console | done | done |
 | P9 | Stop, start again, and logout | done | done |
-| P8 | Debian packages | remaining | remaining |
+| P8 | Debian packages | done | done |
 
-**Next to implement:** `P8`. The robot SSH prompt now takes the
-password instead of printing one. That change is not a milestone.
+**Next to implement:** none. Packaging milestones P0–P9 and P8 are
+done. The robot password is typed at the SSH prompt. That change
+is not a milestone.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -878,7 +879,7 @@ and password logged in again. `commit: done`.
 
 ---
 
-### P8 — Debian packages — STATUS: remaining
+### P8 — Debian packages — STATUS: done
 
 P9 is done. The robot password is typed at the SSH prompt. That
 change has landed and is not a milestone.
@@ -971,6 +972,11 @@ the robot PC, and stop.
 Please also write those steps in packaging/docs/P8_usage.md. Do
 not install the packages on the robot yourself.
 ```
+
+P8 landed. `./packaging/debian/build.sh` produces
+`teleop-operator` and `teleop-robot` amd64 debs. `dpkg -i` installs
+them. `teleop-operator` opens the Qt window. `teleop-robot` opens
+the terminal. Manual install check passed. `commit: done`.
 
 ---
 

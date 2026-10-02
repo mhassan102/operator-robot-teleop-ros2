@@ -18,3 +18,5 @@ video/so-arm/run/
 *.py[cod]
 # Supervisor runtime copies. ice-edge.yaml and ice-op.yaml may contain a TURN password.
 packaging/run/
+# Built .deb files. The ROS image and MediaMTX binary are not source.
+packaging/dist/

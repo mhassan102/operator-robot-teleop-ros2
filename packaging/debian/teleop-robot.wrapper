@@ -1,0 +1,5 @@
+#!/bin/sh
+# Opens the robot terminal. Does not start the arm.
+export PYTHONPATH="/opt/teleop/vendor:/opt/teleop${PYTHONPATH:+:$PYTHONPATH}"
+export PATH="/usr/bin:${PATH}"
+exec /usr/bin/python3 -m packaging.robot_app "$@"
