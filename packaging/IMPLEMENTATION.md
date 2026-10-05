@@ -23,8 +23,8 @@ comes back. After they say that milestone works:
 
 - Read this file from the start, then `packaging/ARCHITECTURE.md`,
   then only the files named in that milestone.
-- Implement **exactly one** milestone (`P1` … `P8`). Stop even if
-  the next one looks small.
+- Implement **exactly one** milestone. The open milestone is
+  **P10**. Stop even if the next one looks small.
 - Do not re-open locked decisions.
 - Do not start a `blocked` or `on hold` row.
 - Do not `git commit` or `git push`.
@@ -60,15 +60,17 @@ then `done`.
 | P7 | Operator supervisor and in-app console | done | done |
 | P9 | Stop, start again, and logout | done | done |
 | P8 | Debian packages | done | done |
+| P10 | Operator UI in the backend console | remaining | remaining |
 
-**Next to implement:** none. Packaging milestones P0–P9 and P8 are
-done. The robot password is typed at the SSH prompt. That change
-is not a milestone.
+**Next to implement:** P10. Login and config move into the operator
+backend. Launching the app starts that container and opens a
+browser. mlink still starts only when the user presses Start.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
 the ROS image inside the `.deb`. TLS on the registry. TURN milestones
-T7–T10.
+T7–T10. P10 does not add a fleet dashboard, does not change the
+robot password, and does not change the registry message shapes.
 
 ---
 
@@ -144,9 +146,19 @@ T7–T10.
     on the robot.
 12. **Packages.** `teleop-robot` and `teleop-operator`, amd64 `.deb`,
     files under `/opt/teleop`. Only the operator package has a
-    `.desktop` launcher and depends on PyQt5. The robot package is
-    the terminal command. The ROS image is a host prerequisite, not
-    a payload of the package.
+    `.desktop` launcher. P3–P8 shipped that launcher as a PyQt5
+    window, with `python3-pyqt5` and `python3-pyqt5.qtwebengine` in
+    Depends. P10 removes those two dependencies. The robot package
+    is the terminal command. The ROS image is a host prerequisite,
+    not a payload of the package.
+13. **P10 moves the operator UI into the backend.** Login, config,
+    Stop, Logout, and the drive page are pages on
+    `http://127.0.0.1:8090/`. The app launch starts the operator
+    container and opens the system browser. It does not start
+    mlink. Qt and Qt WebEngine are not required on the operator PC.
+    A fleet dashboard is a later page in this same backend. P10
+    does not build that dashboard. Decisions 2 and 12 describe the
+    Qt window that P3–P8 shipped. P10 replaces that window.
 
 ---
 
@@ -980,10 +992,182 @@ the terminal. Manual install check passed. `commit: done`.
 
 ---
 
+### P10 — Operator UI in the backend console — STATUS: remaining
+
+**Goal.** The operator PC no longer uses a Qt window. Launching
+`teleop-operator` starts the operator container and opens
+`http://127.0.0.1:8090/` in the system browser. That process serves
+login and config, then the existing drive page after Start. mlink
+starts only when the user presses Start. The container stays up
+across Stop and Logout.
+
+**Why.** Login and config are Qt forms today, and Qt WebEngine only
+embeds the console. The next screen, a fleet dashboard, would be
+thrown away if it were built in Qt. Pages in the backend are the
+same on Ubuntu, and later on Windows and Mac, apart from the
+script that starts the container. The robot app stays a terminal.
+
+**Read:** `packaging/operator_app/cli.py`, `window.py`,
+`config_page.py`, `session.py`,
+`packaging/supervisor/operator_commands.py`,
+`teleoperation-prototype/compose.operator-mlink.yaml`,
+`teleoperation-prototype/scripts/start_operator_mlink.sh`,
+`teleoperation-prototype/ros2_ws/src/teleop_demo/teleop_demo/operator_backend.py`,
+`teleoperation-prototype/web/index.html`, `operate.js`,
+`operate.css`. P4, P5, P7, and P9 in this file. Do not read the
+fleet design as a P10 requirement.
+
+**Implement:**
+
+- Launch path. `teleop-operator` and
+  `/usr/share/applications/teleop-operator.desktop` start the
+  operator container in UI-only mode and open the system browser
+  with `xdg-open http://127.0.0.1:8090/`. The launch path does not
+  import PyQt5 or Qt WebEngine. A host helper with no Qt stays up
+  and binds `127.0.0.1:8091` only. That port is loopback control
+  for mlink start and stop. It is not an EC2 port, not 8090, and
+  not 8765. The browser never calls 8091 and never opens TCP 8765.
+- UI-only container. `TELEOP_UI_ONLY=1` on this first start.
+  `operator_backend` serves HTTP and passes `/api/health`, so the
+  existing compose healthcheck still works. It does not open the
+  mlink UDP socket and does not arm the heartbeat timer.
+  `compose.operator-mlink.yaml` sets `TELEOP_MLINK=1` today, and
+  `operator_backend` starts that timer in its constructor. UI-only
+  mode must skip both until Start enables them. Do not `docker
+  compose down` to flip the mode.
+- Pages, served by `operator_backend` from `teleoperation-prototype/web/`:
+  - `/` login. Placeholders `ID` and `Password`. The login button
+    is not stretched across the page. Colors come from
+    `operate.css`. Wrong ID and wrong password both show the
+    existing auth failure text.
+  - `/config` after `logged_in`. Same choices as the Qt config
+    page: link `tailscale` or `turn`, Interface 1, Interface 2,
+    arm, video, Review, Start. Interface 2 other than None refuses
+    Start. Empty camera page refuses Start. Do not invent a camera
+    URL.
+  - `/operate` is the current drive page. Keep `index.html`,
+    `operate.js`, and `reader.js` behavior. `g` and `h` stay as
+    they are. Do not rewrite `operate.js`. The browser loads
+    `/operate?cam=<camera_page>` only after the robot reports
+    `ready` and mlink-op is up.
+  - Stop and Logout stay visible on `/config` and on `/operate`,
+    as P9 required. Add Quit beside them.
+- The registry socket lives in `operator_backend`, using the
+  existing `packaging` client and the vendored `websockets`. The
+  container imports them through a read-only mount of the repo
+  tree, or `/opt/teleop` when the deb is installed. Do not pip
+  install. Do not rebuild `ros2-teleop-poc:humble` to add
+  packages. A browser refresh does not drop the registry socket
+  and does not send a second `login`. The password is not written
+  to `localStorage` and is not logged.
+- Start, with the container already up:
+  1. Send the accepted config, then `{"v":1,"type":"start"}`.
+  2. Wait until robot `status.phase == ready`.
+  3. Ask the host helper on `127.0.0.1:8091` to run the existing
+     operator plan for mlink only: `start_daemon.sh op
+     --remote-laptop` or `--ice`, never both. Do not call
+     `start_operator_mlink.sh` here. The container is already up.
+  4. Then the backend opens UDP `127.0.0.1:5501` / `5502` and
+     starts the heartbeat timer.
+  5. The browser goes to `/operate?cam=<camera_page>`.
+- Stop, same login, same accepted config:
+  1. Stop mlink-op and stop the heartbeat timer first.
+  2. Send `{"v":1,"type":"stop"}`.
+  3. Wait for `stopped`, up to 30 seconds.
+  4. Show `/config`. Start is enabled. The container stays up.
+- Logout does that stop, sends `{"v":1,"type":"logout"}`, and
+  shows `/`. The robot keeps its ID and password. The container
+  stays up.
+- Quit does that stop, then `docker compose down` for the operator
+  container, then the host helper exits. Closing the browser tab
+  does not stop the arm and does not stop the container. The lab
+  note must say that.
+- Package. Operator `Depends` stays `python3` and `python3-yaml`.
+  Remove `python3-pyqt5` and `python3-pyqt5.qtwebengine`.
+  `packaging/debian/build.sh` must fail if either Qt package is
+  still in Depends. The robot package still has no Qt dependency.
+  `postinst` still does not start the arm.
+- Tests. `packaging/tests` passes without PyQt installed. Retarget
+  the Qt login, config, and supervisor tests onto the HTTP pages
+  and the command plan. Cover UI-only (no heartbeat timer, no
+  mlink socket), Start not calling `start_operator_mlink.sh`, Stop
+  leaving the container up, Logout returning to `/`, and Quit
+  planning `compose down`. Bind a free port. Do not bind 8090,
+  8091, 8765, or 5501–5504 in tests.
+  `TELEOP_SUPERVISOR_DRY_RUN=1` does not exec docker or mlink.
+
+**Do not:** build a fleet dashboard. Do not change registry message
+shapes, the robot password prompt, or `turn/signalling/server.py`.
+Do not start mlink, Docker, the camera, or the arm in this session.
+Do not open a serial port. Do not send `g` or `h`. Do not SSH. Do
+not `dpkg -i`. Do not commit or push. Do not edit the status board.
+Do not rewrite `operate.js`. Write the lab steps in
+`packaging/docs/P10_usage.md`. The real Start, one tap of `g` or
+`h`, Stop, Start again, Logout, and Quit are for the user after
+the gripper is clear. The implementer does not run them. EC2 is
+already on TCP 8765. P10 does not need a signalling restart.
+
+**Verify:**
+
+```bash
+cd /home/muhammadhassan/robots && PYTHONPATH=. python3 -m pytest -q packaging/tests
+cd /home/muhammadhassan/robots && ./packaging/debian/build.sh
+dpkg-deb -I packaging/dist/teleop-operator_*_amd64.deb
+```
+
+The operator `Depends` line must list `python3` and `python3-yaml`
+and must not list `python3-pyqt5` or `python3-pyqt5.qtwebengine`.
+
+**When done:** do not edit the status board and do not commit. List
+files, print the pytest command, print manual test steps for this
+PC, the robot PC, and EC2, and stop.
+
+**Session prompt:**
+
+```text
+You are the implementer. Branch feature/packaging. Read
+packaging/IMPLEMENTATION.md milestone P10 and locked decision 13.
+Implement only P10 (operator UI in the backend console).
+
+Launching teleop-operator starts the operator container in UI-only
+mode and opens http://127.0.0.1:8090/ in the system browser. It
+does not import PyQt5 or Qt WebEngine, and it does not start mlink.
+Login and config are pages on that backend. The existing drive page
+is /operate and is shown only after Start, when the robot reports
+ready and mlink-op is up. Do not rewrite operate.js.
+
+The registry socket stays inside operator_backend. The browser never
+opens TCP 8765. A refresh does not send a second login. UI-only mode
+must not open the mlink UDP socket and must not arm the heartbeat
+timer. Start then runs mlink only (start_daemon.sh op, not
+start_operator_mlink.sh) and only then enables heartbeats. Stop and
+Logout bring mlink down first, then the robot stack, and leave the
+container up. Quit also runs docker compose down. Closing the
+browser tab does not stop the arm.
+
+Operator Depends drops python3-pyqt5 and python3-pyqt5.qtwebengine.
+python3 and python3-yaml stay. build.sh must fail if a Qt package
+remains in Depends. Tests must pass without PyQt installed.
+TELEOP_SUPERVISOR_DRY_RUN=1 must not exec docker or mlink.
+
+Do not build a fleet dashboard. Do not change the robot password or
+the registry message shapes. Do not start mlink, Docker, the camera,
+or the arm. Do not open a serial port. Do not send g or h. Do not
+SSH. Do not dpkg -i. Do not commit or push. Do not change the status
+board. When P10 works, list files, print the pytest command, print
+manual test steps for this PC, the robot PC, and EC2, and stop.
+Please also write those lab test steps in packaging/docs/P10_usage.md.
+The real Start, one tap of g or h, Stop, Start again, Logout, and
+Quit are for the user after the gripper is clear. The implementer
+does not run them. EC2 signalling is already up. Do not restart it.
+```
+
+---
+
 ## Lab safety (every milestone)
 
 The person at the robot watches the arm. First motion is one tap of
 `g` or `h` with the gripper clear, after the HUD says CONNECTED.
-Stop and closing the operator window bring the operator stack down
-first, then the robot stack. Packaging sessions do not run that
-lab; the user does.
+Stop and Quit bring the operator stack down first, then the robot
+stack. Closing the browser tab does not stop the arm. Packaging
+sessions do not run that lab; the user does.
