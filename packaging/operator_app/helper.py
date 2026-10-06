@@ -1,8 +1,9 @@
-"""Loopback control for mlink start, mlink stop, and Quit.
+"""In-process control for mlink start, mlink stop, and Quit.
 
-The process that launches ``teleop-operator`` binds ``127.0.0.1:8091``.
-The operator container calls it. The browser does not. Dry-run returns
-before any docker or mlink process is created.
+The operator process calls these handlers directly. The browser does
+not. Quit sets the process-exit flag after mlink-op is already stopped.
+It does not run docker compose. Dry-run returns before any mlink process
+is created.
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ from packaging.supervisor.operator_commands import (
     decide_operator,
     default_route_ipv4,
     dry_run_enabled,
-    operator_quit_plan,
     operator_stop_plan,
 )
 from packaging.supervisor.robot_commands import Command
@@ -109,7 +109,7 @@ class Helper:
         return {"ok": True, "console_url": decision.console_url}
 
     def _stop_mlink(self) -> dict[str, Any]:
-        """mlink-op only. This does not compose down."""
+        """mlink-op only. This process stays up."""
         if dry_run_enabled():
             return {"ok": True, "dry_run": True}
         for command in operator_stop_plan(self.root):
@@ -121,12 +121,8 @@ class Helper:
         return {"ok": True}
 
     def _finish_quit(self) -> None:
-        try:
-            if not dry_run_enabled():
-                for command in operator_quit_plan(self.root):
-                    self._exec(command)
-        finally:
-            self._quit.set()
+        """Mark this process to exit. mlink-op is already stopped."""
+        self._quit.set()
 
     def _exec(self, command: Command) -> None:
         if dry_run_enabled():

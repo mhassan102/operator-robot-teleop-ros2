@@ -4,8 +4,9 @@
 #   packaging/dist/teleop-robot_<version>_amd64.deb
 # Unpacked layout is /opt/teleop plus /usr/bin/teleop-operator and
 # /usr/bin/teleop-robot. This script does not install the packages
-# and does not start the arm. ros2_ws source, build, and install are
-# packed. The ros2-teleop-poc:humble image is not.
+# and does not start the arm. The robot package packs ros2_ws source,
+# build, and install. The operator package does not. Neither package
+# contains the ros2-teleop-poc:humble image.
 set -euo pipefail
 
 VERSION=1.0.0
@@ -124,15 +125,8 @@ copy_operator_payload() {
     "${dest}/packaging/supervisor/operator_commands.py"
   install -m 644 "${repo}/packaging/supervisor/operator_exec.py" \
     "${dest}/packaging/supervisor/operator_exec.py"
-  install -m 755 "${repo}/teleoperation-prototype/scripts/start_operator_mlink.sh" \
-    "${dest}/teleoperation-prototype/scripts/start_operator_mlink.sh"
-  install -m 644 "${repo}/teleoperation-prototype/compose.operator-mlink.yaml" \
-    "${dest}/teleoperation-prototype/compose.operator-mlink.yaml"
-  install -m 644 "${repo}/teleoperation-prototype/compose.operator-ui.yaml" \
-    "${dest}/teleoperation-prototype/compose.operator-ui.yaml"
   rsync_tree "${repo}/teleoperation-prototype/web/" \
     "${dest}/teleoperation-prototype/web/"
-  copy_ros2_ws "${dest}" teleop-operator
 }
 
 copy_robot_payload() {
@@ -202,7 +196,40 @@ apps do not pip-install at install time. Its license is
 EOF
 }
 
-check_postinst() {
+check_operator_postinst() {
+  local script="$1"
+  local tmp out code
+  tmp="$(mktemp -d)"
+  set +e
+  out="$(PATH="${tmp}" "${script}" configure 2>&1)"
+  code=$?
+  set -e
+  [[ "${code}" -eq 0 ]] || die "teleop-operator postinst failed without docker: ${out}"
+  if grep -q "docker is missing" <<<"${out}"; then
+    die "teleop-operator postinst requires docker: ${out}"
+  fi
+
+  cat > "${tmp}/docker" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = "image" ] && [ "${2:-}" = "inspect" ]; then
+  exit 1
+fi
+exit 0
+EOF
+  chmod 755 "${tmp}/docker"
+  set +e
+  out="$(PATH="${tmp}" "${script}" configure 2>&1)"
+  code=$?
+  set -e
+  [[ "${code}" -eq 0 ]] || die "teleop-operator postinst failed when the image is missing: ${out}"
+  if grep -q "image ${IMAGE} is missing" <<<"${out}"; then
+    die "teleop-operator postinst requires ${IMAGE}: ${out}"
+  fi
+  PATH="${tmp}" "${script}" abort-upgrade
+  rm -rf "${tmp}"
+}
+
+check_robot_postinst() {
   local script="$1" package="$2"
   local tmp out code
   tmp="$(mktemp -d)"
@@ -264,7 +291,7 @@ pack_one() {
     log "${package}: checking the staged tree"
     import_check "${stage}/opt/teleop"
     PYTHONPATH="${stage}/opt/teleop/vendor:${stage}/opt/teleop" \
-      /usr/bin/python3 -c "import packaging.operator_app.cli"
+      /usr/bin/python3 -c "import packaging.operator_app.cli, packaging.operator_app.host"
   else
     copy_robot_payload "${stage}/opt/teleop"
     install -m 755 "${debian}/teleop-robot.wrapper" \
@@ -283,7 +310,11 @@ pack_one() {
     "${stage}/DEBIAN/postinst" >/dev/null; then
     die "${package} postinst starts a stack"
   fi
-  check_postinst "${stage}/DEBIAN/postinst" "${package}"
+  if [[ "${package}" == "teleop-operator" ]]; then
+    check_operator_postinst "${stage}/DEBIAN/postinst"
+  else
+    check_robot_postinst "${stage}/DEBIAN/postinst" "${package}"
+  fi
   write_doc "${stage}" "${package}"
   write_control "${stage}" "${package}" "${depends}" "${conflicts}" "${summary}"
 
@@ -370,16 +401,27 @@ if [[ -f "${repo}/video/bin/mediamtx" ]]; then
   grep -q ' \./opt/teleop/video/so-arm/bin/mediamtx$' <<<"${robot_list}" \
     || die "robot package is missing video/so-arm/bin/mediamtx"
 fi
-for listing in "${op_list}" "${robot_list}"; do
-  grep -q ' \./opt/teleop/teleoperation-prototype/ros2_ws/src/' <<<"${listing}" \
-    || die "package is missing ros2_ws/src"
-  grep -q ' \./opt/teleop/teleoperation-prototype/ros2_ws/install/setup.bash$' <<<"${listing}" \
-    || die "package is missing ros2_ws/install/setup.bash"
-  grep -q ' \./opt/teleop/teleoperation-prototype/ros2_ws/install/teleop_demo_msgs/' <<<"${listing}" \
-    || die "package is missing ros2_ws/install/teleop_demo_msgs"
-  grep -q 'teleop_demo_msgs_s__rosidl_typesupport_c.cpython-310-x86_64-linux-gnu.so' <<<"${listing}" \
-    || die "package is missing the teleop_demo_msgs type-support library"
-done
+if grep -q 'ros2_ws/' <<<"${op_list}"; then
+  die "operator package contains ros2_ws"
+fi
+if grep -E 'compose\.operator-mlink\.yaml|compose\.operator-ui\.yaml|start_operator_mlink\.sh|ros2-teleop-poc' \
+  <<<"${op_list}" >/dev/null; then
+  die "operator package contains the operator container or the ROS image"
+fi
+grep -q ' \./opt/teleop/mlink-transport/' <<<"${op_list}" \
+  || die "operator package is missing mlink-transport"
+grep -q ' \./opt/teleop/teleoperation-prototype/web/login.html$' <<<"${op_list}" \
+  || die "operator package is missing the login page"
+grep -q ' \./opt/teleop/packaging/operator_app/host.py$' <<<"${op_list}" \
+  || die "operator package is missing the host backend"
+grep -q ' \./opt/teleop/teleoperation-prototype/ros2_ws/src/' <<<"${robot_list}" \
+  || die "robot package is missing ros2_ws/src"
+grep -q ' \./opt/teleop/teleoperation-prototype/ros2_ws/install/setup.bash$' <<<"${robot_list}" \
+  || die "robot package is missing ros2_ws/install/setup.bash"
+grep -q ' \./opt/teleop/teleoperation-prototype/ros2_ws/install/teleop_demo_msgs/' <<<"${robot_list}" \
+  || die "robot package is missing ros2_ws/install/teleop_demo_msgs"
+grep -q 'teleop_demo_msgs_s__rosidl_typesupport_c.cpython-310-x86_64-linux-gnu.so' <<<"${robot_list}" \
+  || die "robot package is missing the teleop_demo_msgs type-support library"
 
 assert_archive "${operator_deb}" "./usr/bin/teleop-operator" >/dev/null
 assert_archive "${robot_deb}" "./usr/bin/teleop-robot" >/dev/null

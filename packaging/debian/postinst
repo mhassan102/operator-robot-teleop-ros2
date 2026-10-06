@@ -1,9 +1,15 @@
 #!/bin/sh
-# Check host prerequisites. Do not start the arm, mlink, the camera,
-# or any container. The ROS image is not inside this package.
+# Check host prerequisites. Do not start the app, mlink, the camera,
+# the arm, or any container. The ROS image is not inside this package.
+# teleop-operator runs on distro Python and does not need Docker.
+# teleop-robot still requires docker and ros2-teleop-poc:humble.
 set -u
 
 if [ "${1:-}" != "configure" ]; then
+  exit 0
+fi
+
+if [ "@PKG@" != "teleop-robot" ]; then
   exit 0
 fi
 

@@ -26,7 +26,6 @@ from packaging.supervisor.operator_commands import (  # noqa: E402
     operator_quit_plan,
     operator_stop_plan,
     stop_operator_local,
-    ui_container_plan,
 )
 from packaging.operator_app import cli as operator_cli  # noqa: E402
 from packaging.operator_app.console import ConsoleApp  # noqa: E402
@@ -284,28 +283,16 @@ def test_dry_run_returns_no_commands_and_writes_no_yaml(tmp_path: Path) -> None:
     assert not (tmp_path / "packaging" / "run" / "ice-op.yaml").exists()
 
 
-def test_stop_leaves_the_container_and_quit_composes_down(tmp_path: Path) -> None:
+def test_stop_leaves_the_app_and_quit_does_not_compose(tmp_path: Path) -> None:
     stopped = operator_stop_plan(tmp_path)
-    project = tmp_path / "teleoperation-prototype"
     assert [item.label for item in stopped] == ["mlink-op"]
     assert "docker" not in stopped[0].argv
     assert stopped[0].argv[-1].endswith("packaging/run/mlink-op.pid")
     quit_plan = operator_quit_plan(tmp_path)
-    assert [item.label for item in quit_plan] == ["operator-compose"]
-    assert quit_plan[0].argv[:4] == (
-        "docker",
-        "compose",
-        "--project-directory",
-        str(project),
+    assert quit_plan == []
+    assert "docker" not in " ".join(
+        part for command in quit_plan for part in command.argv
     )
-    assert quit_plan[0].argv[4:8] == (
-        "-f",
-        str(project / "compose.operator-mlink.yaml"),
-        "-f",
-        str(project / "compose.operator-ui.yaml"),
-    )
-    assert quit_plan[0].argv[-2:] == ("down", "--remove-orphans")
-    assert "start_daemon.sh" not in " ".join(quit_plan[0].argv)
 
 
 def test_dry_run_exec_raises_before_spawn(monkeypatch: Any, tmp_path: Path) -> None:
@@ -506,14 +493,12 @@ def test_backend_constructor_uses_the_link_gate() -> None:
     assert "_hold_heartbeat" in text
 
 
-def test_ui_container_plan_does_not_start_mlink(tmp_path: Path) -> None:
-    command = ui_container_plan(tmp_path, "ws://127.0.0.1:9", "http://127.0.0.1:9")
-    text = " ".join(command.argv)
+def test_quit_plan_has_no_docker_compose(tmp_path: Path) -> None:
+    text = " ".join(part for command in operator_quit_plan(tmp_path) for part in command.argv)
+    assert "docker" not in text
+    assert "compose" not in text
     assert "start_daemon.sh" not in text
     assert "start_operator_mlink.sh" not in text
-    assert command.argv[-5:] == ("up", "-d", "--no-build", "--no-deps", "operator")
-    assert ("TELEOP_UI_ONLY", "1") in command.env
-    assert ("TELEOP_GRIPPER_ONLY", "1") in command.env
 
 
 def test_helper_start_stop_and_quit(monkeypatch: Any, tmp_path: Path) -> None:
@@ -542,9 +527,7 @@ def test_helper_start_stop_and_quit(monkeypatch: Any, tmp_path: Path) -> None:
     status, body = helper.handle("POST", "/quit", b"{}")
     assert body["ok"] is True
     helper.wait_for_quit()
-    assert [item.label for item in recorded] == ["operator-compose"]
-    assert "down" in recorded[0].argv
-    assert "start_daemon.sh" not in " ".join(recorded[0].argv)
+    assert recorded == []
 
 
 def test_helper_dry_run_does_not_exec(monkeypatch: Any, tmp_path: Path) -> None:
@@ -574,75 +557,74 @@ def test_helper_dry_run_does_not_exec(monkeypatch: Any, tmp_path: Path) -> None:
     assert recorded == []
 
 
-def test_launch_dry_run_returns_before_the_helper(monkeypatch: Any) -> None:
+def test_launch_dry_run_does_not_bind(monkeypatch: Any) -> None:
     monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
     _forbid_spawn(monkeypatch)
 
     def boom(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("helper bound a port")
+        raise AssertionError("operator bound a port")
 
-    monkeypatch.setattr(operator_cli.Helper, "serve", boom)
+    import packaging.operator_app.host as host_mod
+
+    monkeypatch.setattr(host_mod.OperatorHost, "serve", boom)
     assert operator_cli.launch("ws://127.0.0.1:9") == 0
 
 
-def test_launch_plans_the_ui_container_and_opens_the_browser(
+def test_launch_opens_the_window_without_docker_or_mlink(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("TELEOP_SUPERVISOR_DRY_RUN", raising=False)
     _forbid_spawn(monkeypatch)
     seen: list[str] = []
 
-    class _FakeHelper:
-        def __init__(self, root: Path) -> None:
-            self.root = root
-
+    class _FakeHost:
         def serve(self, host: str, port: int) -> int:
             assert host == "127.0.0.1"
+            assert port == 8090
             seen.append("serve")
-            return 9
+            return 8090
 
-        def wait_for_quit(self) -> None:
+        def wait_for_quit(self, timeout: float | None = None) -> bool:
             seen.append("wait")
+            return True
 
         def shutdown(self) -> None:
             seen.append("down")
 
-    monkeypatch.setattr(operator_cli, "Helper", _FakeHelper)
+        @property
+        def heartbeat_armed(self) -> bool:
+            return False
+
+        @property
+        def socket_open(self) -> bool:
+            return False
+
     opened: list[str] = []
-    ran: list[Any] = []
     assert (
         operator_cli.launch(
             "ws://127.0.0.1:9",
             root=tmp_path,
-            helper_port=0,
-            runner=lambda command, _root: ran.append(command),
+            service=_FakeHost(),
             browser=opened.append,
             wait_ready=lambda: None,
         )
         == 0
     )
     assert opened == ["http://127.0.0.1:8090/"]
-    assert ran
-    assert "start_daemon.sh" not in " ".join(ran[0].argv)
-    assert "start_operator_mlink.sh" not in " ".join(ran[0].argv)
-    assert ("TELEOP_UI_ONLY", "1") in ran[0].env
     assert seen == ["serve", "wait", "down"]
 
 
-def test_closing_the_desktop_window_shuts_the_container(
+def test_closing_the_desktop_window_stops_the_process(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("TELEOP_SUPERVISOR_DRY_RUN", raising=False)
     _forbid_spawn(monkeypatch)
     calls: list[tuple[str, str]] = []
 
-    class _FakeHelper:
-        def __init__(self, root: Path) -> None:
-            self.root = root
-
+    class _FakeHost:
         def serve(self, host: str, port: int) -> int:
             assert host == "127.0.0.1"
-            return 9
+            return 8090
 
         def quit_event(self) -> threading.Event:
             return threading.Event()
@@ -654,42 +636,37 @@ def test_closing_the_desktop_window_shuts_the_container(
         assert until is not None
         calls.append(("window", url))
 
-    def _shut(helper: object, helper_url: str, **_kwargs: object) -> None:
-        calls.append(("shut", helper_url))
+    def _shut(service: object, *, console: str, **_kwargs: object) -> None:
+        calls.append(("shut", console))
 
-    monkeypatch.setattr(operator_cli, "Helper", _FakeHelper)
     monkeypatch.setattr(operator_cli, "open_desktop", _window)
     monkeypatch.setattr(operator_cli, "shutdown_after_close", _shut)
     assert (
         operator_cli.launch(
             "ws://127.0.0.1:9",
             root=tmp_path,
-            helper_port=0,
-            runner=lambda _command, _root: None,
+            service=_FakeHost(),
             wait_ready=lambda: None,
         )
         == 0
     )
     assert calls == [
         ("window", "http://127.0.0.1:8090/"),
-        ("shut", "http://127.0.0.1:9"),
+        ("shut", "http://127.0.0.1:8090/"),
         ("down", ""),
     ]
 
 
-def test_a_failed_window_still_removes_the_container(
+def test_a_failed_window_still_stops_the_process(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("TELEOP_SUPERVISOR_DRY_RUN", raising=False)
     _forbid_spawn(monkeypatch)
     calls: list[str] = []
 
-    class _FakeHelper:
-        def __init__(self, root: Path) -> None:
-            self.root = root
-
+    class _FakeHost:
         def serve(self, host: str, port: int) -> int:
-            return 9
+            return 8090
 
         def quit_event(self) -> threading.Event:
             return threading.Event()
@@ -700,18 +677,16 @@ def test_a_failed_window_still_removes_the_container(
     def _window(url: str, until: object = None) -> None:
         raise RuntimeError("no window")
 
-    def _shut(helper: object, helper_url: str, **_kwargs: object) -> None:
+    def _shut(service: object, *, console: str, **_kwargs: object) -> None:
         calls.append("shut")
 
-    monkeypatch.setattr(operator_cli, "Helper", _FakeHelper)
     monkeypatch.setattr(operator_cli, "open_desktop", _window)
     monkeypatch.setattr(operator_cli, "shutdown_after_close", _shut)
     assert (
         operator_cli.launch(
             "ws://127.0.0.1:9",
             root=tmp_path,
-            helper_port=0,
-            runner=lambda _command, _root: None,
+            service=_FakeHost(),
             wait_ready=lambda: None,
         )
         == 1
@@ -719,47 +694,73 @@ def test_a_failed_window_still_removes_the_container(
     assert calls == ["shut", "down"]
 
 
-def test_window_close_asks_the_console_before_compose_down(tmp_path: Path) -> None:
+def test_window_close_asks_the_console_before_the_process_exits(tmp_path: Path) -> None:
     console, console_seen = _ephemeral_server()
-    helper_http, helper_seen = _ephemeral_server()
     try:
         console_url = f"http://127.0.0.1:{console.server_address[1]}/"
-        helper_url = f"http://127.0.0.1:{helper_http.server_address[1]}"
-        assert operator_cli.request_shutdown(console_url, helper_url) is True
+        assert operator_cli.request_shutdown(console_url) is True
         assert console_seen == ["/api/quit"]
-        assert helper_seen == []
-        helper = Helper(tmp_path, executor=lambda _command, _root: None)
-        helper._quit.set()
+
+        class _AlreadyQuit:
+            def quit_requested(self) -> bool:
+                return True
+
+            def wait_for_quit(self, timeout: float | None = None) -> bool:
+                return True
+
+            def request_quit(self) -> None:
+                raise AssertionError("quit ran twice")
+
         operator_cli.shutdown_after_close(
-            helper, helper_url, console=console_url, wait_s=0.2
+            _AlreadyQuit(), console=console_url, wait_s=0.2
         )
         assert console_seen == ["/api/quit"]
-        helper._quit.clear()
-        operator_cli.shutdown_after_close(
-            helper, helper_url, console=console_url, wait_s=0.2
-        )
+
+        class _QuitsFromConsole:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def quit_requested(self) -> bool:
+                return False
+
+            def wait_for_quit(self, timeout: float | None = None) -> bool:
+                return True
+
+            def request_quit(self) -> None:
+                self.calls.append("quit")
+
+        waiting = _QuitsFromConsole()
+        operator_cli.shutdown_after_close(waiting, console=console_url, wait_s=0.2)
         assert console_seen == ["/api/quit", "/api/quit"]
-        assert helper_seen == ["/quit"]
+        assert waiting.calls == []
     finally:
         console.shutdown()
-        helper_http.shutdown()
         console.server_close()
-        helper_http.server_close()
 
 
-def test_window_close_uses_the_helper_when_the_console_is_down(tmp_path: Path) -> None:
-    helper_http, helper_seen = _ephemeral_server()
-    try:
-        closed = _closed_port()
-        helper_url = f"http://127.0.0.1:{helper_http.server_address[1]}"
-        assert (
-            operator_cli.request_shutdown(f"http://127.0.0.1:{closed}/", helper_url)
-            is True
-        )
-        assert helper_seen == ["/quit"]
-    finally:
-        helper_http.shutdown()
-        helper_http.server_close()
+def test_window_close_stops_the_process_when_the_console_is_down() -> None:
+    closed = _closed_port()
+
+    class _NeedsQuit:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self._quit = threading.Event()
+
+        def quit_requested(self) -> bool:
+            return self._quit.is_set()
+
+        def wait_for_quit(self, timeout: float | None = None) -> bool:
+            return self._quit.wait(timeout)
+
+        def request_quit(self) -> None:
+            self.calls.append("quit")
+            self._quit.set()
+
+    waiting = _NeedsQuit()
+    operator_cli.shutdown_after_close(
+        waiting, console=f"http://127.0.0.1:{closed}/", wait_s=0.2
+    )
+    assert waiting.calls == ["quit"]
 
 
 def test_desktop_window_prefers_qt_without_opening_one(monkeypatch: Any) -> None:
@@ -954,7 +955,7 @@ def test_stop_leaves_the_container_and_logout_returns_to_login(tmp_path: Path) -
         app.close()
 
 
-def test_quit_plans_compose_down_after_stop(tmp_path: Path) -> None:
+def test_quit_exits_after_mlink_stop(tmp_path: Path) -> None:
     app, script, calls = _session(tmp_path)
     try:
         _accept(app, script)

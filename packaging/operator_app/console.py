@@ -1,10 +1,10 @@
-"""Login, config, and session pages for the operator backend.
+"""Login, config, and session pages for the operator process.
 
 The registry socket stays in this process. A browser refresh reads
 ``/api/session`` and does not send ``login`` again. The password is not
-stored and is not logged. Stop and Logout leave the container up. Quit
-asks the host helper to compose down after that stop. Nothing here
-binds 8090, 8091, or the mlink ports; the ROS server calls ``dispatch``.
+stored and is not logged. Stop and Logout leave this process up. Quit
+stops mlink-op first, then asks this process to exit. Nothing here
+binds 8090 or the mlink ports; the host server calls ``dispatch``.
 """
 
 from __future__ import annotations
@@ -123,7 +123,7 @@ class ConsoleApp:
             raise RuntimeError("operator console loop did not start")
 
     def serve(self, host: str = "127.0.0.1", port: int = 0) -> ThreadingHTTPServer:
-        """Bind a test server. Production uses the ROS server and ``dispatch``."""
+        """Bind a test server. Production uses the host server and ``dispatch``."""
         if host != "127.0.0.1":
             raise ValueError("console test server binds 127.0.0.1 only")
         self.start()
@@ -494,6 +494,7 @@ class ConsoleApp:
             await self._return_to_login()
 
     async def _begin_quit(self) -> None:
+        """mlink-op is already stopped. This exits the operator process."""
         await asyncio.to_thread(self._post_helper, "/quit", {})
         self._assign(view="quit", status="quit", start_enabled=False)
 

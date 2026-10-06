@@ -1,10 +1,12 @@
 """Launch the operator console. ``--registry`` selects the signalling URL.
 
-This starts the operator container in UI-only mode, opens
-``http://127.0.0.1:8090/`` in a desktop window, and binds
-``127.0.0.1:8091`` for mlink start and stop. It does not start mlink.
-Closing the window stops the robot and removes the operator container.
-``TELEOP_SUPERVISOR_DRY_RUN=1`` returns before docker or mlink is executed.
+This starts one host Python process, opens ``http://127.0.0.1:8090/``
+in the desktop window, and does not start mlink. That process serves
+the pages, holds the registry socket, maps the keyboard, and, after
+Start, sends mlink UDP. Closing the window stops mlink-op and then
+stops this process. There is no Docker compose step.
+``TELEOP_SUPERVISOR_DRY_RUN=1`` returns before the process binds a port
+and before mlink is executed.
 """
 
 from __future__ import annotations
@@ -15,15 +17,12 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
-from packaging.operator_app.helper import Helper
 from packaging.operator_app.login import DEFAULT_REGISTRY
-from packaging.supervisor.operator_commands import dry_run_enabled, ui_container_plan
-from packaging.supervisor.robot_commands import Command
+from packaging.supervisor.operator_commands import dry_run_enabled
 
 CONSOLE_URL = "http://127.0.0.1:8090/"
-_READY = "http://127.0.0.1:8090/api/health"
 _QUIT_WAIT_S = 45.0
 
 
@@ -65,41 +64,29 @@ def _post_json(url: str, timeout: float = 15.0) -> bool:
         return False
 
 
-def request_shutdown(console: str, helper_url: str = "") -> bool:
-    """Quit through the console so the robot stops before compose down.
-
-    Returns True when the console accepted it. When the console is
-    already gone, ``helper_url`` still removes the operator container.
-    """
-    if _post_json(console.rstrip("/") + "/api/quit"):
-        return True
-    if helper_url:
-        return _post_json(helper_url.rstrip("/") + "/quit")
-    return False
+def request_shutdown(console: str) -> bool:
+    """Quit through the operator process so mlink-op stops first."""
+    return _post_json(console.rstrip("/") + "/api/quit")
 
 
 def shutdown_after_close(
-    helper: Helper,
-    helper_url: str,
+    service: Any,
     *,
     console: str = CONSOLE_URL,
     wait_s: float = _QUIT_WAIT_S,
 ) -> None:
-    """Stop the robot and remove the operator container."""
-    if helper.quit_requested():
+    """Stop mlink-op, then let this process exit."""
+    if service.quit_requested():
         return
-    accepted = request_shutdown(console, "")
-    if not accepted and helper_url and not helper.quit_requested():
-        _post_json(helper_url.rstrip("/") + "/quit")
-    if helper.wait_for_quit(wait_s):
+    request_shutdown(console)
+    if service.wait_for_quit(wait_s):
         return
-    if helper_url and not helper.quit_requested():
-        _post_json(helper_url.rstrip("/") + "/quit")
-        helper.wait_for_quit(wait_s)
+    service.request_quit()
+    service.wait_for_quit(wait_s)
 
 
-def wait_until_ready(url: str = _READY, timeout: float = 60.0) -> bool:
-    """Poll the container healthcheck. This does not start mlink."""
+def wait_until_ready(url: str, timeout: float = 60.0) -> bool:
+    """Poll ``/api/health``. This does not start mlink."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -115,52 +102,46 @@ def launch(
     registry_url: str,
     *,
     root: Path | None = None,
-    helper_port: int = 8091,
-    runner: Callable[[Command, Path], None] | None = None,
+    port: int = 8090,
+    service: Any = None,
     browser: Callable[[str], None] | None = None,
     wait_ready: Callable[[], None] | None = None,
 ) -> int:
-    """Start the UI container and the loopback helper. Dry-run does neither."""
+    """Serve the pages in this process and open the window. Dry-run does neither."""
     if dry_run_enabled():
         return 0
-    repo = repo_root() if root is None else Path(root)
-    helper = Helper(repo)
-    try:
-        bound = helper.serve("127.0.0.1", helper_port)
-    except OSError as exc:
-        print(f"operator helper failed: {exc}", file=sys.stderr)
-        return 1
-    helper_url = f"http://127.0.0.1:{bound}"
-    command = ui_container_plan(repo, registry_url, helper_url)
-    try:
-        if runner is None:
-            from packaging.supervisor import operator_exec
+    from packaging.operator_app.host import OperatorHost
 
-            operator_exec.execute_command(command, repo)
-        else:
-            runner(command, repo)
-    except Exception as exc:
-        print(f"operator container failed: {exc}", file=sys.stderr)
-        helper.shutdown()
+    repo = repo_root() if root is None else Path(root)
+    host = service if service is not None else OperatorHost(repo, registry_url)
+    try:
+        bound = host.serve("127.0.0.1", port)
+    except OSError as exc:
+        print(f"operator failed: {exc}", file=sys.stderr)
         return 1
+    origin = f"http://127.0.0.1:{bound}/"
+    page = CONSOLE_URL if bound == 8090 else origin
     if wait_ready is None:
-        wait_until_ready()
+        if not wait_until_ready(origin + "api/health"):
+            print("operator did not become ready", file=sys.stderr)
+            host.shutdown()
+            return 1
     else:
         wait_ready()
     code = 0
     try:
         if browser is None:
             try:
-                open_desktop(CONSOLE_URL, until=helper.quit_event())
+                open_desktop(page, until=host.quit_event())
             except Exception as exc:
                 print(f"operator window failed: {exc}", file=sys.stderr)
                 code = 1
-            shutdown_after_close(helper, helper_url)
+            shutdown_after_close(host, console=page)
         else:
-            browser(CONSOLE_URL)
-            helper.wait_for_quit()
+            browser(page)
+            host.wait_for_quit()
     finally:
-        helper.shutdown()
+        host.shutdown()
     return code
 
 

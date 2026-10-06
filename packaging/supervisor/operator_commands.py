@@ -1,10 +1,9 @@
 """Build the operator commands. Nothing in this module is spawned.
 
-Launch brings the operator container up in UI-only mode. Start, after the
-robot reports ready, runs mlink-op only. The container is already up, so
-Start does not call ``start_operator_mlink.sh``. Stop signals that mlink
-process and leaves the container up. Quit is the compose down that follows
-that stop.
+Launch serves the pages in this process and does not start mlink. Start,
+after the robot reports ready, runs mlink-op only. Stop signals that
+process and leaves this process up. Quit stops mlink-op first and then
+this process exits. There is no docker compose step.
 
 TURN writes ``packaging/run/ice-op.yaml`` from a template. ``bind_ip`` is
 this PC's default-route IPv4, injected by tests. A missing address or any
@@ -84,7 +83,7 @@ def dry_run_enabled() -> bool:
 
 
 def console_url(camera_page: str) -> str:
-    """Drive page. The container is already serving it."""
+    """Drive page. This process is already serving it."""
     return f"{CONSOLE_ORIGIN}/operate?cam={camera_page}"
 
 
@@ -107,61 +106,6 @@ def start_refused(
     except PlanError as exc:
         return exc.detail
     return ""
-
-
-def packaging_mounts(repo_root: str | Path) -> tuple[str, str]:
-    """Host paths mounted read-only at ``/opt/teleop/packaging`` and ``vendor``.
-
-    A repo checkout vendors websockets under ``packaging/debian/vendor``.
-    An installed tree vendors them at ``/opt/teleop/vendor``.
-    """
-    root = Path(repo_root)
-    packaging_dir = root / "packaging"
-    bundled = packaging_dir / "debian" / "vendor"
-    if (bundled / "websockets" / "__init__.py").is_file():
-        vendor = bundled
-    else:
-        vendor = root / "vendor"
-    return str(packaging_dir), str(vendor)
-
-
-def ui_container_plan(
-    repo_root: str | Path,
-    registry_url: str,
-    helper_url: str = "http://127.0.0.1:8091",
-) -> Command:
-    """Compose up for the UI-only container. No mlink and no operator script."""
-    root = Path(repo_root)
-    project = root / "teleoperation-prototype"
-    base = project / "compose.operator-mlink.yaml"
-    overlay = project / "compose.operator-ui.yaml"
-    packaging_dir, vendor = packaging_mounts(root)
-    return Command(
-        argv=(
-            "docker",
-            "compose",
-            "--project-directory",
-            str(project),
-            "-f",
-            str(base),
-            "-f",
-            str(overlay),
-            "up",
-            "-d",
-            "--no-build",
-            "--no-deps",
-            "operator",
-        ),
-        env=(
-            ("TELEOP_UI_ONLY", "1"),
-            ("TELEOP_REGISTRY", registry_url),
-            ("TELEOP_HELPER_URL", helper_url),
-            ("TELEOP_GRIPPER_ONLY", "1"),
-            ("TELEOP_PACKAGING_MOUNT", packaging_dir),
-            ("TELEOP_VENDOR_MOUNT", vendor),
-        ),
-        label="operator-ui",
-    )
 
 
 def camera_page_of(inventory: Mapping[str, Any] | None) -> str:
@@ -236,7 +180,7 @@ def operator_plan(
     bind_ip: str | None = None,
     template: str | None = None,
 ) -> OperatorPlan:
-    """mlink-op only. The operator container is already up.
+    """mlink-op only. The operator process is already up.
 
     ``phase`` must be ``ready``. Otherwise no command is built and no yaml
     is written. ``template`` is the TURN yaml text. When it is omitted the
@@ -298,7 +242,7 @@ def decide_operator(
 
 
 def operator_stop_plan(repo_root: str | Path) -> list[Command]:
-    """Stop mlink-op only. The operator container stays up. Nothing is spawned."""
+    """Stop mlink-op only. This process stays up. Nothing is spawned."""
     root = Path(repo_root)
     pidfile = root / "packaging" / "run" / "mlink-op.pid"
     return [
@@ -310,37 +254,19 @@ def operator_stop_plan(repo_root: str | Path) -> list[Command]:
 
 
 def operator_quit_plan(repo_root: str | Path) -> list[Command]:
-    """Compose down for the operator container. Nothing is spawned.
+    """No spawned command. Quit stops mlink-op first, then this process exits.
 
-    Quit runs this after mlink-op is already stopped. Stop does not.
+    There is no docker compose step. ``repo_root`` is unused; Stop owns
+    the mlink-op signal, and the caller exits after that.
     """
-    root = Path(repo_root)
-    project = root / "teleoperation-prototype"
-    base = project / "compose.operator-mlink.yaml"
-    overlay = project / "compose.operator-ui.yaml"
-    return [
-        Command(
-            argv=(
-                "docker",
-                "compose",
-                "--project-directory",
-                str(project),
-                "-f",
-                str(base),
-                "-f",
-                str(overlay),
-                "down",
-                "--remove-orphans",
-            ),
-            label="operator-compose",
-        ),
-    ]
+    del repo_root
+    return []
 
 
 def stop_operator_local(repo_root: str | Path, *, live: bool = False) -> None:
     """Stop mlink-op when a live Start has spawned it.
 
-    The container stays up. Dry-run and a session that never started mlink
+    This process stays up. Dry-run and a session that never started mlink
     return before any process is created. The exec helper is imported only
     on the live path.
     """
