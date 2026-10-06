@@ -1,1 +1,1 @@
-"""Operator desktop app. Login, config, then the console after ready."""
+"""Operator console. Login and config are pages on the backend."""

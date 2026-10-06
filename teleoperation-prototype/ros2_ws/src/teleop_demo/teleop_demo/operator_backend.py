@@ -1,9 +1,13 @@
 """Operator backend: ROS 2 node plus localhost HTTP/WebSocket console.
 
-Heartbeat and /teleop/command publish only while a /ws/session socket is open.
-Telemetry from /teleop/state and /teleop/tool_pose is display-only.
-Named poses use /teleop/go_named_pose locally, or the same compact UDP mux
-when TELEOP_MLINK=1 (F8). mlink stays a separate host process.
+TELEOP_UI_ONLY=1 serves login and config and does not open the mlink
+socket or arm the heartbeat timer. Start enables both. Reloading the
+page does not stop heartbeats. Closing the desktop window is Quit:
+heartbeats stop and the operator container is removed.
+Command publish still requires an open /ws/session. Telemetry from
+/teleop/state and /teleop/tool_pose is display-only. Named poses use
+/teleop/go_named_pose locally, or the compact UDP mux when mlink is
+open. mlink stays a separate host process.
 """
 
 from __future__ import annotations
@@ -53,7 +57,8 @@ from teleop_demo.mlink_payload import (
     encode_heartbeat,
     encode_named_pose_req,
 )
-from teleop_demo.mlink_udp import mlink_enabled, open_from_env
+from teleop_demo.link_gate import LinkGate
+from teleop_demo.mlink_udp import open_from_env
 
 WEB_ROOT = Path(os.environ.get("TELEOP_WEB_ROOT", "/teleop/web"))
 HTTP_HOST = os.environ.get("TELEOP_HTTP_HOST", "0.0.0.0")
@@ -109,24 +114,120 @@ class OperatorBackend(Node):
         self._gripper_only = gripper_only_from_env(os.environ.get("TELEOP_GRIPPER_ONLY"))
         if self._gripper_only:
             self.get_logger().info("GRIPPER ONLY: cartesian keys and named poses ignored")
-        if mlink_enabled():
-            self._mlink = open_from_env(
-                default_tx=MLINK_DEFAULT_TX, default_rx=MLINK_DEFAULT_RX
-            )
-            self.create_timer(0.005, self._poll_mlink)
-            self.get_logger().info(
-                f"MLINK control tx={self._mlink.tx_addr} rx={self._mlink.rx_addr}"
-            )
+        self._link_gate = LinkGate()
+        self._hold_heartbeat = False
+        self._link_job: Optional[tuple[str, threading.Event]] = None
+        self._heartbeat_timer = None
+        self._poll_timer = None
+        self._console = None
+        self._link_gate.apply_startup(
+            os.environ,
+            self._open_mlink_socket,
+            lambda: self._arm_heartbeat(False),
+            self._arm_poll,
+        )
         command_rate = float(self.get_parameter("command_rate_hz").value)
-        heartbeat_rate = float(self.get_parameter("heartbeat_rate_hz").value)
         telemetry_rate = float(self.get_parameter("telemetry_rate_hz").value)
         self.create_timer(1.0 / command_rate, self._publish_command)
-        self.create_timer(1.0 / heartbeat_rate, self._publish_heartbeat)
         self.create_timer(1.0 / telemetry_rate, self._publish_telemetry)
+        self._start_console()
         _node_ready.set()
         self.get_logger().info(
             f"HTTP {HTTP_HOST}:{HTTP_PORT} serving {WEB_ROOT}"
         )
+
+    def _open_mlink_socket(self):
+        self._mlink = open_from_env(
+            default_tx=MLINK_DEFAULT_TX, default_rx=MLINK_DEFAULT_RX
+        )
+        self.get_logger().info(
+            f"MLINK control tx={self._mlink.tx_addr} rx={self._mlink.rx_addr}"
+        )
+        return self._mlink
+
+    def _arm_heartbeat(self, hold: bool):
+        self._hold_heartbeat = hold
+        if self._heartbeat_timer is None:
+            rate = float(self.get_parameter("heartbeat_rate_hz").value)
+            self._heartbeat_timer = self.create_timer(1.0 / rate, self._publish_heartbeat)
+        return self._heartbeat_timer
+
+    def _arm_poll(self):
+        if self._poll_timer is None:
+            self._poll_timer = self.create_timer(0.005, self._poll_mlink)
+        return self._poll_timer
+
+    def _enable_link(self) -> None:
+        self._link_gate.enable(
+            self._open_mlink_socket,
+            lambda: self._arm_heartbeat(True),
+            self._arm_poll,
+        )
+
+    def _disable_link(self) -> None:
+        self._hold_heartbeat = False
+
+        def _cancel(timer) -> None:
+            timer.cancel()
+
+        def _close(sock) -> None:
+            try:
+                sock.close()
+            finally:
+                if self._mlink is sock:
+                    self._mlink = None
+
+        self._link_gate.disable(_close, _cancel)
+        self._heartbeat_timer = None
+        self._poll_timer = None
+
+    def _service_link_job(self) -> None:
+        with self._lock:
+            job = self._link_job
+            self._link_job = None
+        if job is None:
+            return
+        kind, event = job
+        try:
+            if kind == "enable":
+                self._enable_link()
+            else:
+                self._disable_link()
+        finally:
+            event.set()
+
+    def _request_link(self, kind: str) -> None:
+        event = threading.Event()
+        with self._lock:
+            self._link_job = (kind, event)
+        if not event.wait(2.0):
+            self.get_logger().error(f"link {kind} was not applied")
+
+    def request_enable_link(self) -> None:
+        """Open UDP and arm heartbeats. Called from the console thread."""
+        self._request_link("enable")
+
+    def request_disable_link(self) -> None:
+        """Stop heartbeats, then close UDP. Called from the console thread."""
+        self._request_link("disable")
+
+    def _start_console(self) -> None:
+        """Login and config when the packaging tree is on PYTHONPATH."""
+        try:
+            from packaging.operator_app.console import ConsoleApp
+        except ImportError:
+            self.get_logger().info("operator console pages are not mounted")
+            return
+        registry = os.environ.get("TELEOP_REGISTRY", "ws://127.0.0.1:8765")
+        helper = os.environ.get("TELEOP_HELPER_URL", "http://127.0.0.1:8091")
+        self._console = ConsoleApp(
+            registry,
+            helper_url=helper,
+            web_root=WEB_ROOT,
+            on_enable_link=self.request_enable_link,
+            on_disable_link=self.request_disable_link,
+        )
+        self._console.start()
 
     def attach_session(self, connection: WsConnection) -> str:
         with self._lock:
@@ -218,6 +319,7 @@ class OperatorBackend(Node):
         return old
 
     def _publish_command(self) -> None:
+        self._service_link_job()
         with self._lock:
             if self._connection is None:
                 return
@@ -226,7 +328,7 @@ class OperatorBackend(Node):
 
     def _publish_heartbeat(self) -> None:
         with self._lock:
-            if self._connection is None:
+            if self._connection is None and not self._hold_heartbeat:
                 return
             self._publish_heartbeat_locked()
 
@@ -509,7 +611,18 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args) -> None:
         path = urlparse(self.path).path
-        if path in ("/api/health", "/api/state", "/ws/session"):
+        if path in (
+            "/api/health",
+            "/api/state",
+            "/api/session",
+            "/api/login",
+            "/api/review",
+            "/api/start",
+            "/api/stop",
+            "/api/logout",
+            "/api/quit",
+            "/ws/session",
+        ):
             return
         super().log_message(fmt, *args)
 
@@ -524,6 +637,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if path == "/api/state":
             self._send_state()
             return
+        if self._dispatch("GET", b""):
+            return
         if path in ("/", "/index.html"):
             self._send_file(WEB_ROOT / "index.html", "text/html; charset=utf-8")
             return
@@ -534,7 +649,56 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if path == "/api/named_pose":
             self._handle_named_pose()
             return
+        body = self._read_body()
+        if body is None:
+            return
+        if self._dispatch("POST", body):
+            return
         self.send_error(404, "not found")
+
+    def _console_app(self):
+        node = getattr(self.server, "operator_node", None)
+        if node is None:
+            return None
+        return getattr(node, "_console", None)
+
+    def _dispatch(self, method: str, body: bytes) -> bool:
+        console = self._console_app()
+        if console is None:
+            return False
+        result = console.dispatch(method, self.path, body)
+        if result is None:
+            return False
+        self._send_result(result)
+        return True
+
+    def _read_body(self) -> Optional[bytes]:
+        length_header = self.headers.get("Content-Length")
+        if length_header is None:
+            return b""
+        try:
+            length = int(length_header)
+        except ValueError:
+            self.send_error(400, "bad body")
+            return None
+        if length < 0 or length > 65536:
+            self.send_error(400, "bad body")
+            return None
+        if length == 0:
+            return b""
+        raw = self.rfile.read(length)
+        if len(raw) != length:
+            self.send_error(400, "bad body")
+            return None
+        return raw
+
+    def _send_result(self, result) -> None:
+        self.send_response(result.status)
+        self.send_header("Content-Type", result.content_type)
+        self.send_header("Content-Length", str(len(result.body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(result.body)
 
     def _handle_websocket(self) -> None:
         node = getattr(self.server, "operator_node", None)
@@ -709,6 +873,9 @@ def main(args=None) -> None:
     finally:
         _node_ready.clear()
         node.shutdown_session()
+        console = getattr(node, "_console", None)
+        if console is not None:
+            console.close()
         if node._mlink is not None:
             node._mlink.close()
         httpd.shutdown()

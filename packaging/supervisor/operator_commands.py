@@ -1,6 +1,11 @@
-"""Build the operator start commands after the robot reports ready.
+"""Build the operator commands. Nothing in this module is spawned.
 
-``operator_plan`` does not spawn processes and does not load a console.
+Launch brings the operator container up in UI-only mode. Start, after the
+robot reports ready, runs mlink-op only. The container is already up, so
+Start does not call ``start_operator_mlink.sh``. Stop signals that mlink
+process and leaves the container up. Quit is the compose down that follows
+that stop.
+
 TURN writes ``packaging/run/ice-op.yaml`` from a template. ``bind_ip`` is
 this PC's default-route IPv4, injected by tests. A missing address or any
 address that starts with ``100.`` is refused. The file is a runtime copy.
@@ -34,7 +39,10 @@ _NO_IPV4 = "this PC has no IPv4 for bind_ip"
 _NO_CAMERA = "camera page is not set"
 _NOT_READY = "robot is not ready"
 _IPV4 = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
-CONSOLE_ORIGIN = "http://127.0.0.1:8090/"
+CONSOLE_ORIGIN = "http://127.0.0.1:8090"
+_IFACE2 = (
+    "second interface is not used in this version; set Interface 2 to None"
+)
 
 _STOP_PID = (
     "import os, signal, sys\n"
@@ -76,8 +84,84 @@ def dry_run_enabled() -> bool:
 
 
 def console_url(camera_page: str) -> str:
-    """Same URL ``start_operator_mlink.sh --remote-laptop`` prints."""
-    return f"{CONSOLE_ORIGIN}?cam={camera_page}"
+    """Drive page. The container is already serving it."""
+    return f"{CONSOLE_ORIGIN}/operate?cam={camera_page}"
+
+
+def operate_path(camera_page: str) -> str:
+    """Path the browser loads after mlink-op is up."""
+    return f"/operate?cam={camera_page}"
+
+
+def start_refused(
+    config: Mapping[str, Any] | None,
+    inventory: Mapping[str, Any] | None,
+) -> str:
+    """Why Start must not send, or ``\"\"`` when the choice may be sent."""
+    if not isinstance(config, Mapping):
+        return "no config"
+    if config.get("iface2") is not None:
+        return _IFACE2
+    try:
+        camera_page_of(inventory)
+    except PlanError as exc:
+        return exc.detail
+    return ""
+
+
+def packaging_mounts(repo_root: str | Path) -> tuple[str, str]:
+    """Host paths mounted read-only at ``/opt/teleop/packaging`` and ``vendor``.
+
+    A repo checkout vendors websockets under ``packaging/debian/vendor``.
+    An installed tree vendors them at ``/opt/teleop/vendor``.
+    """
+    root = Path(repo_root)
+    packaging_dir = root / "packaging"
+    bundled = packaging_dir / "debian" / "vendor"
+    if (bundled / "websockets" / "__init__.py").is_file():
+        vendor = bundled
+    else:
+        vendor = root / "vendor"
+    return str(packaging_dir), str(vendor)
+
+
+def ui_container_plan(
+    repo_root: str | Path,
+    registry_url: str,
+    helper_url: str = "http://127.0.0.1:8091",
+) -> Command:
+    """Compose up for the UI-only container. No mlink and no operator script."""
+    root = Path(repo_root)
+    project = root / "teleoperation-prototype"
+    base = project / "compose.operator-mlink.yaml"
+    overlay = project / "compose.operator-ui.yaml"
+    packaging_dir, vendor = packaging_mounts(root)
+    return Command(
+        argv=(
+            "docker",
+            "compose",
+            "--project-directory",
+            str(project),
+            "-f",
+            str(base),
+            "-f",
+            str(overlay),
+            "up",
+            "-d",
+            "--no-build",
+            "--no-deps",
+            "operator",
+        ),
+        env=(
+            ("TELEOP_UI_ONLY", "1"),
+            ("TELEOP_REGISTRY", registry_url),
+            ("TELEOP_HELPER_URL", helper_url),
+            ("TELEOP_GRIPPER_ONLY", "1"),
+            ("TELEOP_PACKAGING_MOUNT", packaging_dir),
+            ("TELEOP_VENDOR_MOUNT", vendor),
+        ),
+        label="operator-ui",
+    )
 
 
 def camera_page_of(inventory: Mapping[str, Any] | None) -> str:
@@ -152,12 +236,12 @@ def operator_plan(
     bind_ip: str | None = None,
     template: str | None = None,
 ) -> OperatorPlan:
-    """mlink-op, then the gripper-only operator script.
+    """mlink-op only. The operator container is already up.
 
     ``phase`` must be ``ready``. Otherwise no command is built and no yaml
     is written. ``template`` is the TURN yaml text. When it is omitted the
     live caller reads ``turn/config/local_op.yaml``. Tests pass a fixture
-    and ``bind_ip``.
+    and ``bind_ip``. This does not call ``start_operator_mlink.sh``.
     """
     if phase != "ready":
         raise PlanError(_NOT_READY)
@@ -169,9 +253,6 @@ def operator_plan(
     page = camera_page_of(inventory)
     root = Path(repo_root)
     daemon = _script(root, "mlink-transport", "scripts", "start_daemon.sh")
-    operator_script = _script(
-        root, "teleoperation-prototype", "scripts", "start_operator_mlink.sh"
-    )
     if link == "tailscale":
         daemon_command = Command(
             argv=(daemon, "op", "--remote-laptop"),
@@ -186,18 +267,7 @@ def operator_plan(
             argv=(daemon, "op", "--ice", "--ice-config", str(dest)),
             label="mlink-op",
         )
-    operator_command = Command(
-        argv=(operator_script, "--remote-laptop"),
-        env=(
-            ("REMOTE_LAPTOP_CAM", page),
-            ("TELEOP_GRIPPER_ONLY", "1"),
-        ),
-        label="operator",
-    )
-    return OperatorPlan(
-        (daemon_command, operator_command),
-        console_url(page),
-    )
+    return OperatorPlan((daemon_command,), console_url(page))
 
 
 def decide_operator(
@@ -228,11 +298,26 @@ def decide_operator(
 
 
 def operator_stop_plan(repo_root: str | Path) -> list[Command]:
-    """Operator compose down, then the mlink-op process. Nothing is spawned."""
+    """Stop mlink-op only. The operator container stays up. Nothing is spawned."""
+    root = Path(repo_root)
+    pidfile = root / "packaging" / "run" / "mlink-op.pid"
+    return [
+        Command(
+            argv=(sys.executable, "-c", _STOP_PID, str(pidfile)),
+            label="mlink-op",
+        ),
+    ]
+
+
+def operator_quit_plan(repo_root: str | Path) -> list[Command]:
+    """Compose down for the operator container. Nothing is spawned.
+
+    Quit runs this after mlink-op is already stopped. Stop does not.
+    """
     root = Path(repo_root)
     project = root / "teleoperation-prototype"
-    compose = project / "compose.operator-mlink.yaml"
-    pidfile = root / "packaging" / "run" / "mlink-op.pid"
+    base = project / "compose.operator-mlink.yaml"
+    overlay = project / "compose.operator-ui.yaml"
     return [
         Command(
             argv=(
@@ -241,24 +326,23 @@ def operator_stop_plan(repo_root: str | Path) -> list[Command]:
                 "--project-directory",
                 str(project),
                 "-f",
-                str(compose),
+                str(base),
+                "-f",
+                str(overlay),
                 "down",
                 "--remove-orphans",
             ),
             label="operator-compose",
         ),
-        Command(
-            argv=(sys.executable, "-c", _STOP_PID, str(pidfile)),
-            label="mlink-op",
-        ),
     ]
 
 
 def stop_operator_local(repo_root: str | Path, *, live: bool = False) -> None:
-    """Run the local operator stop when a live start has spawned it.
+    """Stop mlink-op when a live Start has spawned it.
 
-    Dry-run and a window that never started return before any process is
-    created. The exec helper is imported only on the live path.
+    The container stays up. Dry-run and a session that never started mlink
+    return before any process is created. The exec helper is imported only
+    on the live path.
     """
     if not live or dry_run_enabled():
         return

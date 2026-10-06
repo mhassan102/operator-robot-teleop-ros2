@@ -1,6 +1,6 @@
 """Config page and the robot's review of that message.
 
-Widget values come from a fixture inventory. A matching message is
+Page values come from a fixture inventory. A matching message is
 ``config_ok``, including when Interface 2 is set. An unknown video
 path is ``bad_config``. Nothing here opens a serial port or starts
 mlink, Docker, the camera, or the arm.
@@ -11,14 +11,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 _TURN = Path(__file__).resolve().parents[2] / "turn"
 if str(_TURN) not in sys.path:
@@ -44,12 +41,14 @@ from packaging.robot_app.session import (  # noqa: E402
 from signalling.server import listening_uri, start_server  # noqa: E402
 from websockets.asyncio.client import connect  # noqa: E402
 
-_FORBIDDEN = frozenset(range(50000, 50101)) | {8766, 3479}
+_FORBIDDEN = (
+    frozenset(range(50000, 50101))
+    | frozenset(range(5501, 5505))
+    | {8765, 8766, 3479, 8090, 8091}
+)
 _ROBOT_ID = "123456789"
 _PASSWORD = "AB23CD45"
 _HOSTNAME = "lab-robot"
-_APP: Any = None
-
 FOLLOWER = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B61033180-if00"
 LEADER = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B3E090040-if00"
 _GOOD_LINE = (
@@ -331,132 +330,130 @@ def test_robot_answers_config_on_the_socket() -> None:
     asyncio.run(asyncio.wait_for(body(), 15))
 
 
-def _qapp() -> Any:
-    global _APP
-    from PyQt5.QtWidgets import QApplication
 
-    if _APP is None:
-        existing = QApplication.instance()
-        _APP = existing if existing is not None else QApplication(["teleop-operator-test"])
-    return _APP
+_WEB = Path(__file__).resolve().parents[2] / "teleoperation-prototype" / "web"
 
 
-def _pump_until(predicate: Any, timeout: float = 5.0) -> bool:
-    app = _qapp()
+class _Script:
+    def __init__(self) -> None:
+        self.ws: Any = None
+        self._loop: Any = None
+        self._queue: Any = None
+
+    def bind(self, loop: Any) -> None:
+        self._loop = loop
+        self._queue = asyncio.Queue()
+
+    async def login(self, url: str, robot_id: str, password: str) -> Any:
+        from packaging.operator_app.login import LoginResult
+
+        self.ws = object()
+        return LoginResult("ok", _HOSTNAME)
+
+    async def send_json(self, message: dict[str, Any]) -> None:
+        return None
+
+    async def next_message(self) -> dict[str, Any] | None:
+        return await self._queue.get()
+
+    def push(self, message: dict[str, Any] | None) -> None:
+        self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
+
+    async def close(self) -> None:
+        self.ws = None
+        if self._queue is not None:
+            self._queue.put_nowait(None)
+
+
+def _until(predicate: Any, timeout: float = 5.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        app.processEvents()
         if predicate():
             return True
         time.sleep(0.02)
-    app.processEvents()
     return bool(predicate())
 
 
+def _post(app: Any, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    raw = b"{}" if body is None else json.dumps(body).encode()
+    result = app.dispatch("POST", path, raw)
+    assert result is not None and result.status == 200
+    return json.loads(result.body)
+
+
 def test_config_page_values() -> None:
-    _qapp()
-    from PyQt5.QtWidgets import QComboBox, QLineEdit, QPushButton
+    from packaging.operator_app.console import ConsoleApp
 
-    from packaging.operator_app.config_page import ConfigPage
-    from packaging.operator_app.login import LoginResult
-    from packaging.operator_app.window import LoginWindow
-
-    inv = _inventory()
-    window = LoginWindow("ws://127.0.0.1:9", operator_nic="wlo1")
-    try:
-        window.show()
-        assert window.findChildren(QComboBox) == []
-        window.present(LoginResult("ok", _HOSTNAME))
-        assert window.stack.currentWidget() is window.waiting_page
-        assert window.findChildren(QComboBox) == []
-        window.show_inventory(inv)
-        page = window.config_page
-        assert page is not None
-        assert window.stack.currentWidget() is page
-        assert page.hostname_label.text() == _HOSTNAME
-        assert page.link_tailscale.isChecked()
-        assert not page.link_turn.isChecked()
-        assert page.link_help.text() == LINK_HELP
-        assert page.iface1.currentData() == "wlp0s20f3"
-        assert page.iface1.findData("enx00e04c2c4570") < 0
-        assert page.iface2.currentIndex() == 0
-        local = page.iface2.findData("enx00e04c2c4570")
-        assert local > 0
-        assert page.iface2.itemText(local) == "enx00e04c2c4570 (local-only)"
-        assert "tailscale0" not in page.iface2.itemText(0)
-        assert page.arm.currentData() == FOLLOWER
-        assert page.arm.findData(LEADER) >= 0
-        assert "ttyACM0" in page.arm.currentText()
-        assert page.video.currentData() == "/dev/video2"
-        assert page.video.findData("/dev/video0") >= 0
-        joined = " ".join(
-            page.video.itemText(i) for i in range(page.video.count())
-        )
-        assert "Metadata" not in joined
-        assert page.operator_network.text() == "Operator network: wlo1"
-        assert page.findChildren(QLineEdit) == []
-        assert [button.text() for button in page.findChildren(QPushButton)] == [
-            "Review",
-            "Start",
-        ]
-        assert window.stop_button.text() == "Stop"
-        assert window.logout_button.text() == "Logout"
-        assert window.stop_button.isVisible()
-        assert window.logout_button.isVisible()
-        message = page.current_config()
-        assert message == _good()
-        assert "wlo1" not in json.dumps(message)
-        page.review_button.click()
-        assert page.review_status.text() == "Cannot reach the registry."
-
-        page.link_turn.setChecked(True)
-        page.iface2.setCurrentIndex(local)
-        page.apply(inv, "wlo1", _HOSTNAME)
-        assert page.link_turn.isChecked()
-        assert page.iface2.currentData() == "enx00e04c2c4570"
-        kept = page.current_config()
-        assert kept["link"] == "turn"
-        assert kept["iface2"] == "enx00e04c2c4570"
-        assert set(kept) == {"v", "type", "link", "iface1", "iface2", "arm", "video"}
-        reply, line = review_config(kept, inv)
-        assert reply == {"v": 1, "type": "config_ok"}
-        assert "(local-only)" not in line
-
-        window.present_inbound(
-            {
-                "v": 1,
-                "type": "error",
-                "code": "bad_config",
-                "detail": "unknown video",
-            }
-        )
-        assert page.review_status.text() == "unknown video"
-        window.present_inbound({"v": 1, "type": "config_ok"})
-        assert page.review_status.text() == "config_ok"
-    finally:
-        window.close()
-        _qapp().processEvents()
-
-    bare = inventory_from(
-        "net wlo1 up device\nvideo video0 Integrated Camera\n",
-        "addr wlo1 192.168.222.56\nroute wlo1\n",
-        {"usb-1a86_USB_Single_Serial_5B3E090040-if00": "/dev/ttyACM1"},
+    script = _Script()
+    app = ConsoleApp(
+        "ws://127.0.0.1:9",
+        web_root=_WEB,
+        operator_nic="wlo1",
+        session=script,
     )
-    bare_page = ConfigPage()
-    bare_page.apply(bare, "wlo1", _HOSTNAME)
     try:
-        assert bare_page.arm.count() == 1
-        assert bare_page.arm.currentIndex() == -1
-        assert "5B3E090040" in bare_page.arm.itemText(0)
-        assert bare_page.video.count() == 1
-        assert bare_page.video.currentIndex() == -1
-        assert bare_page.current_config()["arm"] == ""
-        assert bare_page.current_config()["video"] == ""
-        assert bare_page.iface1.currentData() == "wlo1"
+        page = (_WEB / "config.html").read_text(encoding="utf-8")
+        assert "Review" in page and "Start" in page
+        assert 'id="session-stop"' in page
+        assert 'id="session-logout"' in page
+        assert 'id="session-quit"' in page
+        reply = _post(
+            app, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+        )
+        assert reply["ok"] is True
+        script.push(_inventory())
+        assert _until(lambda: app.snapshot()["view"] == "config")
+        snap = app.snapshot()
+        assert snap["hostname"] == _HOSTNAME
+        assert snap["link_help"] == LINK_HELP
+        assert snap["selected"]["link"] == "tailscale"
+        assert snap["selected"]["iface1"] == "wlp0s20f3"
+        assert snap["selected"]["iface2"] is None
+        iface1_values = [item["value"] for item in snap["choices"]["iface1"]]
+        assert iface1_values == ["wlp0s20f3"]
+        iface2 = snap["choices"]["iface2"]
+        assert iface2[0] == {"label": "None", "value": None}
+        local = next(item for item in iface2 if item["value"] == "enx00e04c2c4570")
+        assert local["label"] == "enx00e04c2c4570 (local-only)"
+        assert snap["selected"]["arm"] == FOLLOWER
+        assert any(item["value"] == LEADER for item in snap["choices"]["arm"])
+        assert "ttyACM0" in next(
+            item["label"] for item in snap["choices"]["arm"] if item["value"] == FOLLOWER
+        )
+        assert snap["selected"]["video"] == "/dev/video2"
+        joined = " ".join(item["label"] for item in snap["choices"]["video"])
+        assert "Metadata" not in joined
+        assert snap["operator_network"] == "Operator network: wlo1"
+        assert "wlo1" not in json.dumps(_good())
+        offline = _post(app, "/api/review", _good())
+        assert offline["message"] == "Sending..."
     finally:
-        bare_page.close()
-        _qapp().processEvents()
+        app.close()
 
+    bare_script = _Script()
+    bare = ConsoleApp(
+        "ws://127.0.0.1:9",
+        web_root=_WEB,
+        operator_nic="wlo1",
+        session=bare_script,
+    )
+    try:
+        _post(bare, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD})
+        bare_inventory = inventory_from(
+            "net wlo1 up device\nvideo video0 Integrated Camera\n",
+            "addr wlo1 192.168.222.56\nroute wlo1\n",
+            {"usb-1a86_USB_Single_Serial_5B3E090040-if00": "/dev/ttyACM1"},
+        )
+        bare_script.push(bare_inventory)
+        assert _until(lambda: bare.snapshot()["view"] == "config")
+        selected = bare.snapshot()["selected"]
+        assert len(bare.snapshot()["choices"]["arm"]) == 1
+        assert "5B3E090040" in bare.snapshot()["choices"]["arm"][0]["label"]
+        assert selected["arm"] == ""
+        assert selected["video"] == ""
+        assert selected["iface1"] == "wlo1"
+    finally:
+        bare.close()
 
 class _Rig:
     def __init__(self, inventory: dict[str, Any]) -> None:
@@ -544,55 +541,47 @@ class _Rig:
             loop.call_soon_threadsafe(loop.stop)
         self.thread.join(timeout=3)
 
-
 def test_review_button_reaches_config_ok() -> None:
-    _qapp()
-    from packaging.operator_app.window import LoginWindow
+    from packaging.operator_app.console import ConsoleApp
 
     inv = _inventory()
     rig = _Rig(inv)
-    window = None
+    app = None
     try:
         uri = rig.start()
-        assert _pump_until(lambda: "registered" in rig.statuses)
-        window = LoginWindow(uri, operator_nic="wlo1")
-        window.show()
-        window.id_edit.setText(_ROBOT_ID)
-        window.password_edit.setText(_PASSWORD)
-        window.submit()
-        assert _pump_until(
-            lambda: window is not None
-            and window.config_page is not None
-            and window.stack.currentWidget() is window.config_page
-        ), window.status_label.text()
-        page = window.config_page
-        assert page is not None
-        assert page.hostname_label.text() == _HOSTNAME
-        assert page.operator_network.text() == "Operator network: wlo1"
-        assert page.arm.currentData() == FOLLOWER
-        assert page.video.currentData() == "/dev/video2"
-        assert page.iface2.currentIndex() == 0
-        page.review_button.click()
-        assert page.review_status.text() == "Sending..."
-        assert _pump_until(
-            lambda: page.review_status.text() == "config_ok"
+        assert _until(lambda: "registered" in rig.statuses)
+        app = ConsoleApp(uri, web_root=_WEB, operator_nic="wlo1")
+        reply = _post(
+            app, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+        )
+        assert reply["ok"] is True, reply
+        assert _until(lambda: app.snapshot()["view"] == "config"), app.snapshot()
+        snap = app.snapshot()
+        assert snap["hostname"] == _HOSTNAME
+        assert snap["operator_network"] == "Operator network: wlo1"
+        assert snap["selected"]["arm"] == FOLLOWER
+        assert snap["selected"]["video"] == "/dev/video2"
+        assert snap["selected"]["iface2"] is None
+        reviewed = _post(app, "/api/review", {})
+        assert reviewed["review_status"] == "Sending..."
+        assert _until(
+            lambda: app.snapshot()["review_status"] == "config_ok"
             and any(line == _GOOD_LINE for line in rig.lines)
-        ), page.review_status.text()
+        ), (app.snapshot()["review_status"], list(rig.lines))
         assert all("wlo1" not in line for line in rig.lines)
-        local = page.iface2.findData("enx00e04c2c4570")
-        page.iface2.setCurrentIndex(local)
-        page.review_button.click()
-        assert _pump_until(
-            lambda: page.review_status.text() == "config_ok"
-            and any(
+        chosen = config_message(
+            "tailscale", "wlp0s20f3", "enx00e04c2c4570", FOLLOWER, "/dev/video2"
+        )
+        _post(app, "/api/review", chosen)
+        assert _until(
+            lambda: any(
                 "iface2 enx00e04c2c4570" in line and line.endswith("config_ok")
                 for line in rig.lines
             )
-        ), (page.review_status.text(), list(rig.lines))
+        ), list(rig.lines)
         assert all(_PASSWORD not in line for line in rig.lines)
         assert "start_daemon" not in "\n".join(rig.lines)
     finally:
-        if window is not None:
-            window.close()
-            _qapp().processEvents()
+        if app is not None:
+            app.close()
         rig.stop()

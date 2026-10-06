@@ -1,5 +1,5 @@
 #!/bin/sh
-# Opens the Qt operator window. Does not start the arm.
+# Starts the operator desktop window. Does not start mlink or the arm.
 export PYTHONPATH="/opt/teleop/vendor:/opt/teleop${PYTHONPATH:+:$PYTHONPATH}"
 export PATH="/usr/bin:${PATH}"
 exec /usr/bin/python3 -m packaging.operator_app "$@"

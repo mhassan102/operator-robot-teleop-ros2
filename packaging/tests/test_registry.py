@@ -24,7 +24,11 @@ from signalling.server import listening_uri, start_server
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
-_FORBIDDEN = frozenset(range(50000, 50101)) | {8766, 3479}
+_FORBIDDEN = (
+    frozenset(range(50000, 50101))
+    | frozenset(range(5501, 5505))
+    | {8765, 8766, 3479, 8090, 8091}
+)
 
 INVENTORY = {
     "v": 1,

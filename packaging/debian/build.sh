@@ -128,6 +128,8 @@ copy_operator_payload() {
     "${dest}/teleoperation-prototype/scripts/start_operator_mlink.sh"
   install -m 644 "${repo}/teleoperation-prototype/compose.operator-mlink.yaml" \
     "${dest}/teleoperation-prototype/compose.operator-mlink.yaml"
+  install -m 644 "${repo}/teleoperation-prototype/compose.operator-ui.yaml" \
+    "${dest}/teleoperation-prototype/compose.operator-ui.yaml"
   rsync_tree "${repo}/teleoperation-prototype/web/" \
     "${dest}/teleoperation-prototype/web/"
   copy_ros2_ws "${dest}" teleop-operator
@@ -323,9 +325,9 @@ rm -f "${dist}/teleop-operator_"*"_${ARCH}.deb" "${dist}/teleop-robot_"*"_${ARCH
 
 operator_deb="$(pack_one \
   teleop-operator \
-  "python3, python3-pyqt5, python3-pyqt5.qtwebengine, python3-yaml" \
+  "python3, python3-yaml" \
   teleop-robot \
-  "Teleop operator window")"
+  "Teleop operator console")"
 robot_deb="$(pack_one \
   teleop-robot \
   "python3, python3-yaml" \
@@ -340,12 +342,14 @@ has_dep() {
   [[ "${padded}" == *", ${2},"* ]]
 }
 has_dep "${op_depends}" python3 || die "operator Depends missing python3"
-has_dep "${op_depends}" python3-pyqt5 || die "operator Depends missing python3-pyqt5"
-has_dep "${op_depends}" python3-pyqt5.qtwebengine \
-  || die "operator Depends missing python3-pyqt5.qtwebengine"
+has_dep "${op_depends}" python3-yaml || die "operator Depends missing python3-yaml"
 has_dep "${robot_depends}" python3 || die "robot Depends missing python3"
-if [[ "${robot_depends,,}" == *pyqt* ]]; then
-  die "robot package depends on PyQt: ${robot_depends}"
+has_dep "${robot_depends}" python3-yaml || die "robot Depends missing python3-yaml"
+if [[ "${op_depends,,}" == *pyqt* || "${op_depends,,}" == *qtwebengine* ]]; then
+  die "operator Depends still lists a Qt package: ${op_depends}"
+fi
+if [[ "${robot_depends,,}" == *pyqt* || "${robot_depends,,}" == *qtwebengine* ]]; then
+  die "robot package depends on Qt: ${robot_depends}"
 fi
 
 op_list="$(dpkg-deb -c "${operator_deb}")"

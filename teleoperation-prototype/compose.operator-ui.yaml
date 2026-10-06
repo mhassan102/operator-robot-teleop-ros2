@@ -1,0 +1,15 @@
+# Overlay for the browser console. The launch command adds this file
+# to compose.operator-mlink.yaml. TELEOP_UI_ONLY=1 serves login and
+# config and does not open the mlink socket. Start enables mlink in
+# the running process. This file is not used by start_operator_mlink.sh.
+services:
+  operator:
+    environment:
+      TELEOP_UI_ONLY: ${TELEOP_UI_ONLY:-1}
+      TELEOP_REGISTRY: ${TELEOP_REGISTRY:-ws://127.0.0.1:8765}
+      TELEOP_HELPER_URL: ${TELEOP_HELPER_URL:-http://127.0.0.1:8091}
+      TELEOP_GRIPPER_ONLY: ${TELEOP_GRIPPER_ONLY:-1}
+      PYTHONPATH: /opt/teleop/vendor:/opt/teleop
+    volumes:
+      - ${TELEOP_PACKAGING_MOUNT}:/opt/teleop/packaging:ro
+      - ${TELEOP_VENDOR_MOUNT}:/opt/teleop/vendor:ro

@@ -2,8 +2,9 @@
 
 A test client registers as the robot. The operator session checks
 auth, offline, busy, and success, and it keeps the socket after
-login. Widgets are built with the offscreen Qt platform. Nothing
-here starts mlink, Docker, the camera, or the arm.
+login. The browser pages read /api/session and do not send login
+again on refresh. Nothing here starts mlink, Docker, the camera,
+or the arm.
 """
 
 from __future__ import annotations
@@ -11,14 +12,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 _TURN = Path(__file__).resolve().parents[2] / "turn"
 if str(_TURN) not in sys.path:
@@ -36,12 +34,14 @@ from packaging.operator_app.session import OperatorSession  # noqa: E402
 from signalling.server import listening_uri, start_server  # noqa: E402
 from websockets.asyncio.client import connect  # noqa: E402
 
-_FORBIDDEN = frozenset(range(50000, 50101)) | {8766, 3479}
+_FORBIDDEN = (
+    frozenset(range(50000, 50101))
+    | frozenset(range(5501, 5505))
+    | {8765, 8766, 3479, 8090, 8091}
+)
 _ROBOT_ID = "123456789"
 _PASSWORD = "AB23CD45"
 _HOSTNAME = "lab-robot"
-
-_APP: Any = None
 
 
 def _register(hostname: str = _HOSTNAME) -> dict[str, Any]:
@@ -188,27 +188,6 @@ def test_login_auth_offline_busy_and_success() -> None:
     _run(body())
 
 
-def _qapp() -> Any:
-    global _APP
-    from PyQt5.QtWidgets import QApplication
-
-    if _APP is None:
-        existing = QApplication.instance()
-        _APP = existing if existing is not None else QApplication(["teleop-operator-test"])
-    return _APP
-
-
-def _pump_until(predicate: Any, timeout: float = 5.0) -> bool:
-    app = _qapp()
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        app.processEvents()
-        if predicate():
-            return True
-        time.sleep(0.02)
-    app.processEvents()
-    return bool(predicate())
-
 
 class _ServerThread:
     def __init__(self) -> None:
@@ -290,133 +269,137 @@ class _ServerThread:
             self.loop.call_soon_threadsafe(self.loop.stop)
         self.thread.join(timeout=2)
 
-
-def test_window_shows_errors_and_hostname() -> None:
-    _qapp()
-    from PyQt5.QtWidgets import QComboBox, QLineEdit, QRadioButton
-
-    from packaging.operator_app.window import LoginWindow
-
-    window = LoginWindow("ws://127.0.0.1:9")
-    try:
-        window.show()
-        assert window.login_button.text() == "Log in"
-        assert window.password_edit.echoMode() == QLineEdit.Password
-        window.password_edit.setText(_PASSWORD)
-        assert window.password_edit.displayText() != _PASSWORD
-        window.password_edit.clear()
-        from packaging.operator_app.theme import (
-            ACCENT,
-            BG,
-            LINE,
-            MUTED,
-            PANEL,
-            PANEL_2,
-            STOP,
-            TEXT,
-        )
-
-        sheet = window.styleSheet()
-        for color in (BG, PANEL, PANEL_2, TEXT, MUTED, ACCENT, STOP, LINE):
-            assert color in sheet
-        assert window.findChildren(QComboBox) == []
-        assert window.findChildren(QRadioButton) == []
-        assert window.stack.currentWidget() is window.form_page
-        window.submit()
-        assert window.status_label.text() == message_for("empty")
-        assert window._thread is None
-
-        window.present(LoginResult("auth"))
-        assert window.stack.currentWidget() is window.form_page
-        assert window.status_label.text() == "Wrong password."
-        assert window.session is None
-        window.present(LoginResult("offline"))
-        assert window.status_label.text() == "That robot is offline."
-        assert window.stack.currentWidget() is window.form_page
-        window.present(LoginResult("busy"))
-        assert window.status_label.text() == "Another operator is already connected."
-        assert window.stack.currentWidget() is window.form_page
-
-        window.id_edit.setText(_ROBOT_ID)
-        window.password_edit.setText(_PASSWORD)
-        window.present(LoginResult("ok", _HOSTNAME))
-        assert window.logged_in
-        assert window.hostname_label.text() == _HOSTNAME
-        assert window.waiting_label.text() == "Waiting for the robot."
-        assert window.stack.currentWidget() is window.waiting_page
-        assert window.password_edit.text() == ""
-        assert window.findChildren(QComboBox) == []
-    finally:
-        window.close()
-        _qapp().processEvents()
+_WEB = Path(__file__).resolve().parents[2] / "teleoperation-prototype" / "web"
 
 
-def test_window_login_against_registry() -> None:
-    _qapp()
-    from packaging.operator_app.window import LoginWindow
+def _post(app: Any, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    raw = b"{}" if body is None else json.dumps(body).encode()
+    result = app.dispatch("POST", path, raw)
+    assert result is not None and result.status == 200
+    payload = json.loads(result.body)
+    assert isinstance(payload, dict)
+    return payload
+
+
+def test_login_page_has_no_qt_and_stores_no_password() -> None:
+    login = (_WEB / "login.html").read_text(encoding="utf-8")
+    css = (_WEB / "operate.css").read_text(encoding="utf-8")
+    assert 'placeholder="ID"' in login
+    assert 'placeholder="Password"' in login
+    assert 'type="password"' in login
+    assert ">Log in<" in login
+    assert "login-button" in login
+    assert "width: 120px" in css
+    pages = "\n".join(
+        ( _WEB / name).read_text(encoding="utf-8")
+        for name in ("login.html", "login.js", "config.html", "config.js", "session_bar.js")
+    )
+    for banned in (
+        "localStorage",
+        "sessionStorage",
+        "beforeunload",
+        "8765",
+        "8091",
+        "PyQt",
+    ):
+        assert banned not in pages
+    config = (_WEB / "config.html").read_text(encoding="utf-8")
+    for label in (
+        "Tailscale",
+        "TURN",
+        "Interface 1",
+        "Interface 2",
+        "Arm",
+        "Video",
+        "Review",
+        "Start",
+        "Stop",
+        "Logout",
+        "Quit",
+    ):
+        assert label in config
+    assert "TURN changes gripper control" in config
+    drive = (_WEB / "index.html").read_text(encoding="utf-8")
+    assert 'id="session-stop"' in drive
+    assert 'id="session-logout"' in drive
+    assert 'id="session-quit"' in drive
+    assert "/operate.js?v=f8v" in drive
+    assert 'SESSION_PATH = "/ws/session"' in (_WEB / "operate.js").read_text(
+        encoding="utf-8"
+    )
+    login_js = (_WEB / "login.js").read_text(encoding="utf-8")
+    assert "if (reply.ok) password.value = \"\";" in login_js
+
+
+def test_login_page_shows_auth_text_and_a_refresh_does_not_login_again() -> None:
+    from packaging.operator_app.console import ConsoleApp
 
     server = _ServerThread()
-    windows: list[Any] = []
+    apps: list[Any] = []
     try:
         uri = server.start()
         server.hold_robot()
-        first = LoginWindow(uri)
-        second = LoginWindow(uri)
-        windows.extend((first, second))
-        first.show()
-        second.show()
-
-        first.id_edit.setText(_ROBOT_ID)
-        first.password_edit.setText("WRONGPWD")
-        first.submit()
-        assert _pump_until(lambda: first.status_label.text() == "Wrong password.")
-        assert first.stack.currentWidget() is first.form_page
-        assert first.session is None
-        assert first.password_edit.text() == "WRONGPWD"
-
-        first.password_edit.setText(_PASSWORD)
-        first.submit()
-        assert _pump_until(lambda: first.logged_in)
-        assert first.hostname_label.text() == _HOSTNAME
-        assert first.waiting_label.text() == "Waiting for the robot."
-        assert first.stack.currentWidget() is first.waiting_page
-        assert first.session is not None
-        assert first.session.ws is not None
-        assert first.session.hostname == _HOSTNAME
-        assert _PASSWORD not in repr(first.session)
-
-        second.id_edit.setText(_ROBOT_ID)
-        second.password_edit.setText(_PASSWORD)
-        second.submit()
-        assert _pump_until(
-            lambda: second.status_label.text()
-            == "Another operator is already connected."
+        first = ConsoleApp(uri, web_root=_WEB)
+        second = ConsoleApp(uri, web_root=_WEB)
+        apps.extend((first, second))
+        bad = _post(
+            first, "/api/login", {"robot_id": _ROBOT_ID, "password": "WRONGPWD"}
         )
-        assert second.stack.currentWidget() is second.form_page
-        assert second.session is None
-
+        assert bad["ok"] is False
+        assert bad["message"] == "Wrong password."
+        assert _PASSWORD not in json.dumps(bad)
+        assert first.login_sends == 1
+        good = _post(
+            first, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+        )
+        assert good["ok"] is True
+        assert good["hostname"] == _HOSTNAME
+        assert good["message"] == "Waiting for the robot."
+        assert first.login_sends == 2
+        refresh = _post(
+            first, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+        )
+        assert refresh["ok"] is True
+        assert first.login_sends == 2
+        session = json.loads(first.dispatch("GET", "/api/session").body)
+        assert session["logged_in"] is True
+        assert session["robot_id"] == _ROBOT_ID
+        assert _PASSWORD not in json.dumps(session)
+        assert "ws://" not in json.dumps(session)
+        assert first.login_sends == 2
+        busy = _post(
+            second, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+        )
+        assert busy["message"] == "Another operator is already connected."
         first.close()
-        windows.remove(first)
-        _qapp().processEvents()
-        assert _pump_until(
-            lambda: _retry_second(second),
-            timeout=5.0,
-        )
-        assert second.logged_in
-        assert second.hostname_label.text() == _HOSTNAME
-        assert second.session is not None
+        apps.remove(first)
+        logged = False
+        reply: dict[str, Any] = {}
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            reply = _post(
+                second, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+            )
+            if reply.get("ok"):
+                logged = True
+                break
+            time.sleep(0.05)
+        assert logged, reply
+        assert reply["hostname"] == _HOSTNAME
     finally:
-        for window in windows:
-            window.close()
-        _qapp().processEvents()
+        for app in list(apps):
+            app.close()
         server.stop()
 
 
-def _retry_second(window: Any) -> bool:
-    if window.logged_in:
-        return True
-    if window.login_button.isEnabled() and window.status_label.text().startswith(
-        "Another"
-    ):
-        window.submit()
-    return False
+def test_empty_login_does_not_open_a_socket() -> None:
+    from packaging.operator_app.console import ConsoleApp
+
+    app = ConsoleApp("ws://127.0.0.1:9", web_root=_WEB)
+    try:
+        reply = _post(app, "/api/login", {"robot_id": "  ", "password": ""})
+        assert reply["message"] == message_for("empty")
+        assert app.login_sends == 0
+        assert app._session.ws is None
+    finally:
+        app.close()

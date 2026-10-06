@@ -1,4 +1,4 @@
-"""Launch the operator window: ``python3 -m packaging.operator_app``."""
+"""Launch the operator console: ``python3 -m packaging.operator_app``."""
 
 from __future__ import annotations
 

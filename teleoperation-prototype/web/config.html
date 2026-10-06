@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teleop</title>
+  <link rel="stylesheet" href="/operate.css">
+</head>
+<body>
+  <div class="config-wrap">
+    <header class="header">
+      <div class="brand">
+        <span class="product">Teleop</span>
+      </div>
+      <div class="meta">
+        <button type="button" class="session-button" id="session-stop">Stop</button>
+        <button type="button" class="session-button" id="session-logout">Logout</button>
+        <button type="button" class="session-button" id="session-quit">Quit</button>
+      </div>
+    </header>
+    <main class="config-main">
+      <p class="config-hostname" id="config-hostname"></p>
+      <form id="config-form" autocomplete="off">
+        <fieldset>
+          <legend>Link</legend>
+          <label><input type="radio" name="link" value="tailscale" checked> Tailscale</label>
+          <label><input type="radio" name="link" value="turn"> TURN</label>
+          <p class="link-help" id="link-help">TURN changes gripper control. Video stays on the robot camera page.</p>
+        </fieldset>
+        <label>Interface 1
+          <select id="iface1" name="iface1"></select>
+        </label>
+        <label>Interface 2
+          <select id="iface2" name="iface2"></select>
+        </label>
+        <label>Arm
+          <select id="arm" name="arm"></select>
+        </label>
+        <label>Video
+          <select id="video" name="video"></select>
+        </label>
+        <p class="operator-network" id="operator-network"></p>
+        <div class="config-actions">
+          <button type="button" class="session-button" id="review">Review</button>
+          <button type="button" class="session-button" id="start">Start</button>
+        </div>
+        <p class="review-status" id="review-status" aria-live="polite"></p>
+        <p class="session-status" id="session-status" aria-live="polite"></p>
+      </form>
+    </main>
+  </div>
+  <script src="/config.js"></script>
+  <script src="/session_bar.js"></script>
+</body>
+</html>

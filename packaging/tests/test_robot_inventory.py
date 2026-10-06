@@ -46,7 +46,11 @@ from packaging.robot_app.session import (  # noqa: E402
 from signalling.server import listening_uri, start_server  # noqa: E402
 from websockets.asyncio.client import connect  # noqa: E402
 
-_FORBIDDEN = frozenset(range(50000, 50101)) | {8766, 3479}
+_FORBIDDEN = (
+    frozenset(range(50000, 50101))
+    | frozenset(range(5501, 5505))
+    | {8765, 8766, 3479, 8090, 8091}
+)
 
 SYSFS = """
 # physical NICs, plus the ones the window must hide

@@ -23,8 +23,8 @@ comes back. After they say that milestone works:
 
 - Read this file from the start, then `packaging/ARCHITECTURE.md`,
   then only the files named in that milestone.
-- Implement **exactly one** milestone. The open milestone is
-  **P10**. Stop even if the next one looks small.
+- Implement **exactly one** milestone. Packaging milestones through
+  P10 are done. Do not start a new one from this file.
 - Do not re-open locked decisions.
 - Do not start a `blocked` or `on hold` row.
 - Do not `git commit` or `git push`.
@@ -60,11 +60,12 @@ then `done`.
 | P7 | Operator supervisor and in-app console | done | done |
 | P9 | Stop, start again, and logout | done | done |
 | P8 | Debian packages | done | done |
-| P10 | Operator UI in the backend console | remaining | remaining |
+| P10 | Operator UI in the backend console | done | done |
 
-**Next to implement:** P10. Login and config move into the operator
-backend. Launching the app starts that container and opens a
-browser. mlink still starts only when the user presses Start.
+**Next to implement:** none. Packaging milestones through P10 are
+done. Login and config are pages in the operator backend. Launching
+the app starts that container and opens a browser. mlink starts
+when the user presses Start.
 
 **Not in P1–P8.** Bonding Interface 2 into mlink. Moving camera RTP
 onto the mlink socket. Joints 1–5. Rewriting `operate.js`. Publishing
@@ -992,7 +993,7 @@ the terminal. Manual install check passed. `commit: done`.
 
 ---
 
-### P10 — Operator UI in the backend console — STATUS: remaining
+### P10 — Operator UI in the backend console — STATUS: done
 
 **Goal.** The operator PC no longer uses a Qt window. Launching
 `teleop-operator` starts the operator container and opens
@@ -1161,6 +1162,11 @@ The real Start, one tap of g or h, Stop, Start again, Logout, and
 Quit are for the user after the gripper is clear. The implementer
 does not run them. EC2 signalling is already up. Do not restart it.
 ```
+
+P10 landed. `teleop-operator` starts the operator container and
+opens the browser on login and config. Start brings up mlink and
+the drive page. The user drove the gripper with one `g` or `h`
+tap. `commit: done`.
 
 ---
 

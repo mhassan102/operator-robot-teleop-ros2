@@ -1,34 +1,42 @@
-"""Operator start plan, dry-run, and the window close handler.
+"""Operator start plan, dry-run, and the browser console session.
 
-The planner is called directly. Dry-run must not spawn and must not load
-a console page. Nothing here opens a serial port or starts mlink, Docker,
-the camera, or the arm.
+The planner is called directly. Dry-run must not spawn. Nothing here
+opens a serial port or starts mlink, Docker, the camera, or the arm.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import socket
 import subprocess
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from packaging.supervisor.operator_commands import (  # noqa: E402
     camera_page_of,
     decide_operator,
     default_route_ipv4,
     operator_plan,
+    operator_quit_plan,
     operator_stop_plan,
     stop_operator_local,
+    ui_container_plan,
 )
+from packaging.operator_app import cli as operator_cli  # noqa: E402
+from packaging.operator_app.console import ConsoleApp  # noqa: E402
+from packaging.operator_app.helper import Helper  # noqa: E402
+from packaging.operator_app.login import LoginResult  # noqa: E402
 from packaging.supervisor.operator_exec import execute_command  # noqa: E402
 from packaging.supervisor.robot_commands import PlanError  # noqa: E402
 
 _CAMERA = "http://100.120.193.52:8889/cam/"
-_CONSOLE = f"http://127.0.0.1:8090/?cam={_CAMERA}"
+_CONSOLE = f"http://127.0.0.1:8090/operate?cam={_CAMERA}"
 _BIND = "192.168.222.56"
 _TEMPLATE = (
     "# bind_ip: 192.0.2.9\n"
@@ -40,7 +48,13 @@ _ROUTE = """Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IR
 wlo1 00000000 0123A8C0 0003 0 0 100 00000000 0 0 0
 tailscale0 00000000 00000000 0001 0 0 50 00000000 0 0 0
 """
-_APP: Any = None
+
+_WEB = (
+    Path(__file__).resolve().parents[2] / "teleoperation-prototype" / "web"
+)
+_IFACE2 = (
+    "second interface is not used in this version; set Interface 2 to None"
+)
 
 
 def _inventory(camera_page: str = _CAMERA) -> dict[str, Any]:
@@ -97,21 +111,15 @@ def _forbid_spawn(monkeypatch: Any) -> None:
 def test_tailscale_plan_is_remote_laptop_then_gripper_only(tmp_path: Path) -> None:
     plan = operator_plan(_config(), _inventory(), tmp_path, "ready")
     root = tmp_path
-    assert [item.label for item in plan.commands] == ["mlink-op", "operator"]
+    assert [item.label for item in plan.commands] == ["mlink-op"]
+    joined = " ".join(plan.commands[0].argv)
+    assert "start_operator_mlink.sh" not in joined
     assert plan.commands[0].argv == (
         str(root / "mlink-transport" / "scripts" / "start_daemon.sh"),
         "op",
         "--remote-laptop",
     )
     assert "--ice" not in plan.commands[0].argv
-    assert plan.commands[1].argv == (
-        str(root / "teleoperation-prototype" / "scripts" / "start_operator_mlink.sh"),
-        "--remote-laptop",
-    )
-    assert plan.commands[1].env == (
-        ("REMOTE_LAPTOP_CAM", _CAMERA),
-        ("TELEOP_GRIPPER_ONLY", "1"),
-    )
     assert plan.console_url == _CONSOLE
     assert not (root / "packaging" / "run" / "ice-op.yaml").exists()
 
@@ -136,8 +144,8 @@ def test_turn_plan_rewrites_bind_ip_from_the_template(tmp_path: Path) -> None:
         str(dest),
     )
     assert "--remote-laptop" not in plan.commands[0].argv
-    assert plan.commands[1].env[0] == ("REMOTE_LAPTOP_CAM", _CAMERA)
-    assert plan.commands[1].argv[-1] == "--remote-laptop"
+    assert len(plan.commands) == 1
+    assert "start_operator_mlink.sh" not in " ".join(plan.commands[0].argv)
     assert plan.console_url == _CONSOLE
 
 
@@ -276,21 +284,28 @@ def test_dry_run_returns_no_commands_and_writes_no_yaml(tmp_path: Path) -> None:
     assert not (tmp_path / "packaging" / "run" / "ice-op.yaml").exists()
 
 
-def test_stop_order_is_compose_then_mlink_op(tmp_path: Path) -> None:
-    plan = operator_stop_plan(tmp_path)
+def test_stop_leaves_the_container_and_quit_composes_down(tmp_path: Path) -> None:
+    stopped = operator_stop_plan(tmp_path)
     project = tmp_path / "teleoperation-prototype"
-    assert [item.label for item in plan] == ["operator-compose", "mlink-op"]
-    assert plan[0].argv[:4] == (
+    assert [item.label for item in stopped] == ["mlink-op"]
+    assert "docker" not in stopped[0].argv
+    assert stopped[0].argv[-1].endswith("packaging/run/mlink-op.pid")
+    quit_plan = operator_quit_plan(tmp_path)
+    assert [item.label for item in quit_plan] == ["operator-compose"]
+    assert quit_plan[0].argv[:4] == (
         "docker",
         "compose",
         "--project-directory",
         str(project),
     )
-    assert plan[0].argv[4:6] == ("-f", str(project / "compose.operator-mlink.yaml"))
-    assert plan[0].argv[-2:] == ("down", "--remove-orphans")
-    assert plan[1].argv[1] == "-c"
-    assert plan[1].argv[-1].endswith("packaging/run/mlink-op.pid")
-    assert "stop_mlink.sh" not in " ".join(plan[0].argv)
+    assert quit_plan[0].argv[4:8] == (
+        "-f",
+        str(project / "compose.operator-mlink.yaml"),
+        "-f",
+        str(project / "compose.operator-ui.yaml"),
+    )
+    assert quit_plan[0].argv[-2:] == ("down", "--remove-orphans")
+    assert "start_daemon.sh" not in " ".join(quit_plan[0].argv)
 
 
 def test_dry_run_exec_raises_before_spawn(monkeypatch: Any, tmp_path: Path) -> None:
@@ -324,481 +339,510 @@ def test_local_stop_does_not_spawn_unless_live(
         lambda command, _root: seen.append(command.label),
     )
     stop_operator_local(tmp_path, live=True)
-    assert seen == ["operator-compose", "mlink-op"]
+    assert seen == ["mlink-op"]
+
+class _Script:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.ws: Any = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._queue: asyncio.Queue[Any] | None = None
+
+    def bind(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+        self._queue = asyncio.Queue()
+
+    async def login(self, url: str, robot_id: str, password: str) -> LoginResult:
+        assert password
+        self.ws = object()
+        return LoginResult("ok", "lab-robot")
+
+    async def send_json(self, message: dict[str, Any]) -> None:
+        self.sent.append(json.loads(json.dumps(message)))
+
+    async def next_message(self) -> dict[str, Any] | None:
+        assert self._queue is not None
+        return await self._queue.get()
+
+    def push(self, message: dict[str, Any] | None) -> None:
+        assert self._loop is not None and self._queue is not None
+        self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
+
+    async def close(self) -> None:
+        self.ws = None
+        if self._queue is not None:
+            self._queue.put_nowait(None)
 
 
-def _qapp() -> Any:
-    global _APP
-    from PyQt5.QtWidgets import QApplication
-
-    if _APP is None:
-        existing = QApplication.instance()
-        _APP = existing if existing is not None else QApplication(["teleop-operator-test"])
-    return _APP
-
-
-def _pump_until(predicate: Any, timeout: float = 5.0) -> bool:
-    app = _qapp()
+def _until(predicate: Any, timeout: float = 5.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        app.processEvents()
         if predicate():
             return True
         time.sleep(0.02)
-    app.processEvents()
     return bool(predicate())
 
 
-def _load_window() -> Any:
-    _qapp()
-    import packaging.operator_app.window as window_mod
-
-    return window_mod
-
-
-def _open(window_mod: Any, inventory: dict[str, Any], root: Path) -> Any:
-    from packaging.operator_app.login import LoginResult
-
-    window = window_mod.LoginWindow("ws://127.0.0.1:9", root=root)
-    window.present(LoginResult("ok", "lab-robot"))
-    window.show_inventory(inventory, operator_nic="wlo1")
-    return window
+def _post(app: ConsoleApp, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    raw = b"{}" if body is None else json.dumps(body).encode()
+    result = app.dispatch("POST", path, raw)
+    assert result is not None and result.status == 200
+    payload = json.loads(result.body)
+    assert isinstance(payload, dict)
+    return payload
 
 
-def test_close_handler_calls_local_stop(monkeypatch: Any, tmp_path: Path) -> None:
-    window_mod = _load_window()
-    calls: list[tuple[Path, bool]] = []
-
-    def fake(repo: Path, *, live: bool = False) -> None:
-        calls.append((Path(repo), live))
-
-    monkeypatch.setattr(window_mod, "stop_operator_local", fake)
-    window = window_mod.LoginWindow("ws://127.0.0.1:9", root=tmp_path)
-    try:
-        window.show()
-        window.close()
-        _qapp().processEvents()
-    finally:
-        _qapp().processEvents()
-    assert calls == [(tmp_path, False)]
-
-
-def test_close_after_a_live_start_passes_live(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
-    window_mod = _load_window()
-    calls: list[bool] = []
-    monkeypatch.setattr(
-        window_mod,
-        "stop_operator_local",
-        lambda _repo, *, live=False: calls.append(live),
+def _load_gate() -> tuple[Any, Any]:
+    demo = (
+        Path(__file__).resolve().parents[2]
+        / "teleoperation-prototype"
+        / "ros2_ws"
+        / "src"
+        / "teleop_demo"
     )
-    window = window_mod.LoginWindow("ws://127.0.0.1:9", root=tmp_path)
-    window._operator_started = True
-    try:
-        window.close()
-        _qapp().processEvents()
-    finally:
-        _qapp().processEvents()
-    assert calls == [True]
+    if str(demo) not in sys.path:
+        sys.path.insert(0, str(demo))
+    from teleop_demo.link_gate import LinkGate, startup_link
+
+    return LinkGate, startup_link
 
 
-def test_stop_stops_operator_before_the_robot(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
-    window_mod = _load_window()
-    order: list[object] = []
+def _session(tmp_path: Path) -> tuple[ConsoleApp, _Script, list[tuple[Any, ...]]]:
+    script = _Script()
+    calls: list[tuple[Any, ...]] = []
 
-    def fake_send(_self: Any, message: dict[str, Any]) -> bool:
-        order.append(message)
-        return True
+    def helper(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        assert "password" not in json.dumps(payload)
+        calls.append(("helper", path))
+        if path == "/mlink/start":
+            return {"ok": True, "console_url": _CONSOLE}
+        return {"ok": True}
 
-    def fake_stop(_repo: Path, *, live: bool = False) -> None:
-        order.append(("local", live))
-
-    monkeypatch.setattr(window_mod.LoginWindow, "_try_send", fake_send)
-    monkeypatch.setattr(window_mod, "stop_operator_local", fake_stop)
-    window = _open(window_mod, _inventory(), tmp_path)
-    try:
-        from PyQt5.QtWidgets import QWidget
-
-        window.show()
-        cover = QWidget()
-        window.stack.addWidget(cover)
-        window.stack.setCurrentWidget(cover)
-        _qapp().processEvents()
-        assert window.stop_button.isVisible()
-        assert window.logout_button.isVisible()
-        assert window.config_page is not None
-        assert not window.config_page.isVisible()
-        window._accepted_config = window.config_page.current_config()
-        window.stop_session()
-        assert order == [("local", False), {"v": 1, "type": "stop"}]
-        assert window._stop_timer.isActive()
-        assert window._stop_timer.interval() == window_mod.STOP_CONFIRM_MS
-        window.present_inbound(
-            {"v": 1, "type": "status", "phase": "stopped", "detail": ""}
-        )
-        assert window.stack.currentWidget() is window.config_page
-        assert window.config_page.start_button.isEnabled()
-        assert window.stop_button.isVisible()
-        assert window._accepted_config is not None
-        assert {"v": 1, "type": "logout"} not in order
-    finally:
-        window.close()
-        _qapp().processEvents()
-
-
-def test_stop_timeout_says_the_robot_did_not_confirm(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
-    window_mod = _load_window()
-    monkeypatch.setattr(window_mod.LoginWindow, "_try_send", lambda *_a, **_k: True)
-    monkeypatch.setattr(window_mod, "stop_operator_local", lambda *_a, **_k: None)
-    window = _open(window_mod, _inventory(), tmp_path)
-    try:
-        window.stop_session()
-        window._on_stop_timeout()
-        assert window.bar_status.text() == "The robot did not confirm stop."
-        assert window.stack.currentWidget() is window.config_page
-        assert window.config_page is not None
-        assert window.config_page.start_button.isEnabled()
-    finally:
-        window.close()
-        _qapp().processEvents()
-
-
-def test_start_again_uses_the_accepted_config(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
-    _forbid_spawn(monkeypatch)
-    window_mod = _load_window()
-    sent: list[dict[str, Any]] = []
-
-    def fake_send(_self: Any, message: dict[str, Any]) -> bool:
-        sent.append(message)
-        return True
-
-    monkeypatch.setattr(window_mod.LoginWindow, "_try_send", fake_send)
-    monkeypatch.setattr(window_mod, "stop_operator_local", lambda *_a, **_k: None)
-    window = _open(window_mod, _inventory(), tmp_path)
-    try:
-        page = window.config_page
-        assert page is not None
-        window._accepted_config = page.current_config()
-        page.link_turn.setChecked(True)
-        window.start_session()
-        assert sent == []
-        assert page.session_status.text() == "Review the changed config before Start."
-        page.link_tailscale.setChecked(True)
-        window.start_session()
-        assert sent == [{"v": 1, "type": "start"}]
-    finally:
-        window.close()
-        _qapp().processEvents()
-
-
-def test_logout_returns_to_login_and_keeps_the_robot_id(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
-    window_mod = _load_window()
-    order: list[object] = []
-
-    def fake_send(_self: Any, message: dict[str, Any]) -> bool:
-        order.append(dict(message))
-        return True
-
-    def fake_stop(_repo: Path, *, live: bool = False) -> None:
-        order.append(("local", live))
-
-    monkeypatch.setattr(window_mod.LoginWindow, "_try_send", fake_send)
-    monkeypatch.setattr(window_mod, "stop_operator_local", fake_stop)
-    window = _open(window_mod, _inventory(), tmp_path)
-    try:
-        window.show()
-        window.id_edit.setText("123456789")
-        page = window.config_page
-        assert page is not None
-        window._accepted_config = page.current_config()
-        window.logout_session()
-        assert order == [("local", False), {"v": 1, "type": "stop"}]
-        window.present_inbound(
-            {"v": 1, "type": "status", "phase": "stopped", "detail": ""}
-        )
-        assert order[-1] == {"v": 1, "type": "logout"}
-        window.present_inbound({"v": 1, "type": "logged_out"})
-        _qapp().processEvents()
-        assert window.stack.currentWidget() is window.form_page
-        assert window.logged_in is False
-        assert not window.session_bar.isVisible()
-        assert not page.start_button.isEnabled()
-        assert window.id_edit.text() == "123456789"
-        assert window._accepted_config is None
-        assert window.status_label.text() == "Logged out."
-    finally:
-        window.close()
-        _qapp().processEvents()
-
-
-def test_close_stops_both_sides_and_does_not_logout(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
-    window_mod = _load_window()
-    order: list[object] = []
-
-    def fake_send(_self: Any, message: dict[str, Any]) -> bool:
-        order.append(dict(message))
-        return True
-
-    def fake_stop(_repo: Path, *, live: bool = False) -> None:
-        order.append(("local", live))
-
-    monkeypatch.setattr(window_mod.LoginWindow, "_try_send", fake_send)
-    monkeypatch.setattr(window_mod, "stop_operator_local", fake_stop)
-    window = _open(window_mod, _inventory(), tmp_path)
-    window._operator_started = True
-    window.close()
-    _qapp().processEvents()
-    assert order == [("local", True), {"v": 1, "type": "stop"}]
-
-
-def test_dry_run_start_still_sends(monkeypatch: Any, tmp_path: Path) -> None:
-    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
-    _forbid_spawn(monkeypatch)
-    window_mod = _load_window()
-    sent: list[dict[str, Any]] = []
-
-    def fake_send(_self: Any, message: dict[str, Any]) -> bool:
-        sent.append(message)
-        return True
-
-    monkeypatch.setattr(window_mod.LoginWindow, "_try_send", fake_send)
-    monkeypatch.setattr(
-        window_mod,
-        "webengine_installed",
-        lambda: (_ for _ in ()).throw(AssertionError("webengine checked")),
+    app = ConsoleApp(
+        "ws://127.0.0.1:9",
+        web_root=_WEB,
+        operator_nic="wlo1",
+        session=script,
+        helper_post=helper,
+        on_enable_link=lambda: calls.append(("enable",)),
+        on_disable_link=lambda: calls.append(("disable",)),
     )
-    window = _open(window_mod, _inventory(), tmp_path)
-    try:
-        window.start_session()
-        page = window.config_page
-        assert page is not None
-        assert sent == [{"v": 1, "type": "start"}]
-        assert page.session_status.text() == "starting"
-        assert window._awaiting_ready is True
-        window.present_inbound(
-            {"v": 1, "type": "status", "phase": "ready", "detail": "dry-run"}
-        )
-        assert page.session_status.text() == "dry-run"
-        assert window._start_thread is None
-        assert window.console_view is None
-        assert "PyQt5.QtWebEngineWidgets" not in sys.modules
-    finally:
-        window.close()
-        _qapp().processEvents()
+    return app, script, calls
 
 
-def test_missing_webengine_does_not_send_start(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
-    monkeypatch.delenv("TELEOP_SUPERVISOR_DRY_RUN", raising=False)
-    window_mod = _load_window()
-    sent: list[dict[str, Any]] = []
-    monkeypatch.setattr(window_mod, "webengine_installed", lambda: False)
-    monkeypatch.setattr(
-        window_mod.LoginWindow,
-        "_try_send",
-        lambda _self, message: sent.append(message) or True,
+def _accept(app: ConsoleApp, script: _Script, inventory: dict[str, Any] | None = None) -> None:
+    reply = _post(
+        app, "/api/login", {"robot_id": "123456789", "password": "AB23CD45"}
     )
-    window = _open(window_mod, _inventory(), tmp_path)
-    try:
-        window.start_session()
-        page = window.config_page
-        assert page is not None
-        assert sent == []
-        assert page.session_status.text() == "Qt WebEngine is not installed."
-        assert window._awaiting_ready is False
-    finally:
-        window.close()
-        _qapp().processEvents()
+    assert reply["ok"] is True
+    script.push(inventory if inventory is not None else _inventory())
+    assert _until(lambda: app.snapshot()["view"] == "config")
+    _post(app, "/api/review", _config())
+    script.push({"v": 1, "type": "config_ok"})
+    assert _until(lambda: app.snapshot()["review_status"] == "config_ok")
 
 
-def test_dry_run_ready_does_not_load_the_console(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
-    _forbid_spawn(monkeypatch)
-    window_mod = _load_window()
-
-    def boom(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("operator plan ran during dry-run")
-
-    monkeypatch.setattr(window_mod, "decide_operator", boom)
-    monkeypatch.setattr(
-        window_mod,
-        "webengine_installed",
-        lambda: boom(),
+def test_link_gate_ui_only_skips_the_socket_until_start() -> None:
+    link_gate, startup_link = _load_gate()
+    assert startup_link({"TELEOP_UI_ONLY": "1", "TELEOP_MLINK": "1"}) == (False, False)
+    assert startup_link({"TELEOP_MLINK": "1"}) == (True, True)
+    assert startup_link({}) == (False, True)
+    gate = link_gate()
+    calls: list[str] = []
+    gate.apply_startup(
+        {"TELEOP_UI_ONLY": "1", "TELEOP_MLINK": "1"},
+        lambda: calls.append("open") or "sock",
+        lambda: calls.append("arm") or "hb",
+        lambda: calls.append("poll") or "poll",
     )
-    window = _open(window_mod, _inventory(), tmp_path)
-    try:
-        assert window.console_view is None
-        window._awaiting_ready = True
-        window.present_inbound(
-            {"v": 1, "type": "status", "phase": "ready", "detail": "dry-run"}
-        )
-        page = window.config_page
-        assert page is not None
-        assert page.session_status.text() == "dry-run"
-        assert window.console_view is None
-        assert window._start_thread is None
-        assert "PyQt5.QtWebEngineWidgets" not in sys.modules
-        window.start_session()
-        assert page.session_status.text() == "Cannot reach the registry."
-        assert window._awaiting_ready is False
-    finally:
-        window.close()
-        _qapp().processEvents()
+    assert calls == []
+    gate.enable(
+        lambda: calls.append("open") or "sock",
+        lambda: calls.append("arm") or "hb",
+        lambda: calls.append("poll") or "poll",
+    )
+    assert calls == ["open", "poll", "arm"]
+    order: list[tuple[str, str]] = []
+    gate.disable(
+        lambda sock: order.append(("close", sock)),
+        lambda timer: order.append(("cancel", timer)),
+    )
+    assert order == [("cancel", "hb"), ("cancel", "poll"), ("close", "sock")]
+    plain = link_gate()
+    plain_calls: list[str] = []
+    plain.apply_startup(
+        {"TELEOP_MLINK": "true"},
+        lambda: plain_calls.append("open") or "sock",
+        lambda: plain_calls.append("arm") or "hb",
+        lambda: plain_calls.append("poll") or "poll",
+    )
+    assert plain_calls == ["open", "poll", "arm"]
+    heartbeat_only = link_gate()
+    heartbeat_calls: list[str] = []
+    heartbeat_only.apply_startup(
+        {},
+        lambda: heartbeat_calls.append("open") or "sock",
+        lambda: heartbeat_calls.append("arm") or "hb",
+        lambda: heartbeat_calls.append("poll") or "poll",
+    )
+    assert heartbeat_calls == ["arm"]
 
 
-def test_error_status_does_not_plan(monkeypatch: Any, tmp_path: Path) -> None:
+def test_backend_constructor_uses_the_link_gate() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "teleoperation-prototype"
+        / "ros2_ws"
+        / "src"
+        / "teleop_demo"
+        / "teleop_demo"
+        / "operator_backend.py"
+    )
+    text = path.read_text(encoding="utf-8")
+    init = text.split("def __init__", 1)[1].split("def _open_mlink_socket", 1)[0]
+    assert "apply_startup" in init
+    assert "open_from_env" not in init
+    assert "heartbeat_rate" not in init
+    assert "_hold_heartbeat" in text
+
+
+def test_ui_container_plan_does_not_start_mlink(tmp_path: Path) -> None:
+    command = ui_container_plan(tmp_path, "ws://127.0.0.1:9", "http://127.0.0.1:9")
+    text = " ".join(command.argv)
+    assert "start_daemon.sh" not in text
+    assert "start_operator_mlink.sh" not in text
+    assert command.argv[-5:] == ("up", "-d", "--no-build", "--no-deps", "operator")
+    assert ("TELEOP_UI_ONLY", "1") in command.env
+    assert ("TELEOP_GRIPPER_ONLY", "1") in command.env
+
+
+def test_helper_start_stop_and_quit(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.delenv("TELEOP_SUPERVISOR_DRY_RUN", raising=False)
     _forbid_spawn(monkeypatch)
-    window_mod = _load_window()
-
-    def boom(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("operator plan ran on error")
-
-    monkeypatch.setattr(window_mod, "decide_operator", boom)
-    window = _open(window_mod, _inventory(), tmp_path)
-    try:
-        window._awaiting_ready = True
-        window.present_inbound(
-            {"v": 1, "type": "status", "phase": "error", "detail": "no config"}
-        )
-        page = window.config_page
-        assert page is not None
-        assert page.session_status.text() == "no config"
-        assert window.console_view is None
-        assert window._start_thread is None
-    finally:
-        window.close()
-        _qapp().processEvents()
-
-
-def test_ready_without_start_does_not_plan(monkeypatch: Any, tmp_path: Path) -> None:
-    monkeypatch.delenv("TELEOP_SUPERVISOR_DRY_RUN", raising=False)
-    _forbid_spawn(monkeypatch)
-    window_mod = _load_window()
-
-    def boom(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("operator plan ran before Start")
-
-    monkeypatch.setattr(window_mod, "decide_operator", boom)
-    window = _open(window_mod, _inventory(), tmp_path)
-    try:
-        window.present_inbound(
-            {"v": 1, "type": "status", "phase": "ready", "detail": ""}
-        )
-        assert window._start_thread is None
-        assert window.console_view is None
-    finally:
-        window.close()
-        _qapp().processEvents()
-
-
-def test_empty_camera_page_blocks_start(tmp_path: Path) -> None:
-    window_mod = _load_window()
-    window = _open(window_mod, _inventory(""), tmp_path)
-    try:
-        window.start_session()
-        page = window.config_page
-        assert page is not None
-        assert page.session_status.text() == "camera page is not set"
-        assert window._awaiting_ready is False
-        assert window._start_thread is None
-    finally:
-        window.close()
-        _qapp().processEvents()
-
-
-def test_ready_uses_stubbed_exec_and_does_not_load_a_server(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
-    monkeypatch.delenv("TELEOP_SUPERVISOR_DRY_RUN", raising=False)
-    spawned: list[int] = []
-
-    def boom(*_args: Any, **_kwargs: Any) -> None:
-        spawned.append(1)
-        raise AssertionError("spawned a process")
-
-    monkeypatch.setattr(subprocess, "Popen", boom)
-    monkeypatch.setattr(subprocess, "run", boom)
-    window_mod = _load_window()
-    monkeypatch.setattr(window_mod, "stop_operator_local", lambda *_a, **_k: None)
-    monkeypatch.setattr(window_mod, "default_route_ipv4", lambda *_a, **_k: _BIND)
-    loaded: list[str] = []
-    monkeypatch.setattr(
-        window_mod.LoginWindow,
-        "_show_console",
-        lambda _self, url: loaded.append(url),
-    )
-    import packaging.supervisor.operator_exec as operator_exec
-
     recorded: list[Any] = []
-    monkeypatch.setattr(
-        operator_exec,
-        "execute_command",
-        lambda command, _root: recorded.append(command),
+    helper = Helper(tmp_path, executor=lambda command, _root: recorded.append(command))
+    status, body = helper.handle(
+        "POST",
+        "/mlink/start",
+        json.dumps(
+            {"config": _config(), "inventory": _inventory(), "phase": "ready"}
+        ).encode(),
     )
-    window = _open(window_mod, _inventory(), tmp_path)
+    assert status == 200
+    assert body["ok"] is True
+    assert body["console_url"] == _CONSOLE
+    assert [item.label for item in recorded] == ["mlink-op"]
+    assert "start_operator_mlink.sh" not in " ".join(recorded[0].argv)
+    recorded.clear()
+    status, body = helper.handle("POST", "/mlink/stop", b"{}")
+    assert body["ok"] is True
+    assert [item.label for item in recorded] == ["mlink-op"]
+    assert "docker" not in recorded[0].argv
+    recorded.clear()
+    status, body = helper.handle("POST", "/quit", b"{}")
+    assert body["ok"] is True
+    helper.wait_for_quit()
+    assert [item.label for item in recorded] == ["operator-compose"]
+    assert "down" in recorded[0].argv
+    assert "start_daemon.sh" not in " ".join(recorded[0].argv)
+
+
+def test_helper_dry_run_does_not_exec(monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
+    _forbid_spawn(monkeypatch)
+    recorded: list[Any] = []
+    helper = Helper(tmp_path, executor=lambda command, _root: recorded.append(command))
+    _status, body = helper.handle(
+        "POST",
+        "/mlink/start",
+        json.dumps(
+            {
+                "config": _config(link="turn"),
+                "inventory": _inventory(),
+                "phase": "ready",
+            }
+        ).encode(),
+    )
+    assert body == {"ok": False, "detail": "dry-run"}
+    assert recorded == []
+    assert not (tmp_path / "packaging" / "run" / "ice-op.yaml").exists()
+    _status, stopped = helper.handle("POST", "/mlink/stop", b"{}")
+    assert stopped["dry_run"] is True
+    assert recorded == []
+    helper.handle("POST", "/quit", b"{}")
+    helper.wait_for_quit()
+    assert recorded == []
+
+
+def test_launch_dry_run_returns_before_the_helper(monkeypatch: Any) -> None:
+    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
+    _forbid_spawn(monkeypatch)
+
+    def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("helper bound a port")
+
+    monkeypatch.setattr(operator_cli.Helper, "serve", boom)
+    assert operator_cli.launch("ws://127.0.0.1:9") == 0
+
+
+def test_launch_plans_the_ui_container_and_opens_the_browser(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("TELEOP_SUPERVISOR_DRY_RUN", raising=False)
+    _forbid_spawn(monkeypatch)
+    seen: list[str] = []
+
+    class _FakeHelper:
+        def __init__(self, root: Path) -> None:
+            self.root = root
+
+        def serve(self, host: str, port: int) -> int:
+            assert host == "127.0.0.1"
+            seen.append("serve")
+            return 9
+
+        def wait_for_quit(self) -> None:
+            seen.append("wait")
+
+        def shutdown(self) -> None:
+            seen.append("down")
+
+    monkeypatch.setattr(operator_cli, "Helper", _FakeHelper)
+    opened: list[str] = []
+    ran: list[Any] = []
+    assert (
+        operator_cli.launch(
+            "ws://127.0.0.1:9",
+            root=tmp_path,
+            helper_port=0,
+            runner=lambda command, _root: ran.append(command),
+            browser=opened.append,
+            wait_ready=lambda: None,
+        )
+        == 0
+    )
+    assert opened == ["http://127.0.0.1:8090/"]
+    assert ran
+    assert "start_daemon.sh" not in " ".join(ran[0].argv)
+    assert "start_operator_mlink.sh" not in " ".join(ran[0].argv)
+    assert ("TELEOP_UI_ONLY", "1") in ran[0].env
+    assert seen == ["serve", "wait", "down"]
+
+
+def test_closing_the_desktop_window_shuts_the_container(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("TELEOP_SUPERVISOR_DRY_RUN", raising=False)
+    _forbid_spawn(monkeypatch)
+    calls: list[tuple[str, str]] = []
+
+    class _FakeHelper:
+        def __init__(self, root: Path) -> None:
+            self.root = root
+
+        def serve(self, host: str, port: int) -> int:
+            assert host == "127.0.0.1"
+            return 9
+
+        def quit_event(self) -> threading.Event:
+            return threading.Event()
+
+        def shutdown(self) -> None:
+            calls.append(("down", ""))
+
+    def _window(url: str, until: object = None) -> None:
+        assert until is not None
+        calls.append(("window", url))
+
+    def _shut(helper: object, helper_url: str, **_kwargs: object) -> None:
+        calls.append(("shut", helper_url))
+
+    monkeypatch.setattr(operator_cli, "Helper", _FakeHelper)
+    monkeypatch.setattr(operator_cli, "open_desktop", _window)
+    monkeypatch.setattr(operator_cli, "shutdown_after_close", _shut)
+    assert (
+        operator_cli.launch(
+            "ws://127.0.0.1:9",
+            root=tmp_path,
+            helper_port=0,
+            runner=lambda _command, _root: None,
+            wait_ready=lambda: None,
+        )
+        == 0
+    )
+    assert calls == [
+        ("window", "http://127.0.0.1:8090/"),
+        ("shut", "http://127.0.0.1:9"),
+        ("down", ""),
+    ]
+
+
+def test_a_failed_window_still_removes_the_container(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("TELEOP_SUPERVISOR_DRY_RUN", raising=False)
+    _forbid_spawn(monkeypatch)
+    calls: list[str] = []
+
+    class _FakeHelper:
+        def __init__(self, root: Path) -> None:
+            self.root = root
+
+        def serve(self, host: str, port: int) -> int:
+            return 9
+
+        def quit_event(self) -> threading.Event:
+            return threading.Event()
+
+        def shutdown(self) -> None:
+            calls.append("down")
+
+    def _window(url: str, until: object = None) -> None:
+        raise RuntimeError("no window")
+
+    def _shut(helper: object, helper_url: str, **_kwargs: object) -> None:
+        calls.append("shut")
+
+    monkeypatch.setattr(operator_cli, "Helper", _FakeHelper)
+    monkeypatch.setattr(operator_cli, "open_desktop", _window)
+    monkeypatch.setattr(operator_cli, "shutdown_after_close", _shut)
+    assert (
+        operator_cli.launch(
+            "ws://127.0.0.1:9",
+            root=tmp_path,
+            helper_port=0,
+            runner=lambda _command, _root: None,
+            wait_ready=lambda: None,
+        )
+        == 1
+    )
+    assert calls == ["shut", "down"]
+
+
+def test_window_close_asks_the_console_before_compose_down(tmp_path: Path) -> None:
+    console, console_seen = _ephemeral_server()
+    helper_http, helper_seen = _ephemeral_server()
     try:
-        window._awaiting_ready = True
-        window.present_inbound(
-            {"v": 1, "type": "status", "phase": "ready", "detail": ""}
+        console_url = f"http://127.0.0.1:{console.server_address[1]}/"
+        helper_url = f"http://127.0.0.1:{helper_http.server_address[1]}"
+        assert operator_cli.request_shutdown(console_url, helper_url) is True
+        assert console_seen == ["/api/quit"]
+        assert helper_seen == []
+        helper = Helper(tmp_path, executor=lambda _command, _root: None)
+        helper._quit.set()
+        operator_cli.shutdown_after_close(
+            helper, helper_url, console=console_url, wait_s=0.2
         )
-        thread = window._start_thread
-        assert thread is not None
-        thread.join(5)
-        assert _pump_until(lambda: len(loaded) == 1)
-        assert loaded == [_CONSOLE]
-        assert window.console_view is None
-        assert "PyQt5.QtWebEngineWidgets" not in sys.modules
-        assert [item.label for item in recorded] == ["mlink-op", "operator"]
-        assert recorded[0].argv[1:] == ("op", "--remote-laptop")
-        assert recorded[1].argv[-1] == "--remote-laptop"
-        assert recorded[1].env == (
-            ("REMOTE_LAPTOP_CAM", _CAMERA),
-            ("TELEOP_GRIPPER_ONLY", "1"),
+        assert console_seen == ["/api/quit"]
+        helper._quit.clear()
+        operator_cli.shutdown_after_close(
+            helper, helper_url, console=console_url, wait_s=0.2
         )
-        assert not (tmp_path / "packaging" / "run" / "ice-op.yaml").exists()
+        assert console_seen == ["/api/quit", "/api/quit"]
+        assert helper_seen == ["/quit"]
     finally:
-        window.close()
-        _qapp().processEvents()
-    assert spawned == []
+        console.shutdown()
+        helper_http.shutdown()
+        console.server_close()
+        helper_http.server_close()
 
 
-def test_prepare_qt_imports_webengine_before_application() -> None:
-    """A fresh process can import WebEngine and then create QApplication."""
+def test_window_close_uses_the_helper_when_the_console_is_down(tmp_path: Path) -> None:
+    helper_http, helper_seen = _ephemeral_server()
+    try:
+        closed = _closed_port()
+        helper_url = f"http://127.0.0.1:{helper_http.server_address[1]}"
+        assert (
+            operator_cli.request_shutdown(f"http://127.0.0.1:{closed}/", helper_url)
+            is True
+        )
+        assert helper_seen == ["/quit"]
+    finally:
+        helper_http.shutdown()
+        helper_http.server_close()
+
+
+def test_desktop_window_prefers_qt_without_opening_one(monkeypatch: Any) -> None:
+    from packaging.operator_app import desktop
+
+    monkeypatch.setattr(desktop, "_qt_available", lambda: True)
+    assert desktop.backend_name() == "qt"
+    monkeypatch.setattr(desktop, "_qt_available", lambda: False)
+    monkeypatch.setattr(desktop, "_chrome_bin", lambda: "/usr/bin/google-chrome")
+    assert desktop.backend_name() == "chrome"
+    argv = desktop.chrome_command(
+        "/usr/bin/google-chrome",
+        "http://127.0.0.1:8090/",
+        "/tmp/teleop-profile",
+    )
+    assert argv[0] == "/usr/bin/google-chrome"
+    assert "--app=http://127.0.0.1:8090/" in argv
+    assert "--user-data-dir=/tmp/teleop-profile" in argv
+    assert "xdg-open" not in " ".join(argv)
+    monkeypatch.setattr(desktop, "_chrome_bin", lambda: None)
+    assert desktop.backend_name() == ""
+    try:
+        desktop.show_console("http://127.0.0.1:9/")
+    except RuntimeError as exc:
+        assert "window" in str(exc)
+    else:
+        raise AssertionError("show_console returned without a window")
+
+
+def _ephemeral_server() -> tuple[ThreadingHTTPServer, list[str]]:
+    seen: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length") or "0")
+            if length:
+                self.rfile.read(length)
+            seen.append(self.path.split("?", 1)[0])
+            raw = b'{"ok":true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = int(httpd.server_address[1])
+    assert port not in {8090, 8091, 8765, 5501, 5502, 5503, 5504}
+    threading.Thread(target=httpd.serve_forever, name="quit-test", daemon=True).start()
+    return httpd, seen
+
+
+def _closed_port() -> int:
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = int(sock.getsockname()[1])
+    sock.close()
+    assert port not in {8090, 8091, 8765, 5501, 5502, 5503, 5504}
+    return port
+
+
+def test_cli_does_not_import_pyqt() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
-import os
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PyQt5.QtWidgets import QApplication
-from packaging.operator_app.cli import prepare_qt
-assert QApplication.instance() is None
-prepare_qt()
-from PyQt5.QtWebEngineWidgets import QWebEngineView
-app = QApplication(["teleop-operator-prepare"])
-assert QWebEngineView is not None
-assert app is not None
+import sys
+import packaging.operator_app.cli as cli
+assert "PyQt5" not in sys.modules
+assert "packaging.operator_app.desktop" not in sys.modules
+assert not hasattr(cli, "prepare_qt")
+text = open("packaging/operator_app/cli.py", encoding="utf-8").read()
+assert "PyQt5" not in text
+assert "QtWebEngine" not in text
+assert "prepare_qt" not in text
+assert "xdg-open" not in text
+assert "def open_desktop" in text
 """
     env = os.environ.copy()
-    env["QT_QPA_PLATFORM"] = "offscreen"
+    env.pop("QT_QPA_PLATFORM", None)
     env["PYTHONPATH"] = str(root)
     proc = subprocess.run(
         [sys.executable, "-c", script],
@@ -809,3 +853,192 @@ assert app is not None
         check=False,
     )
     assert proc.returncode == 0, proc.stderr
+    build = (root / "packaging" / "debian" / "build.sh").read_text(encoding="utf-8")
+    assert "python3-pyqt5" not in build
+    assert "operator Depends still lists a Qt package" in build
+    desktop = (root / "packaging" / "debian" / "teleop-operator.desktop").read_text(
+        encoding="utf-8"
+    )
+    assert "console" in desktop
+    wrapper = (root / "packaging" / "debian" / "teleop-operator.wrapper").read_text(
+        encoding="utf-8"
+    )
+    assert "PyQt" not in wrapper
+
+
+def test_pypi_packaging_version_stays_importable(tmp_path: Path) -> None:
+    """ROS imports packaging.version while this tree is first on the path."""
+    site = tmp_path / "site"
+    real = site / "packaging"
+    real.mkdir(parents=True)
+    (real / "__init__.py").write_text('MARKER = "pypi"\n', encoding="utf-8")
+    (real / "_structures.py").write_text('Infinity = "inf"\n', encoding="utf-8")
+    (real / "version.py").write_text(
+        "from packaging._structures import Infinity\n"
+        'Version = "pypi-marker-" + Infinity\n',
+        encoding="utf-8",
+    )
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+repo, fake = sys.argv[1], sys.argv[2]
+sys.path[:0] = [repo, fake]
+import packaging.version as version
+assert version.Version == "pypi-marker-inf", version.Version
+from packaging.operator_app.cli import CONSOLE_URL
+assert CONSOLE_URL == "http://127.0.0.1:8090/"
+"""
+    proc = subprocess.run(
+        [sys.executable, "-S", "-c", script, str(root), str(site)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+
+
+def test_start_runs_mlink_then_enables_the_link(tmp_path: Path) -> None:
+    app, script, calls = _session(tmp_path)
+    try:
+        blocked = app.dispatch("GET", "/operate")
+        assert blocked is not None and blocked.status == 403
+        _accept(app, script)
+        started = _post(app, "/api/start", _config())
+        assert started["message"] == "starting"
+        assert [item.get("type") for item in script.sent[-2:]] == ["config", "start"]
+        script.push({"v": 1, "type": "status", "phase": "ready", "detail": ""})
+        assert _until(lambda: app.snapshot()["view"] == "operate")
+        assert calls == [("helper", "/mlink/start"), ("enable",)]
+        assert app.snapshot()["operate_url"] == f"/operate?cam={_CAMERA}"
+        page = app.dispatch("GET", "/operate")
+        assert page is not None and page.status == 200
+        assert b"operate.js" in page.body
+        hidden = app.dispatch("GET", "/index.html")
+        assert hidden is not None and hidden.status == 404
+    finally:
+        app.close()
+
+
+def test_stop_leaves_the_container_and_logout_returns_to_login(tmp_path: Path) -> None:
+    app, script, calls = _session(tmp_path)
+    try:
+        _accept(app, script)
+        _post(app, "/api/start", _config())
+        script.push({"v": 1, "type": "status", "phase": "ready", "detail": ""})
+        assert _until(lambda: app.snapshot()["view"] == "operate")
+        _post(app, "/api/stop")
+        assert calls[-2:] == [("disable",), ("helper", "/mlink/stop")]
+        script.push({"v": 1, "type": "status", "phase": "stopped", "detail": ""})
+        assert _until(lambda: app.snapshot()["view"] == "config")
+        snap = app.snapshot()
+        assert snap["start_enabled"] is True
+        assert snap["logged_in"] is True
+        assert ("helper", "/quit") not in calls
+        before = len(script.sent)
+        _post(app, "/api/start", _config())
+        assert [item.get("type") for item in script.sent[before : before + 2]] == [
+            "config",
+            "start",
+        ]
+        _post(app, "/api/logout")
+        script.push({"v": 1, "type": "status", "phase": "stopped", "detail": ""})
+        script.push({"v": 1, "type": "logged_out"})
+        assert _until(lambda: app.snapshot()["view"] == "login")
+        done = app.snapshot()
+        assert done["logged_in"] is False
+        assert done["robot_id"] == "123456789"
+        assert done["status"] == "Logged out."
+        assert any(item.get("type") == "logout" for item in script.sent)
+        assert ("helper", "/quit") not in calls
+    finally:
+        app.close()
+
+
+def test_quit_plans_compose_down_after_stop(tmp_path: Path) -> None:
+    app, script, calls = _session(tmp_path)
+    try:
+        _accept(app, script)
+        _post(app, "/api/quit")
+        script.push({"v": 1, "type": "status", "phase": "stopped", "detail": ""})
+        assert _until(lambda: ("helper", "/quit") in calls)
+        assert app.snapshot()["view"] == "quit"
+        assert any(item.get("type") == "stop" for item in script.sent)
+        assert not any(item.get("type") == "logout" for item in script.sent)
+    finally:
+        app.close()
+
+
+def test_dry_run_start_does_not_enable_the_link(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
+    _forbid_spawn(monkeypatch)
+    app, script, calls = _session(tmp_path)
+    try:
+        _accept(app, script)
+        before = len(script.sent)
+        _post(app, "/api/start", _config())
+        assert [item.get("type") for item in script.sent[before:]] == ["config", "start"]
+        script.push({"v": 1, "type": "status", "phase": "ready", "detail": "dry-run"})
+        assert _until(lambda: app.snapshot()["status"] == "dry-run")
+        assert app.snapshot()["view"] == "config"
+        assert calls == []
+        assert app.dispatch("GET", "/operate").status == 403
+    finally:
+        app.close()
+
+
+def test_start_refuses_a_changed_config_iface2_and_empty_camera(tmp_path: Path) -> None:
+    app, script, calls = _session(tmp_path)
+    try:
+        _accept(app, script)
+        turned = dict(_config())
+        turned["link"] = "turn"
+        refused = _post(app, "/api/start", turned)
+        assert refused["message"] == "Review the changed config before Start."
+        assert not any(item.get("type") == "start" for item in script.sent)
+        chosen = dict(_config())
+        chosen["iface2"] = "enx00e04c2c4570"
+        _post(app, "/api/review", chosen)
+        script.push({"v": 1, "type": "config_ok"})
+        assert _until(lambda: app.snapshot()["review_status"] == "config_ok")
+        blocked = _post(app, "/api/start", chosen)
+        assert blocked["message"] == _IFACE2
+        assert not any(item.get("type") == "start" for item in script.sent)
+    finally:
+        app.close()
+    empty, empty_script, empty_calls = _session(tmp_path)
+    try:
+        inventory = _inventory("")
+        _accept(empty, empty_script, inventory)
+        blocked = _post(empty, "/api/start", _config())
+        assert blocked["message"] == "camera page is not set"
+        assert not any(item.get("type") == "start" for item in empty_script.sent)
+        assert empty_calls == []
+    finally:
+        empty.close()
+
+
+def test_ready_without_start_and_error_do_not_plan(tmp_path: Path) -> None:
+    app, script, calls = _session(tmp_path)
+    try:
+        _accept(app, script)
+        script.push({"v": 1, "type": "status", "phase": "ready", "detail": ""})
+        time.sleep(0.2)
+        assert app.snapshot()["view"] == "config"
+        assert calls == []
+        _post(app, "/api/start", _config())
+        script.push({"v": 1, "type": "status", "phase": "error", "detail": "no config"})
+        assert _until(lambda: app.snapshot()["status"] == "no config")
+        assert app.snapshot()["view"] == "config"
+        assert calls == []
+    finally:
+        app.close()
+
+
+def test_closing_the_console_does_not_stop_the_link(tmp_path: Path) -> None:
+    app, script, calls = _session(tmp_path)
+    _accept(app, script)
+    app.close()
+    assert calls == []
+    assert not any(item.get("type") == "stop" for item in script.sent)

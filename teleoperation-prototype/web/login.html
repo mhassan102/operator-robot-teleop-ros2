@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teleop</title>
+  <link rel="stylesheet" href="/operate.css">
+</head>
+<body>
+  <div class="login-wrap">
+    <form class="login-card" id="login-form" autocomplete="off">
+      <h1>Teleop</h1>
+      <input id="robot-id" name="robot_id" type="text" placeholder="ID" autocomplete="off" spellcheck="false">
+      <input id="password" name="password" type="password" placeholder="Password" autocomplete="off">
+      <button type="submit" class="login-button" id="login-button">Log in</button>
+      <p class="login-status" id="login-status" aria-live="polite"></p>
+      <button type="button" class="session-button" id="session-quit">Quit</button>
+    </form>
+  </div>
+  <script src="/login.js"></script>
+  <script src="/session_bar.js"></script>
+</body>
+</html>
