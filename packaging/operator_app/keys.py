@@ -57,6 +57,18 @@ FRAME_ID = "tool0"
 COMMAND_RATE_HZ = 20.0
 HEARTBEAT_RATE_HZ = 10.0
 
+# Hold is neither an open nor a close. Each keydown sends the other token
+# in its band so a latched 1.0 or 0.0 is not the next press. The robot
+# treats 1.0 and 0.75 as open, and 0.25 and 0.0 as close.
+GRIPPER_HOLD = 0.5
+
+
+def gripper_step_value(latched: float, direction: str) -> float:
+    """Next gripper float for one open or close press. Layout stays one float."""
+    if direction == "open":
+        return 0.75 if latched == 1.0 else 1.0
+    return 0.0 if latched == 0.25 else 0.25
+
 
 def direction_allowed(direction: str, *, gripper_only: bool = True) -> bool:
     """Packaged teleop allows the gripper and stop. Cartesian keys do not."""

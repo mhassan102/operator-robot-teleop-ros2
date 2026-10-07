@@ -25,9 +25,11 @@ from packaging.operator_app.keys import (
     COMMAND_RATE_HZ,
     COMMANDS,
     FRAME_ID,
+    GRIPPER_HOLD,
     HEARTBEAT_RATE_HZ,
     KEY_BINDINGS,
     direction_allowed,
+    gripper_step_value,
 )
 from packaging.operator_app.payload import (
     TYPE_STATE,
@@ -103,7 +105,11 @@ class OperatorHost:
         self.command_sequence = 0
         self.heartbeat_sequence = 0
         self._motion = COMMANDS["stop"][:6]
-        self._gripper = 0.0
+        self._gripper = GRIPPER_HOLD
+        self._gripper_sent: float | None = None
+        self._gripper_unsent = False
+        self._gripper_release = False
+        self._gripper_key: str | None = None
         self._label = "stop"
         self._active_key: str | None = None
         self._state_connection = ""
@@ -218,13 +224,24 @@ class OperatorHost:
                 return
             if direction in ("open", "close"):
                 if down:
-                    self._gripper = values[6]
-                    self._label = direction
+                    # Auto-repeat is another keydown of the key already held.
+                    # One physical press is one step.
+                    if self._gripper_key != key:
+                        self._gripper = gripper_step_value(self._step_base(), direction)
+                        self._gripper_unsent = True
+                        self._gripper_release = False
+                        self._gripper_key = key
+                        self._label = direction
+                elif self._gripper_key == key:
+                    self._release_gripper_key()
             elif direction == "stop":
                 if down:
                     self._motion = values[:6]
                     self._label = "stop"
                     self._active_key = None
+                    # Blur sends stop without a gripper keyup. Drop the held
+                    # key so the next tap is a new step. The float stays.
+                    self._gripper_key = None
             elif down:
                 self._motion = values[:6]
                 self._label = direction
@@ -235,6 +252,32 @@ class OperatorHost:
                 self._active_key = None
         if down or direction not in ("open", "close", "stop"):
             log.info("KEY %s down=%s", direction, down)
+
+    def _step_base(self) -> float:
+        """Float the robot already has. The next press must differ from it."""
+        if self._gripper_sent is None:
+            return GRIPPER_HOLD
+        return self._gripper_sent
+
+    def _release_gripper_key(self) -> None:
+        """Keyup holds. It does not take a step and does not reverse one."""
+        self._gripper_key = None
+        if self._gripper_unsent:
+            self._gripper_release = True
+            return
+        self._gripper = GRIPPER_HOLD
+        self._gripper_unsent = self._gripper_sent != GRIPPER_HOLD
+        self._label = "hold"
+
+    def _note_gripper_sent(self) -> None:
+        self._gripper_sent = self._gripper
+        self._gripper_unsent = False
+        if not self._gripper_release:
+            return
+        self._gripper_release = False
+        self._gripper = GRIPPER_HOLD
+        self._gripper_unsent = True
+        self._label = "hold"
 
     def attach_session(self, connection: WsConnection) -> str:
         with self._lock:
@@ -354,6 +397,7 @@ class OperatorHost:
                 )
             )
         )
+        self._note_gripper_sent()
 
     def _begin_locked(self, connection: WsConnection) -> str:
         self._connection = connection
@@ -361,7 +405,10 @@ class OperatorHost:
         self.command_sequence = 0
         self.heartbeat_sequence = 0
         self._motion = COMMANDS["stop"][:6]
-        self._gripper = 0.0
+        self._gripper = GRIPPER_HOLD
+        self._gripper_key = None
+        self._gripper_release = False
+        self._gripper_unsent = self._gripper_sent != GRIPPER_HOLD
         self._label = "stop"
         self._active_key = None
         self._publish_heartbeat_locked()
@@ -375,6 +422,8 @@ class OperatorHost:
         self._motion = COMMANDS["stop"][:6]
         self._label = "stop"
         self._active_key = None
+        self._gripper_key = None
+        self._gripper_release = False
         self.command_sequence += 1
         self._emit_command_locked()
         self.session_id = ""

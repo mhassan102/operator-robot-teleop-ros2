@@ -111,7 +111,9 @@ class FeetechGripper(Node):
 
     def _tick(self) -> None:
         now = time.monotonic()
-        if not self.controller.is_deadman(now) and self.controller.anchor is None:
+        # No step goal yet: read the jaw so the next press starts here,
+        # including the first press after deadman.
+        if not self.controller.is_deadman(now) and self.controller.goal is None:
             self._present = self.bus.read_present_position()
         output = self.controller.tick(now, self._present)
         if output.deadman:
@@ -120,8 +122,8 @@ class FeetechGripper(Node):
             self._last_deadman = True
         elif self._last_deadman is not False:
             self.get_logger().info(
-                f"GRIPPER LIVE torque=on anchor={self.controller.anchor} "
-                f"present={self._present} goal={output.goal_position}"
+                f"GRIPPER LIVE torque=on present={self._present} "
+                f"goal={output.goal_position}"
             )
             self._last_deadman = False
         self.actuator.apply(output)

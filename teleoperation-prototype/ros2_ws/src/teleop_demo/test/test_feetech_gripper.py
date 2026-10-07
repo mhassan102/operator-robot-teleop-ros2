@@ -42,6 +42,7 @@ from teleop_demo.gripper_control import (
     WATCHDOG_OK,
     GripperActuator,
     GripperController,
+    GripperOutput,
     clamp_tiny_delta,
     map_gripper_to_ticks,
 )
@@ -57,11 +58,20 @@ def _live(controller: GripperController, value: float, now_s: float) -> None:
     controller.on_gripper_safe(value, now_s)
 
 
+def _arm(controller: GripperController, present: int, now_s: float = 0.0) -> None:
+    """Link goes live on hold. That latch is not a step."""
+    _live(controller, 0.5, now_s)
+    held = controller.tick(now_s + 0.001, present)
+    assert held.deadman is False
+    assert held.goal_position == present
+
+
 def test_verified_calibration_constants() -> None:
     assert VERIFIED_GRIPPER_ID == 6
     assert VERIFIED_RANGE_MIN == 2036
     assert VERIFIED_RANGE_MAX == 3466
     assert DEFAULT_MAX_DELTA_TICKS == 48
+    assert GripperController().command_timeout_s == 0.5
     assert 1 in ARM_JOINT_IDS and 6 not in ARM_JOINT_IDS
 
 
@@ -170,9 +180,10 @@ def test_watchdog_state_zeros_torque_and_does_not_hold_close() -> None:
     transport, bus = _bus(present=2061)
     controller = GripperController(command_timeout_s=0.5)
     actuator = GripperActuator(bus)
-    controller.on_teleop_state(CONNECTED, WATCHDOG_OK)
-    controller.on_gripper_safe(1.0, 0.0)
-    live = controller.tick(0.01, 2061)
+    _arm(controller, 2061, 0.0)
+    actuator.apply(controller.tick(0.01, 2061))
+    controller.on_gripper_safe(1.0, 0.02)
+    live = controller.tick(0.03, 2061)
     assert live.deadman is False
     actuator.apply(live)
     assert transport.torque[6] == 1
@@ -180,7 +191,7 @@ def test_watchdog_state_zeros_torque_and_does_not_hold_close() -> None:
     assert live_goal == 2061 + DEFAULT_MAX_DELTA_TICKS
 
     controller.on_teleop_state(TIMEOUT, SAFE_STOP)
-    dead = controller.tick(0.02, live_goal)
+    dead = controller.tick(0.04, live_goal)
     assert dead.deadman
     assert dead.goal_position is None
     actuator.apply(dead)
@@ -204,20 +215,197 @@ def test_gripper_safe_silence_is_deadman() -> None:
     assert silent.torque_enable is False
 
 
-def test_full_open_command_stays_within_tiny_delta() -> None:
+def test_full_open_command_stays_within_one_step() -> None:
     controller = GripperController()
-    _live(controller, 1.0, 0.0)
-    output = controller.tick(0.01, 2061)
+    _arm(controller, 2061)
+    controller.on_gripper_safe(1.0, 0.1)
+    output = controller.tick(0.11, 2061)
     assert output.goal_position == 2061 + DEFAULT_MAX_DELTA_TICKS
     assert output.goal_position < VERIFIED_RANGE_MAX
 
 
 def test_close_command_does_not_pass_range_min() -> None:
     controller = GripperController()
-    _live(controller, 0.0, 0.0)
-    output = controller.tick(0.01, 2061)
+    _arm(controller, 2061)
+    controller.on_gripper_safe(0.25, 0.1)
+    output = controller.tick(0.11, 2061)
     assert output.goal_position == VERIFIED_RANGE_MIN
     assert output.goal_position >= VERIFIED_RANGE_MIN
+
+
+def _press(
+    controller: GripperController, value: float, present: int, now_s: float
+) -> GripperOutput:
+    controller.on_gripper_safe(value, now_s)
+    return controller.tick(now_s + 0.001, present)
+
+
+def test_presses_accumulate_and_a_latched_repeat_does_not_reset() -> None:
+    controller = GripperController()
+    present = 2061
+    _arm(controller, present)
+    first = _press(controller, 1.0, present, 0.1)
+    assert first.goal_position == present + 48
+    for index in range(5):
+        repeated = _press(controller, 1.0, present, 0.2 + index * 0.01)
+        assert repeated.goal_position == present + 48
+    second = _press(controller, 0.75, 9999, 0.4)
+    assert second.goal_position == present + 96
+    third = _press(controller, 1.0, 9999, 0.5)
+    assert third.goal_position == present + 144
+    assert third.goal_position == 2205
+    for index in range(5):
+        latched = _press(controller, 1.0, 1111, 0.6 + index * 0.01)
+        assert latched.goal_position == present + 144
+
+
+def test_two_closes_then_hold_and_keyup_do_not_reverse() -> None:
+    controller = GripperController()
+    present = 3000
+    _arm(controller, present)
+    first = _press(controller, 0.25, present, 0.1)
+    assert first.goal_position == present - 48
+    held = _press(controller, 0.25, present, 0.2)
+    assert held.goal_position == present - 48
+    second = _press(controller, 0.0, 9999, 0.3)
+    assert second.goal_position == present - 96
+    keyup = _press(controller, 0.5, 9999, 0.4)
+    assert keyup.goal_position == present - 96
+
+
+def test_link_up_holds_and_close_stays_through_release_to_the_rail() -> None:
+    """Console start and keyup must not open. Close walks to the closed stop."""
+    controller = GripperController()
+    present = 3300
+    _arm(controller, present)
+    assert controller.tick(0.02, present).goal_position == present
+    assert _press(controller, 1.0, present, 0.1).goal_position == present + 48
+    assert _press(controller, 0.5, present, 0.2).goal_position == present + 48
+    assert _press(controller, 0.25, present, 0.3).goal_position == present
+    assert _press(controller, 0.25, 9999, 0.4).goal_position == present
+    assert _press(controller, 0.5, 9999, 0.5).goal_position == present
+
+    controller.on_teleop_state(TIMEOUT, SAFE_STOP)
+    dead = controller.tick(0.6, present)
+    assert dead.deadman is True
+    assert dead.goal_position is None
+    assert dead.torque_enable is False
+    controller.on_teleop_state(CONNECTED, WATCHDOG_OK)
+    controller.on_gripper_safe(0.5, 0.7)
+    resumed = controller.tick(0.71, present)
+    assert resumed.deadman is False
+    assert resumed.goal_position == present
+    assert controller.goal is None
+
+    rail = GripperController()
+    jaw = VERIFIED_RANGE_MAX
+    _arm(rail, jaw)
+    token = 0.25
+    now = 0.1
+    for _ in range(40):
+        stepped = _press(rail, token, jaw, now)
+        now += 0.05
+        assert stepped.goal_position is not None
+        assert stepped.goal_position <= jaw
+        jaw = stepped.goal_position
+        held = _press(rail, 0.5, jaw, now)
+        now += 0.05
+        assert held.goal_position == jaw
+        token = 0.0 if token == 0.25 else 0.25
+        if jaw == VERIFIED_RANGE_MIN:
+            break
+    assert jaw == VERIFIED_RANGE_MIN
+    assert _press(rail, 0.25, jaw, now).goal_position == VERIFIED_RANGE_MIN
+    assert (
+        _press(rail, 1.0, jaw, now + 0.05).goal_position
+        == VERIFIED_RANGE_MIN + DEFAULT_MAX_DELTA_TICKS
+    )
+
+
+def test_open_and_close_stop_at_the_verified_ends() -> None:
+    controller = GripperController()
+    _arm(controller, VERIFIED_RANGE_MAX)
+    blocked = _press(controller, 1.0, VERIFIED_RANGE_MAX, 0.1)
+    assert blocked.goal_position == VERIFIED_RANGE_MAX
+    again = _press(controller, 0.75, VERIFIED_RANGE_MAX, 0.2)
+    assert again.goal_position == VERIFIED_RANGE_MAX
+    opposite = _press(controller, 0.25, VERIFIED_RANGE_MAX, 0.3)
+    assert opposite.goal_position == VERIFIED_RANGE_MAX - DEFAULT_MAX_DELTA_TICKS
+
+    low = GripperController()
+    _arm(low, VERIFIED_RANGE_MIN)
+    closed = _press(low, 0.25, VERIFIED_RANGE_MIN, 0.1)
+    assert closed.goal_position == VERIFIED_RANGE_MIN
+    still = _press(low, 0.0, VERIFIED_RANGE_MIN, 0.2)
+    assert still.goal_position == VERIFIED_RANGE_MIN
+    opened = _press(low, 1.0, VERIFIED_RANGE_MIN, 0.3)
+    assert opened.goal_position == VERIFIED_RANGE_MIN + DEFAULT_MAX_DELTA_TICKS
+
+
+def test_partial_step_clamps_to_the_verified_range() -> None:
+    controller = GripperController()
+    _arm(controller, 3460)
+    opened = _press(controller, 1.0, 3460, 0.1)
+    assert opened.goal_position == VERIFIED_RANGE_MAX
+    low = GripperController()
+    _arm(low, 2050)
+    closed = _press(low, 0.25, 2050, 0.1)
+    assert closed.goal_position == VERIFIED_RANGE_MIN
+
+
+def test_goal_also_clamps_to_servo_position_limits() -> None:
+    wide = GripperController(range_min=-100, range_max=5000)
+    _arm(wide, 10)
+    closed = _press(wide, 0.25, 10, 0.1)
+    assert closed.goal_position == 0
+    high = GripperController(range_min=-100, range_max=5000)
+    _arm(high, 4080)
+    opened = _press(high, 1.0, 4080, 0.1)
+    assert opened.goal_position == 4095
+
+
+def test_deadman_clears_the_goal_and_the_next_press_steps_from_present() -> None:
+    transport, bus = _bus(present=2061)
+    controller = GripperController(command_timeout_s=0.5)
+    actuator = GripperActuator(bus)
+    _arm(controller, 2061, 0.0)
+    actuator.apply(controller.tick(0.01, 2061))
+    controller.on_gripper_safe(1.0, 0.02)
+    actuator.apply(controller.tick(0.03, 2061))
+    assert int(transport.goal[6]) == 2061 + DEFAULT_MAX_DELTA_TICKS
+    goals_before = sum(
+        1 for item in transport.writes if int(item["address"]) == ADDR_GOAL_POSITION
+    )
+
+    controller.on_teleop_state(TIMEOUT, SAFE_STOP)
+    dead = controller.tick(0.04, 2109)
+    assert dead.deadman
+    assert dead.goal_position is None
+    assert controller.goal is None
+    actuator.apply(dead)
+    assert transport.torque[6] == 0
+    goals_after = sum(
+        1 for item in transport.writes if int(item["address"]) == ADDR_GOAL_POSITION
+    )
+    assert goals_after == goals_before
+    assert int(transport.writes[-1]["address"]) == ADDR_TORQUE_ENABLE
+    assert bytes(transport.writes[-1]["data"]) == b"\x00"
+    assert all(int(item["id"]) == 6 for item in transport.writes)
+
+    controller.on_teleop_state(CONNECTED, WATCHDOG_OK)
+    controller.on_gripper_safe(1.0, 0.05)
+    stale = controller.tick(0.06, 2500)
+    assert stale.deadman is False
+    assert stale.goal_position == 2500
+    assert controller.goal is None
+    repeated = _press(controller, 1.0, 2500, 0.07)
+    assert repeated.goal_position == 2500
+    assert controller.goal is None
+    stepped = _press(controller, 0.75, 2500, 0.08)
+    assert stepped.goal_position == 2500 + DEFAULT_MAX_DELTA_TICKS
+    actuator.apply(stepped)
+    assert int(transport.goal[6]) == 2500 + DEFAULT_MAX_DELTA_TICKS
+    assert all(int(item["id"]) == 6 for item in transport.writes)
 
 
 def test_gripper_safe_without_state_is_deadman() -> None:

@@ -149,7 +149,7 @@ def test_gripper_keys_send_the_robot_datagram_and_ignore_the_rest(tmp_path: Path
         for key in ("w", "a", "s", "d", "r", "f", "j", "l", "u", "o", "i", "k"):
             host.apply_key(key, True)
         assert host._motion == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        assert host._gripper == 0.0
+        assert host._gripper == 0.5
         host.publish_command()
         host.publish_heartbeat()
         assert fake.sent == []
@@ -194,7 +194,7 @@ def test_gripper_keys_send_the_robot_datagram_and_ignore_the_rest(tmp_path: Path
                 ax=0.0,
                 ay=0.0,
                 az=0.0,
-                gripper=0.0,
+                gripper=0.25,
                 frame_id="tool0",
                 session_id="sess",
             )
@@ -211,6 +211,196 @@ def test_gripper_keys_send_the_robot_datagram_and_ignore_the_rest(tmp_path: Path
         assert host.heartbeat_armed is False
         assert host.socket_open is False
         assert fake.closed is True
+    finally:
+        host.shutdown()
+
+
+def _command_grippers(fake: _FakeUdp, robot: Any) -> list[float]:
+    values: list[float] = []
+    for payload in fake.sent:
+        kind, msg = robot.decode(payload)
+        assert kind == robot.TYPE_COMMAND
+        assert (msg.lx, msg.ly, msg.lz, msg.ax, msg.ay, msg.az) == (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+        values.append(float(msg.gripper))
+    return values
+
+
+def _goals_for(values: list[float], present: int) -> list[int | None]:
+    _robot_codec()
+    from teleop_demo.gripper_control import CONNECTED, WATCHDOG_OK, GripperController
+
+    controller = GripperController()
+    controller.on_teleop_state(CONNECTED, WATCHDOG_OK)
+    now = 0.0
+    goals: list[int | None] = []
+    for value in values:
+        now += 0.05
+        controller.on_gripper_safe(value, now)
+        output = controller.tick(now + 0.01, present)
+        assert output.deadman is False
+        goals.append(output.goal_position)
+        now += 0.01
+    return goals
+
+
+def test_each_press_steps_once_and_a_held_key_does_not(tmp_path: Path) -> None:
+    robot = _robot_codec()
+    fake = _FakeUdp()
+    host = OperatorHost(
+        tmp_path,
+        "ws://127.0.0.1:9",
+        opener=lambda: fake,
+        clock=lambda: (10, 20),
+        timers=False,
+    )
+    try:
+        host._connection = _Open()  # type: ignore[assignment]
+        host.session_id = "sess"
+        host.enable_link()
+        host.publish_command()
+        host.apply_key("g", True)
+        host.publish_command()
+        host.publish_command()
+        host.publish_command()
+        host.apply_key("g", False)
+        assert host._gripper == 0.5
+        host.publish_command()
+        host.apply_key("g", True)
+        host.publish_command()
+        host.apply_key("g", False)
+        host.publish_command()
+        host.apply_key("g", True)
+        host.publish_command()
+        host.apply_key("h", True)
+        host.publish_command()
+        host.apply_key("h", False)
+        assert host._gripper == 0.5
+        host.publish_command()
+        host.apply_key("h", True)
+        host.publish_command()
+        values = _command_grippers(fake, robot)
+        assert values == [
+            0.5,
+            1.0,
+            1.0,
+            1.0,
+            0.5,
+            1.0,
+            0.5,
+            1.0,
+            0.25,
+            0.5,
+            0.25,
+        ]
+        present = 2061
+        assert _goals_for(values, present) == [
+            present,
+            present + 48,
+            present + 48,
+            present + 48,
+            present + 48,
+            present + 96,
+            present + 96,
+            present + 144,
+            present + 96,
+            present + 96,
+            present + 48,
+        ]
+        script = (_ROOT / "teleoperation-prototype" / "web" / "operate.js").read_text(
+            encoding="utf-8"
+        )
+        assert "event.repeat" in script
+    finally:
+        host.shutdown()
+
+
+def test_holding_a_gripper_key_does_not_mint_another_step(tmp_path: Path) -> None:
+    robot = _robot_codec()
+    fake = _FakeUdp()
+    host = OperatorHost(
+        tmp_path,
+        "ws://127.0.0.1:9",
+        opener=lambda: fake,
+        clock=lambda: (10, 20),
+        timers=False,
+    )
+    try:
+        host._connection = _Open()  # type: ignore[assignment]
+        host.session_id = "sess"
+        host.enable_link()
+        host.publish_command()
+        host.apply_key("h", True)
+        host.publish_command()
+        host.apply_key("h", True)
+        host.apply_key("h", True)
+        host.publish_command()
+        host.apply_key(" ", True)
+        assert host._gripper == 0.25
+        host.publish_command()
+        host.apply_key("h", True)
+        host.publish_command()
+        values = _command_grippers(fake, robot)
+        assert values == [0.5, 0.25, 0.25, 0.25, 0.0]
+        present = 3466
+        assert _goals_for(values, present) == [
+            present,
+            present - 48,
+            present - 48,
+            present - 48,
+            present - 96,
+        ]
+    finally:
+        host.shutdown()
+
+
+def test_keyup_does_not_drop_the_step_or_reverse_it(tmp_path: Path) -> None:
+    robot = _robot_codec()
+    fake = _FakeUdp()
+    host = OperatorHost(
+        tmp_path,
+        "ws://127.0.0.1:9",
+        opener=lambda: fake,
+        clock=lambda: (10, 20),
+        timers=False,
+    )
+    try:
+        host._connection = _Open()  # type: ignore[assignment]
+        host.session_id = "sess"
+        host.enable_link()
+        host.publish_command()
+        host.apply_key("g", True)
+        host.apply_key("g", False)
+        host.publish_command()
+        host.publish_command()
+        host.apply_key("g", True)
+        host.publish_command()
+        host.apply_key("g", False)
+        host.apply_key("g", True)
+        host.publish_command()
+        host.apply_key("h", True)
+        host.publish_command()
+        host.apply_key("h", False)
+        host.apply_key("h", True)
+        host.publish_command()
+        values = _command_grippers(fake, robot)
+        assert values == [0.5, 1.0, 0.5, 1.0, 0.75, 0.25, 0.0]
+        present = 3000
+        assert _goals_for(values, present) == [
+            present,
+            present + 48,
+            present + 48,
+            present + 96,
+            present + 144,
+            present + 96,
+            present + 48,
+        ]
     finally:
         host.shutdown()
 
@@ -297,7 +487,7 @@ def test_websocket_g_and_h_on_a_free_port() -> None:
         assert _until(lambda: host._gripper == 1.0)
         _ws_send(sock, "w", b"\x0a\x0b\x0c\x0d")
         _ws_send(sock, "h", b"\x11\x12\x13\x14")
-        assert _until(lambda: host._gripper == 0.0)
+        assert _until(lambda: host._gripper == 0.25)
         assert host._motion == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         fake.sent.clear()
         host._gripper = 1.0

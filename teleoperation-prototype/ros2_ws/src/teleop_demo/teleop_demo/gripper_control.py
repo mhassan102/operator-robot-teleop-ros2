@@ -1,7 +1,10 @@
-"""ROS-free SO-ARM gripper policy: deadman torque-off + tiny position delta.
+"""ROS-free SO-ARM gripper policy: one 48-tick step per press, then hold.
 
-/gripper_safe is 0..1 (0 close, 1 open). Watchdog / missing /gripper_safe must
-not hold a close: torque is disabled and no goal is written.
+/gripper_safe is still one float. 1.0 and 0.75 request an open step. 0.0 and
+0.25 request a close step. Any other value, including 0.5, holds. A repeated
+float is the safety node's latch, not another press. The first sample after
+the link goes live is that latch and does not move the jaw. Deadman drops
+torque, clears the step, and does not write a close.
 """
 
 from __future__ import annotations
@@ -52,6 +55,20 @@ def clamp_tiny_delta(target: int, anchor: int, max_delta: int) -> int:
     return max(lo, min(hi, target))
 
 
+# Bands match packaging.operator_app.keys step tokens.
+OPEN_LEVEL = 0.75
+CLOSE_LEVEL = 0.25
+
+
+def gripper_motion(value: float) -> int:
+    """+1 open one step, -1 close one step, 0 hold."""
+    if value >= OPEN_LEVEL:
+        return 1
+    if value <= CLOSE_LEVEL:
+        return -1
+    return 0
+
+
 class GripperController:
     """Turn /gripper_safe + /teleop/state into torque/goal for one servo."""
 
@@ -75,7 +92,10 @@ class GripperController:
         self._seen_state = False
         self._connection_state = TIMEOUT
         self._watchdog_state = SAFE_STOP
-        self._anchor: int | None = None
+        self._goal: int | None = None
+        self._output: int | None = None
+        self._seen: float | None = None
+        self._live = False
 
     def on_gripper_safe(self, value: float, now_s: float) -> None:
         self._last_safe_s = now_s
@@ -89,31 +109,50 @@ class GripperController:
     def tick(self, now_s: float, present_position: int) -> GripperOutput:
         reason = self._deadman_reason(now_s)
         if reason is not None:
-            self._anchor = None
+            self._goal = None
+            self._output = None
+            self._live = False
             return GripperOutput(
                 torque_enable=False,
                 goal_position=None,
                 deadman=True,
                 reason=reason,
             )
-        if self._anchor is None:
-            self._anchor = int(present_position)
-        target = map_gripper_to_ticks(
-            self._last_value, self.range_min, self.range_max
-        )
-        goal = clamp_tiny_delta(target, self._anchor, self.max_delta_ticks)
-        goal = max(self.range_min, min(self.range_max, goal))
-        goal = max(POSITION_MIN, min(POSITION_MAX, goal))
+        present = int(present_position)
+        value = float(self._last_value)
+        if not self._live:
+            # Safety is already publishing the latched float. Adopting it
+            # keeps a reconnect or the initial 0.0 from taking a step.
+            self._live = True
+            self._seen = value
+            self._output = self._clamp_goal(present)
+            return self._live_output()
+        if value != self._seen:
+            motion = gripper_motion(value)
+            self._seen = value
+            if motion != 0:
+                base = self._goal if self._goal is not None else present
+                self._goal = self._clamp_goal(base + motion * self.max_delta_ticks)
+                self._output = self._goal
+        return self._live_output()
+
+    @property
+    def goal(self) -> int | None:
+        """Last step target. None until a press, including after deadman."""
+        return self._goal
+
+    def _live_output(self) -> GripperOutput:
         return GripperOutput(
             torque_enable=True,
-            goal_position=goal,
+            goal_position=self._output,
             deadman=False,
             reason="live",
         )
 
-    @property
-    def anchor(self) -> int | None:
-        return self._anchor
+    def _clamp_goal(self, goal: int) -> int:
+        low = max(self.range_min, POSITION_MIN)
+        high = min(self.range_max, POSITION_MAX)
+        return max(low, min(high, int(goal)))
 
     def is_deadman(self, now_s: float) -> bool:
         return self._deadman_reason(now_s) is not None
