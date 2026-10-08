@@ -44,11 +44,31 @@ comes back. After they say that milestone works:
 - Do not change the status board. The planner does that after the
   user confirms the manual test.
 - When the code works locally: list files changed, print the pytest
-  command, then print manual test steps for **this PC**, the
-  **robot PC**, and **EC2**. Write those steps in
-  `fleet/docs/F<N>_usage.md`. Stop.
+  command, and stop. The only lab write-up is
+  `fleet/docs/F<N>_usage.md`.
 
-F0 is this plan. The next session implements F1.
+That usage file is commands for the user. Assume signalling on EC2
+is stopped and the robot app is stopped. Three sections, in this
+order:
+
+1. **Robot PC.** If this milestone changes robot code: from this PC
+   run `packaging/debian/build.sh`, then the rsync of the robot
+   deb, then `dpkg -i` on the robot PC, then the `teleop-robot`
+   command. If it does not change robot code: only the
+   `teleop-robot` command.
+2. **EC2.** If this milestone changes registry or signalling code:
+   the rsync from this PC, then the start command on EC2. If it
+   does not: say that EC2 is left as it is.
+3. **This PC.** If this milestone changes the operator app: from
+   this PC run `packaging/debian/build.sh`, then `dpkg -i`, then
+   the `teleop-operator` command. If it does not: only the
+   `teleop-operator` command.
+
+Do not add a pytest section, a design section, or a second copy of
+the commands in the chat. `fleet/docs/F1_usage.md` is the shape.
+The implementer does not run the lab.
+
+F0 is this plan. The next session implements F2.
 
 F1, F2, and F3 must not change what the lab speaks today. Their
 real-arm step is a regression of the current ID-and-password
@@ -69,15 +89,15 @@ then `done`.
 | ID | Milestone | STATUS | commit |
 | -- | --------- | ------ | ------ |
 | F0 | This plan | done | done |
-| F1 | Registry directory beside the password login | remaining | remaining |
+| F1 | Registry directory beside the password login | done | done |
 | F2 | Approve, attach, release, and stale | remaining | remaining |
 | F3 | Robot identity file, wire unchanged | remaining | remaining |
 | F4 | Fleet page and robot token on the wire | remaining | remaining |
 | F5 | Release, sign out, and remove the password login | remaining | remaining |
 
-**Next to implement:** F1. Sqlite accounts, token registration,
-presence, and the fleet snapshot. The current robot-id login
-stays.
+**Next to implement:** F2. Approve, attach, release, sign out, and
+the stale sweep. The robot app and the operator app stay as they
+are. The lab still logs in with the robot ID and password.
 
 **Not in F1–F5.** A hired-operator marketplace. An admin role on
 the page. Revoking an approval from the dashboard. GPS. TLS on
@@ -135,7 +155,7 @@ The product rules are `fleet/ARCHITECTURE.md`, section
 
 ---
 
-### F1 — Registry directory beside the password login — STATUS: remaining
+### F1 — Registry directory beside the password login — STATUS: done
 
 **Goal.** The signalling process can store operator accounts and
 robots in sqlite, accept a device token, remember presence, and
@@ -286,6 +306,10 @@ password teleop, one tap of g or h after the gripper is clear. The
 implementer does not run it. EC2 is not updated.
 ```
 
+F1 landed. The registry on EC2 stores accounts and robot rows in
+sqlite and still accepts the robot ID and password. The user drove
+the gripper with one `g` or `h` tap. `commit: done`.
+
 ---
 
 ### F2 — Approve, attach, release, and stale — STATUS: remaining
@@ -340,10 +364,13 @@ the status board. Do not drive the arm.
 
 **Verify:** the same pytest command as F1.
 
-**Lab:** write `fleet/docs/F2_usage.md`. EC2 is not updated. The
-real-arm check is again the current ID-and-password teleop, one
-`g` or `h`. The new messages are proven by pytest. The implementer
-does not run the arm.
+**Lab:** write `fleet/docs/F2_usage.md` and nothing else for the
+user. F2 changes only the registry, so the robot section is only
+the `teleop-robot` command and this PC is only the
+`teleop-operator` command. EC2 gets the rsync of `packaging/` and
+`turn/signalling/server.py` only if that file changed, then the
+signalling start command. The drive is still the robot ID and
+password, one `g` or `h`. The implementer does not run it.
 
 **Session prompt:**
 
@@ -368,10 +395,14 @@ session still returns logged_out. Do not rsync EC2. Do not commit or
 push. Do not SSH. Do not start mlink, Docker, or the arm. Do not
 send g or h. Do not change the status board.
 
-When F2 works, list files, print the pytest command, and write
-fleet/docs/F2_usage.md with steps for this PC, the robot PC, and
-EC2. The real-arm check is the current teleop, one tap of g or h.
-The implementer does not run it. EC2 is not updated.
+When F2 works, list files, print the pytest command, and stop.
+Write fleet/docs/F2_usage.md only. Assume the robot app and EC2
+signalling are stopped. Robot PC: no code change, so only the
+teleop-robot command. EC2: registry code changed, so the rsync
+from this PC and the signalling start command. This PC: no
+operator code change, so only the teleop-operator command. The
+drive is still the robot ID and password, one tap of g or h. The
+implementer does not run it.
 ```
 
 ---

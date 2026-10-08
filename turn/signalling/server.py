@@ -10,6 +10,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
+import os
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -68,8 +71,20 @@ class Room:
         return None
 
 
-def _new_registry() -> Any:
-    """One in-memory registry per process. ICE still runs if it is absent."""
+def registry_db_path() -> str:
+    """Durable file for ``python3 -m signalling.server``.
+
+    ``TELEOP_REGISTRY_DB`` wins. Otherwise
+    ``~/.local/share/teleop/registry.sqlite``.
+    """
+    chosen = os.environ.get("TELEOP_REGISTRY_DB", "").strip()
+    if chosen:
+        return chosen
+    return str(Path.home() / ".local" / "share" / "teleop" / "registry.sqlite")
+
+
+def _new_registry(db_path: str | None = None) -> Any:
+    """One registry per process. ICE still runs if it cannot be opened."""
     root = Path(__file__).resolve().parents[2]
     if str(root) not in sys.path:
         sys.path.append(str(root))
@@ -77,15 +92,22 @@ def _new_registry() -> Any:
         from packaging.registry import Registry
     except ImportError:
         return None
-    return Registry()
+    path = ":memory:" if db_path is None else db_path
+    try:
+        return Registry(path)
+    except (OSError, sqlite3.Error):
+        logging.getLogger(__name__).error(
+            "registry database cannot be opened: %s", path
+        )
+        return None
 
 
 class Hub:
     """Rooms of exactly two members (controlling + controlled)."""
 
-    def __init__(self) -> None:
+    def __init__(self, db_path: str | None = None) -> None:
         self.rooms: dict[str, Room] = {}
-        self.registry = _new_registry()
+        self.registry = _new_registry(db_path)
 
     async def handle(self, websocket: Any) -> None:
         room: Room | None = None
@@ -184,9 +206,17 @@ class Hub:
             self.rooms.pop(room.name, None)
 
 
-async def start_server(host: str = "127.0.0.1", port: int = 0) -> Server:
-    """Bind a signalling server. port=0 picks an ephemeral port (tests)."""
-    return await serve(Hub().handle, host, port)
+async def start_server(
+    host: str = "127.0.0.1",
+    port: int = 0,
+    db_path: str | None = None,
+) -> Server:
+    """Bind a signalling server. port=0 picks an ephemeral port (tests).
+
+    The registry stays on ``:memory:`` unless ``db_path`` is passed.
+    Callers that pass only host and port do not open a file.
+    """
+    return await serve(Hub(db_path).handle, host, port)
 
 
 def listening_uri(server: Server) -> str:
@@ -196,7 +226,7 @@ def listening_uri(server: Server) -> str:
 
 
 async def _amain(host: str, port: int) -> None:
-    async with serve(Hub().handle, host, port) as server:
+    async with serve(Hub(registry_db_path()).handle, host, port) as server:
         print(f"signalling {listening_uri(server)}", flush=True)
         await server.serve_forever()
 
