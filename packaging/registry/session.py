@@ -1,10 +1,11 @@
 """Pair a robot with one operator and relay the session JSON.
 
-Password register and password login stay in memory. Operator accounts
-and robot token rows live in sqlite. The plaintext password and the
+Operator accounts and robot token rows live in sqlite. A password
+``register`` is ``legacy_robot`` and the socket closes. A ``login``
+with ``robot_id`` and no username is ``legacy_login`` and the socket
+closes. ``logout`` is ``unknown_type``. The plaintext password and the
 device token are never logged and never copied into an outbound message.
 
-``logged_in`` for a password session includes the robot hostname.
 A username login includes ``username`` and then one ``fleet`` snapshot.
 That login can approve a robot and attach to one online approved robot.
 ``v`` stays 1.
@@ -125,26 +126,6 @@ async def _send(ws: Any, msg: dict) -> None:
     await ws.send(json.dumps(msg))
 
 
-class Session:
-    """In-memory password scaffold. Not a sqlite row."""
-
-    durable = False
-
-    def __init__(self, robot_id: str) -> None:
-        self.robot_id = robot_id
-        self.password_hash = b""
-        self.hostname = ""
-        self.robot_ws: Any = None
-        self.operator_ws: Any = None
-        self.lock = asyncio.Lock()
-
-    def __repr__(self) -> str:
-        return (
-            "Session(%r, robot=%s, operator=%s)"
-            % (self.robot_id, self.robot_ws is not None, self.operator_ws is not None)
-        )
-
-
 class RobotRecord:
     """Live sockets for one sqlite robot row. The row is not popped on close."""
 
@@ -172,13 +153,12 @@ class RobotRecord:
 
 
 class Registry:
-    """Password sessions in memory, plus sqlite operators and robot tokens."""
+    """Sqlite operators and robot tokens. Live sockets stay in memory."""
 
     def __init__(self, db_path: str = ":memory:") -> None:
         self.db_path = db_path
         self._db = connect_db(db_path)
         delete_old_pending(self._db)
-        self.sessions: dict = {}
         self.robots: dict = {}
         for row in load_robots(self._db):
             self.robots[row.robot_id] = RobotRecord(row)
@@ -240,28 +220,16 @@ class Registry:
         await self._relay_loop(ws, session, "robot")
 
     async def _run_operator(self, ws: Any, first: dict) -> None:
-        session: Any = None
         msg: Optional[dict] = first
         while True:
             if msg is None:
                 await _send(ws, _error("bad_json"))
             elif ws in self._ws_user:
                 await self._username_frame(ws, msg)
-            elif session is not None and not self._still(session, ws, "operator"):
-                session = None
-                if msg.get("type") == "login":
-                    session = await self._accept_login(ws, msg)
-                else:
-                    await _send(ws, _error("offline"))
-            elif session is None:
-                if msg.get("type") == "login":
-                    session = await self._accept_login(ws, msg)
-                else:
-                    await _send(ws, _error("unknown_type"))
-            elif msg.get("v") == 1 and msg.get("type") == "logout":
-                await self._logout(session, ws)
+            elif msg.get("type") == "login":
+                await self._accept_login(ws, msg)
             else:
-                await self._forward(session, ws, "operator", msg)
+                await _send(ws, _error("unknown_type"))
             msg = _loads(await ws.recv())
 
     async def _relay_loop(self, ws: Any, session: Any, side: str) -> None:
@@ -289,56 +257,21 @@ class Registry:
         if msg.get("v") != 1 or msg.get("type") != "register":
             await _send(ws, _error("unknown_type"))
             return None
+        robot_id = msg.get("robot_id")
+        if not valid_robot_id(robot_id):
+            await _send(ws, _error("bad_id"))
+            return None
         token = msg.get("token")
         if isinstance(token, str) and token != "":
             return await self._accept_token_register(ws, msg, token)
-        return await self._accept_password_register(ws, msg)
-
-    async def _accept_password_register(self, ws: Any, msg: dict) -> Optional[Session]:
-        robot_id = msg.get("robot_id")
         password = msg.get("password")
-        hostname = msg.get("hostname", "")
-        if (
-            not isinstance(robot_id, str)
-            or not valid_robot_id(robot_id)
-            or not isinstance(password, str)
-            or password == ""
-            or not isinstance(hostname, str)
-        ):
-            await _send(ws, _error("bad_id"))
-            return None
-        self._db.commit()
-        digest = await asyncio.to_thread(hash_password, password)
-        session = self.sessions.get(robot_id)
-        if session is None:
-            session = Session(robot_id)
-            current = self.sessions.get(robot_id)
-            if current is None:
-                self.sessions[robot_id] = session
-            else:
-                session = current
-        old: Any = None
-        async with session.lock:
-            old = session.robot_ws
-            session.robot_ws = ws
-            session.password_hash = digest
-            session.hostname = hostname
-        if self.sessions.get(robot_id) is not session or session.robot_ws is not ws:
-            return None
-        if old is not None and old is not ws:
+        if isinstance(password, str) and password != "":
+            await _send(ws, _error("legacy_robot"))
             with contextlib.suppress(ConnectionClosed):
-                await old.close()
-        async with session.lock:
-            if session.robot_ws is not ws:
-                return None
-            operator = session.operator_ws
-        await _send(ws, {"v": 1, "type": "registered"})
-        if operator is not None:
-            async with session.lock:
-                still = session.robot_ws is ws and session.operator_ws is operator
-            if still:
-                await _send(ws, {"v": 1, "type": "operator_attached"})
-        return session
+                await ws.close()
+            return None
+        await _send(ws, _error("auth"))
+        return None
 
     async def _accept_token_register(self, ws: Any, msg: dict, token: str) -> Any:
         robot_id = msg.get("robot_id")
@@ -529,72 +462,17 @@ class Registry:
             record.last_seen_written = time.monotonic()
         self._clear_sweep_if_fresh(record)
 
-    async def _accept_login(self, ws: Any, msg: dict) -> Optional[Session]:
+    async def _accept_login(self, ws: Any, msg: dict) -> None:
         if msg.get("v") != 1 or msg.get("type") != "login":
             await _send(ws, _error("unknown_type"))
-            return None
+            return
         username = msg.get("username")
         if isinstance(username, str) and username != "":
             await self._accept_username_login(ws, msg, username)
-            return None
-        robot_id = msg.get("robot_id")
-        if not isinstance(robot_id, str) or not valid_robot_id(robot_id):
-            await _send(ws, _error("offline"))
-            return None
-        if robot_id in self.robots:
-            await _send(ws, _error("legacy_login"))
-            with contextlib.suppress(ConnectionClosed):
-                await ws.close()
-            return None
-        return await self._accept_password_login(ws, msg, robot_id)
-
-    async def _accept_password_login(
-        self, ws: Any, msg: dict, robot_id: str
-    ) -> Optional[Session]:
-        session = self.sessions.get(robot_id)
-        if session is None or session.robot_ws is None:
-            await _send(ws, _error("offline"))
-            return None
-        password = msg.get("password")
-        code = "auth"
-        hostname = ""
-        for _attempt in range(3):
-            async with session.lock:
-                if session.robot_ws is None:
-                    code = "offline"
-                    break
-                stored = bytes(session.password_hash)
-                hostname = session.hostname if isinstance(session.hostname, str) else ""
-            self._db.commit()
-            matched = await asyncio.to_thread(password_matches, stored, password)
-            async with session.lock:
-                if session.robot_ws is None:
-                    code = "offline"
-                    break
-                if bytes(session.password_hash) != stored:
-                    continue
-                if not matched:
-                    code = "auth"
-                    break
-                if session.operator_ws is not None:
-                    code = "busy"
-                    break
-                session.operator_ws = ws
-                hostname = session.hostname if isinstance(session.hostname, str) else ""
-                code = ""
-                break
-        else:
-            code = "auth"
-        if code:
-            await _send(ws, _error(code))
-            return None
-        await _send(ws, {"v": 1, "type": "logged_in", "hostname": hostname})
-        async with session.lock:
-            robot = session.robot_ws if session.operator_ws is ws else None
-        if robot is not None:
-            with contextlib.suppress(ConnectionClosed):
-                await _send(robot, {"v": 1, "type": "operator_attached"})
-        return session
+            return
+        await _send(ws, _error("legacy_login"))
+        with contextlib.suppress(ConnectionClosed):
+            await ws.close()
 
     async def _accept_username_login(self, ws: Any, msg: dict, username: str) -> None:
         holder = self._operator_ws.get(username)
@@ -640,24 +518,6 @@ class Registry:
         await self._broadcast_fleet()
         self._cancel_fleet()
 
-    async def _logout(self, session: Session, ws: Any) -> None:
-        """Detach this operator. The robot id and password hash stay."""
-        robot: Any = None
-        async with session.lock:
-            if session.operator_ws is not ws:
-                attached = False
-            else:
-                session.operator_ws = None
-                robot = session.robot_ws
-                attached = True
-        if not attached:
-            await _send(ws, _error("offline"))
-            return
-        if robot is not None:
-            with contextlib.suppress(ConnectionClosed):
-                await _send(robot, {"v": 1, "type": "operator_detached"})
-        await _send(ws, {"v": 1, "type": "logged_out"})
-
     async def _forward(self, session: Any, ws: Any, side: str, msg: dict) -> None:
         allowed = _FROM_ROBOT if side == "robot" else _FROM_OPERATOR
         if msg.get("v") != 1 or msg.get("type") not in allowed:
@@ -690,10 +550,7 @@ class Registry:
             self._kick_fleet()
 
     def _still(self, session: Any, ws: Any, side: str) -> bool:
-        if getattr(session, "durable", False):
-            current = self.robots.get(session.robot_id)
-        else:
-            current = self.sessions.get(session.robot_id)
+        current = self.robots.get(session.robot_id)
         if current is not session:
             return False
         if side == "robot":
@@ -716,42 +573,6 @@ class Registry:
             if record.robot_ws is ws or record.operator_ws is ws:
                 await self._drop_durable(record, ws)
                 return
-        found = None
-        for session in self.sessions.values():
-            if session.robot_ws is ws:
-                found = (session, "robot")
-                break
-            if session.operator_ws is ws:
-                found = (session, "operator")
-                break
-        if found is None:
-            return
-        session, side = found
-        notify: Any = None
-        notify_robot: Any = None
-        async with session.lock:
-            if side == "robot" and session.robot_ws is ws:
-                session.robot_ws = None
-                notify = session.operator_ws
-                session.operator_ws = None
-                if self.sessions.get(session.robot_id) is session:
-                    self.sessions.pop(session.robot_id, None)
-            elif side == "operator" and session.operator_ws is ws:
-                session.operator_ws = None
-                notify_robot = session.robot_ws
-                if (
-                    session.robot_ws is None
-                    and self.sessions.get(session.robot_id) is session
-                ):
-                    self.sessions.pop(session.robot_id, None)
-            else:
-                return
-        if notify is not None and notify is not ws:
-            with contextlib.suppress(ConnectionClosed):
-                await _send(notify, _error("offline"))
-        if notify_robot is not None and notify_robot is not ws:
-            with contextlib.suppress(ConnectionClosed):
-                await _send(notify_robot, {"v": 1, "type": "operator_detached"})
 
     async def _drop_durable(self, record: RobotRecord, ws: Any) -> None:
         notify_operator: Any = None
@@ -1032,7 +853,6 @@ class Registry:
             await ws.close()
 
     async def _reload_robots(self) -> None:
-        # Password sessions live in ``self.sessions`` and are not in this set.
         ids = robot_ids(self._db)
         for robot_id in list(self.robots):
             record = self.robots.get(robot_id)

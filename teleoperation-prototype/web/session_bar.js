@@ -14,7 +14,8 @@
   }
 
   bind("session-stop", "/api/stop");
-  bind("session-logout", "/api/logout");
+  bind("session-release", "/api/release");
+  bind("session-signout", "/api/sign-out");
   bind("session-quit", "/api/quit");
 
   function poll() {

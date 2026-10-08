@@ -1,4 +1,4 @@
-"""Sqlite operators and robot tokens beside the password login.
+"""Sqlite operators and robot tokens. A password register closes.
 
 The server binds 127.0.0.1 on a free port. It must not bind 8765, 8766,
 3479, 8090, or anything in 50000–50100.
@@ -336,12 +336,13 @@ def test_password_register_does_not_write_sqlite_or_grow_the_reply(
                     "hostname": long_host,
                 },
             )
-            assert session is not None
-            assert ws.sent == [{"v": 1, "type": "registered"}]
-            assert "approval" not in ws.sent[0]
+            assert session is None
+            assert ws.sent == [
+                {"v": 1, "type": "error", "code": "legacy_robot"}
+            ]
+            assert ws.closed is True
             assert reg._db.execute("SELECT COUNT(*) FROM robots").fetchone()[0] == 0
             assert reg._db.execute("SELECT COUNT(*) FROM operators").fetchone()[0] == 0
-            assert session.hostname == long_host
             assert "111111111" not in reg.robots
             _no_secret(ws.sent[0], _ROBOT_PASSWORD)
         finally:
@@ -978,22 +979,71 @@ def test_hashing_runs_through_to_thread(tmp_path: Path, monkeypatch: Any) -> Non
                     "hostname": "host",
                 },
             )
+            assert robot.sent == [
+                {"v": 1, "type": "error", "code": "legacy_robot"}
+            ]
+            assert robot.closed is True
+            assert "hash_password" not in seen
+            assert "111111111" not in reg.robots
+            token = FakeWS()
+            await reg._accept_register(
+                token,
+                {
+                    "v": 1,
+                    "type": "register",
+                    "robot_id": "222222222",
+                    "token": _TOKEN,
+                    "hostname": "host",
+                    "mode": "manual",
+                },
+            )
+            assert token.sent[-1] == {
+                "v": 1,
+                "type": "registered",
+                "approval": "pending",
+            }
+            assert "hash_password" in seen
             operator = FakeWS()
             await reg._accept_login(
                 operator,
                 {
                     "v": 1,
                     "type": "login",
-                    "robot_id": "111111111",
+                    "username": "lab",
+                    "password": _OPERATOR_PASSWORD,
+                },
+            )
+            assert operator.sent[0] == {
+                "v": 1,
+                "type": "logged_in",
+                "username": "lab",
+            }
+            assert operator.closed is False
+            assert "password_matches" in seen
+            legacy = FakeWS()
+            before = len(seen)
+            await reg._accept_login(
+                legacy,
+                {
+                    "v": 1,
+                    "type": "login",
+                    "robot_id": "222222222",
                     "password": _ROBOT_PASSWORD,
                 },
             )
-            assert operator.sent[0]["type"] == "logged_in"
-            assert operator.sent[0]["hostname"] == "host"
-            assert all(item["type"] != "fleet" for item in operator.sent)
+            assert legacy.sent == [
+                {"v": 1, "type": "error", "code": "legacy_login"}
+            ]
+            assert legacy.closed is True
+            assert seen[before:] == []
+            await reg._username_frame(operator, {"v": 1, "type": "logout"})
+            assert operator.sent[-1] == {
+                "v": 1,
+                "type": "error",
+                "code": "unknown_type",
+            }
             assert operator.closed is False
-            await reg._logout(reg.sessions["111111111"], operator)
-            assert operator.sent[-1] == {"v": 1, "type": "logged_out"}
+            assert reg._ws_user[operator] == "lab"
         finally:
             reg.close()
 
@@ -1124,9 +1174,25 @@ def test_start_server_stays_in_memory_unless_db_path_is_passed(
 
     async def _body() -> None:
         async with _listening() as uri:
-            async with connect(uri) as robot, connect(uri) as operator:
+            async with connect(uri) as robot, connect(uri) as legacy:
                 await _send(
                     robot,
+                    {
+                        "v": 1,
+                        "type": "register",
+                        "robot_id": "222222222",
+                        "token": _TOKEN,
+                        "hostname": "host",
+                        "mode": "manual",
+                    },
+                )
+                assert await _recv(robot) == {
+                    "v": 1,
+                    "type": "registered",
+                    "approval": "pending",
+                }
+                await _send(
+                    legacy,
                     {
                         "v": 1,
                         "type": "register",
@@ -1135,21 +1201,13 @@ def test_start_server_stays_in_memory_unless_db_path_is_passed(
                         "hostname": "host",
                     },
                 )
-                assert await _recv(robot) == {"v": 1, "type": "registered"}
-                await _send(
-                    operator,
-                    {
-                        "v": 1,
-                        "type": "login",
-                        "robot_id": "111111111",
-                        "password": _ROBOT_PASSWORD,
-                    },
-                )
-                assert await _recv(operator) == {
+                assert await _recv(legacy) == {
                     "v": 1,
-                    "type": "logged_in",
-                    "hostname": "host",
+                    "type": "error",
+                    "code": "legacy_robot",
                 }
+                with pytest.raises(ConnectionClosed):
+                    await asyncio.wait_for(legacy.recv(), 2)
 
     _run(_body())
     assert not target.exists()
@@ -1226,17 +1284,13 @@ def test_password_and_token_logins_on_one_server(
                         "hostname": "password-host",
                     },
                 )
-                registered = await _recv(password_robot)
-                assert registered == {"v": 1, "type": "registered"}
-                await _send(
-                    password_robot,
-                    {"v": 1, "type": "presence", "phase": "ready", "mode": "manual"},
-                )
                 assert await _recv(password_robot) == {
                     "v": 1,
                     "type": "error",
-                    "code": "unknown_type",
+                    "code": "legacy_robot",
                 }
+                with pytest.raises(ConnectionClosed):
+                    await asyncio.wait_for(password_robot.recv(), 2)
                 await _send(
                     operator,
                     {
@@ -1248,15 +1302,11 @@ def test_password_and_token_logins_on_one_server(
                 )
                 assert await _recv(operator) == {
                     "v": 1,
-                    "type": "logged_in",
-                    "hostname": "password-host",
+                    "type": "error",
+                    "code": "legacy_login",
                 }
-                leaked = asyncio.create_task(operator.recv())
-                done, _pending = await asyncio.wait({leaked}, timeout=0.2)
-                assert not done
-                leaked.cancel()
-                with contextlib.suppress(asyncio.CancelledError, ConnectionClosed):
-                    await leaked
+                with pytest.raises(ConnectionClosed):
+                    await asyncio.wait_for(operator.recv(), 2)
                 await _send(
                     token_robot,
                     {
@@ -1275,34 +1325,6 @@ def test_password_and_token_logins_on_one_server(
                     "approval": "pending",
                 }
                 _no_secret(token_reply, _TOKEN, _ROBOT_PASSWORD, _OPERATOR_PASSWORD)
-                quiet = asyncio.create_task(operator.recv())
-                done, _pending = await asyncio.wait({quiet}, timeout=0.2)
-                assert not done
-                quiet.cancel()
-                with contextlib.suppress(asyncio.CancelledError, ConnectionClosed):
-                    await quiet
-                await _send(operator, {"v": 1, "type": "logout"})
-                assert await _recv(operator) == {"v": 1, "type": "logged_out"}
-                await _send(
-                    operator,
-                    {
-                        "v": 1,
-                        "type": "login",
-                        "robot_id": "111111111",
-                        "password": _ROBOT_PASSWORD,
-                    },
-                )
-                assert (await _recv(operator))["type"] == "logged_in"
-                await _send(
-                    operator, {"v": 1, "type": "approve", "robot_id": "222222222"}
-                )
-                assert await _recv(operator) == {
-                    "v": 1,
-                    "type": "error",
-                    "code": "unknown_type",
-                }
-                await _send(operator, {"v": 1, "type": "logout"})
-                assert await _recv(operator) == {"v": 1, "type": "logged_out"}
                 async with connect(uri) as legacy:
                     await _send(
                         legacy,
@@ -1398,16 +1420,23 @@ def test_password_and_token_logins_on_one_server(
                         "type": "error",
                         "code": "unknown_type",
                     }
-                await _send(
-                    operator,
-                    {
+                async with connect(uri) as again:
+                    await _send(
+                        again,
+                        {
+                            "v": 1,
+                            "type": "login",
+                            "robot_id": "111111111",
+                            "password": _ROBOT_PASSWORD,
+                        },
+                    )
+                    assert await _recv(again) == {
                         "v": 1,
-                        "type": "login",
-                        "robot_id": "111111111",
-                        "password": _ROBOT_PASSWORD,
-                    },
-                )
-                assert (await _recv(operator))["hostname"] == "password-host"
+                        "type": "error",
+                        "code": "legacy_login",
+                    }
+                    with pytest.raises(ConnectionClosed):
+                        await asyncio.wait_for(again.recv(), 2)
                 await _send(
                     token_robot,
                     {
@@ -1424,12 +1453,6 @@ def test_password_and_token_logins_on_one_server(
                 assert updated["robots"][0]["location"] == "dubai-lab"
                 assert updated["robots"][0]["phase"] == "ready"
                 _no_secret(updated, _TOKEN)
-                silent = asyncio.create_task(operator.recv())
-                done, _pending = await asyncio.wait({silent}, timeout=0.2)
-                assert not done
-                silent.cancel()
-                with contextlib.suppress(asyncio.CancelledError, ConnectionClosed):
-                    await silent
                 await _send(
                     token_robot,
                     {
@@ -1654,11 +1677,36 @@ def test_approve_attach_release_sign_out_and_stale(tmp_path: Path) -> None:
             assert op.sent[0] == {"v": 1, "type": "logged_in", "username": "lab"}
             other = await _login_user(reg, "other", "other-password")
             password_robot = FakeWS()
+            created = await reg._accept_register(
+                password_robot,
+                {
+                    "v": 1,
+                    "type": "register",
+                    "robot_id": "111111111",
+                    "password": _ROBOT_PASSWORD,
+                    "hostname": "password-host",
+                },
+            )
+            assert created is None
+            assert password_robot.sent == [
+                {"v": 1, "type": "error", "code": "legacy_robot"}
+            ]
+            assert password_robot.closed is True
+            assert "111111111" not in reg.robots
             password_op = FakeWS()
-            password = registry_session.Session("111111111")
-            password.robot_ws = password_robot
-            password.operator_ws = password_op
-            reg.sessions["111111111"] = password
+            await reg._accept_login(
+                password_op,
+                {
+                    "v": 1,
+                    "type": "login",
+                    "robot_id": "111111111",
+                    "password": _ROBOT_PASSWORD,
+                },
+            )
+            assert password_op.sent == [
+                {"v": 1, "type": "error", "code": "legacy_login"}
+            ]
+            assert password_op.closed is True
 
             await reg._username_frame(
                 op, {"v": 1, "type": "approve", "robot_id": "999999999"}
@@ -1808,9 +1856,14 @@ def test_approve_attach_release_sign_out_and_stale(tmp_path: Path) -> None:
             assert shown["status"] == "offline"
             assert len([m for m in robot.sent if m.get("type") == "stop"]) == 0
             assert robot.closed is False
-            assert password_robot.sent == []
-            assert password_op.sent == []
-            assert reg.sessions["111111111"] is password
+            assert password_robot.sent == [
+                {"v": 1, "type": "error", "code": "legacy_robot"}
+            ]
+            assert password_op.sent == [
+                {"v": 1, "type": "error", "code": "legacy_login"}
+            ]
+            assert "111111111" not in reg.robots
+            assert not hasattr(reg, "sessions")
             marked = len(op.sent)
             await reg._maintain_once()
             await asyncio.sleep(0.12)
@@ -2033,7 +2086,13 @@ def test_live_maintain_and_relay(tmp_path: Path, monkeypatch: Any) -> None:
                         "hostname": "password-host",
                     },
                 )
-                assert await _recv(password_robot) == {"v": 1, "type": "registered"}
+                assert await _recv(password_robot) == {
+                    "v": 1,
+                    "type": "error",
+                    "code": "legacy_robot",
+                }
+                with pytest.raises(ConnectionClosed):
+                    await asyncio.wait_for(password_robot.recv(), 2)
                 await _send(
                     operator,
                     {
@@ -2045,11 +2104,22 @@ def test_live_maintain_and_relay(tmp_path: Path, monkeypatch: Any) -> None:
                 )
                 assert await _recv(operator) == {
                     "v": 1,
-                    "type": "logged_in",
-                    "hostname": "password-host",
+                    "type": "error",
+                    "code": "legacy_login",
                 }
-                await _send(operator, {"v": 1, "type": "logout"})
-                assert await _recv(operator) == {"v": 1, "type": "logged_out"}
+                with pytest.raises(ConnectionClosed):
+                    await asyncio.wait_for(operator.recv(), 2)
+            async with connect(uri) as still:
+                await _send(still, {"v": 1, "type": "logout"})
+                assert await _recv(still) == {
+                    "type": "error",
+                    "error": "unknown_type",
+                }
+                await _send(still, {"v": 1, "type": "logout"})
+                assert await _recv(still) == {
+                    "type": "error",
+                    "error": "unknown_type",
+                }
             async with (
                 connect(uri) as robot,
                 connect(uri) as dashboard,

@@ -32,6 +32,7 @@ _DASHBOARD = {
     "offline": "That robot is offline.",
     "busy": "Another operator is already connected.",
     "already_attached": "This account is already operating a robot.",
+    "stale": "The robot is not answering. Stopping the arm.",
 }
 
 

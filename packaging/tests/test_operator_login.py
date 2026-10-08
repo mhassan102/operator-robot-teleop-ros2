@@ -111,7 +111,10 @@ def test_interpret_login_frames() -> None:
         dashboard_message("already_attached")
         == "This account is already operating a robot."
     )
-    assert dashboard_message("stale") == ""
+    assert (
+        dashboard_message("stale")
+        == "The robot is not answering. Stopping the arm."
+    )
     sent = login_message("lab", _PASSWORD)
     assert sent == {
         "v": 1,
@@ -370,15 +373,19 @@ def test_login_page_has_no_qt_and_stores_no_password() -> None:
         "Review",
         "Start",
         "Stop",
-        "Logout",
+        "Release",
+        "Sign out",
         "Quit",
     ):
         assert label in config
+    assert "Logout" not in config
     assert "TURN changes gripper control" in config
     drive = (_WEB / "index.html").read_text(encoding="utf-8")
     assert 'id="session-stop"' in drive
-    assert 'id="session-logout"' in drive
+    assert 'id="session-release"' in drive
+    assert 'id="session-signout"' in drive
     assert 'id="session-quit"' in drive
+    assert 'id="session-logout"' not in drive
     assert "/operate.js?v=f8v" in drive
     assert 'SESSION_PATH = "/ws/session"' in (_WEB / "operate.js").read_text(
         encoding="utf-8"
@@ -397,13 +404,14 @@ def test_login_page_has_no_qt_and_stores_no_password() -> None:
         ">Status<",
         ">Mode<",
         ">Action<",
-        'id="session-logout"',
+        'id="session-signout"',
         'id="session-quit"',
     ):
         assert label in fleet
     assert "Release" not in fleet
-    assert "Sign out" not in fleet
+    assert "Logout" not in fleet
     assert 'id="session-stop"' not in fleet
+    assert 'id="session-release"' not in fleet
     fleet_js = (_WEB / "fleet.js").read_text(encoding="utf-8")
     assert "Approve" in fleet_js
     assert "Operate" in fleet_js

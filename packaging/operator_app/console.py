@@ -2,9 +2,12 @@
 
 The registry socket stays in this process. A browser refresh reads
 ``/api/session`` and does not send ``login`` again. The password is not
-stored and is not logged. Stop and Logout leave this process up. Quit
-stops mlink-op first, then asks this process to exit. Nothing here
-binds 8090 or the mlink ports; the host server calls ``dispatch``.
+stored and is not logged. Stop returns to ``/config`` and leaves this
+process up. Release returns to ``/fleet`` and keeps the login. Sign out
+returns to ``/``. Quit stops mlink, then the robot, then asks this
+process to exit. It does not send ``sign_out`` and it does not run
+docker compose. Nothing here binds 8090 or the mlink ports; the host
+server calls ``dispatch``.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ _MAX_BODY = 65536
 _CHOICE_KEYS = ("link", "iface1", "iface2", "arm", "video")
 _UNCONFIRMED = "The robot did not confirm stop."
 _REVIEW_FIRST = "Review the changed config before Start."
+_SIGNED_OUT = "Signed out."
 _STATIC = {
     "/operate.css": "text/css; charset=utf-8",
     "/operate.js": "text/javascript; charset=utf-8",
@@ -82,7 +86,7 @@ class ConsoleApp:
         helper_post: HelperPost | None = None,
         session: Any = None,
         stop_timeout: float = 30.0,
-        logout_timeout: float = 5.0,
+        reply_timeout: float = 5.0,
     ) -> None:
         self.registry_url = registry_url
         self.helper_url = helper_url.rstrip("/")
@@ -92,7 +96,7 @@ class ConsoleApp:
         self._helper_post = helper_post
         self._session = session if session is not None else OperatorSession()
         self._stop_timeout = stop_timeout
-        self._logout_timeout = logout_timeout
+        self._reply_timeout = reply_timeout
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -102,7 +106,7 @@ class ConsoleApp:
         self._reader_task: asyncio.Task[None] | None = None
         self._reader_started = False
         self._stop_handle: asyncio.TimerHandle | None = None
-        self._logout_handle: asyncio.TimerHandle | None = None
+        self._reply_handle: asyncio.TimerHandle | None = None
         self.login_sends = 0
         nic = local_default_nic() if operator_nic is None else operator_nic
         self._operator_network = operator_network_text(nic)
@@ -235,7 +239,8 @@ class ConsoleApp:
             "/api/review": self._review,
             "/api/start": self._start,
             "/api/stop": self._stop,
-            "/api/logout": self._logout,
+            "/api/release": self._release,
+            "/api/sign-out": self._sign_out,
             "/api/quit": self._quit,
         }
         action = routes.get(path)
@@ -357,21 +362,37 @@ class ConsoleApp:
     async def _stop(self, raw: dict[str, Any]) -> dict[str, Any]:
         return await self._begin_stop("config")
 
-    async def _logout(self, raw: dict[str, Any]) -> dict[str, Any]:
+    async def _release(self, raw: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            if not self._logged_in:
+                return self._public_locked() | {"ok": False, "message": self._status}
+            drive = self._mlink_up or self._awaiting_ready
+        if drive:
+            return await self._begin_stop("release")
+        await self._begin_release()
+        return self.snapshot() | {"ok": True, "message": self.snapshot()["status"]}
+
+    async def _sign_out(self, raw: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             logged_in = self._logged_in
             view = self._view
             holding = self._holding
-            mlink_up = self._mlink_up
+            drive = self._mlink_up or self._awaiting_ready
         if not logged_in and view == "login":
             return self.snapshot() | {"ok": True, "message": self.snapshot()["status"]}
-        if holding or mlink_up:
-            return await self._begin_stop("logout")
-        await self._begin_logout()
+        if holding and drive:
+            return await self._begin_stop("sign_out")
+        await self._begin_sign_out()
         return self.snapshot() | {"ok": True, "message": self.snapshot()["status"]}
 
     async def _quit(self, raw: dict[str, Any]) -> dict[str, Any]:
-        return await self._begin_stop("quit")
+        with self._lock:
+            holding = self._holding
+            drive = self._mlink_up or self._awaiting_ready
+        if holding or drive:
+            return await self._begin_stop("quit")
+        await self._begin_quit()
+        return self.snapshot() | {"ok": True, "message": "quit"}
 
     async def _begin_stop(self, after: str) -> dict[str, Any]:
         with self._lock:
@@ -384,7 +405,7 @@ class ConsoleApp:
             self._after = after
             self._awaiting_ready = False
             self._start_enabled = False
-            self._status = "stopping"
+            self._status = dashboard_message("stale") if self._stale_stop else "stopping"
             self._unconfirmed = False
         if self._on_disable_link is not None:
             await asyncio.to_thread(self._on_disable_link)
@@ -393,6 +414,9 @@ class ConsoleApp:
             await asyncio.to_thread(self._post_helper, "/mlink/stop", {})
         else:
             self._mlink_up = False
+        with self._lock:
+            if self._finished_stop or self._after != after:
+                return self.snapshot() | {"ok": True, "message": self.snapshot()["status"]}
         sent = False
         if self._open():
             try:
@@ -400,6 +424,9 @@ class ConsoleApp:
                 sent = True
             except Exception:
                 self._assign(status="Cannot reach the registry.")
+        with self._lock:
+            if self._finished_stop or self._after != after:
+                return self.snapshot() | {"ok": True, "message": self.snapshot()["status"]}
         if sent:
             self._assign(awaiting_stopped=True)
             self._arm_stop_timer()
@@ -409,7 +436,10 @@ class ConsoleApp:
 
     async def _on_message(self, msg: dict[str, Any]) -> None:
         kind = msg.get("type")
-        if kind == "logged_out":
+        if kind == "released" and self._awaiting_reply == "released":
+            self._show_fleet()
+            return
+        if kind == "signed_out" and self._awaiting_reply == "signed_out":
             await self._return_to_login()
             return
         if kind == "fleet":
@@ -417,9 +447,6 @@ class ConsoleApp:
             return
         if kind == "attached":
             self._note_attached(msg)
-            return
-        if kind == "error" and self._awaiting_logout:
-            await self._return_to_login()
             return
         if kind == "inventory":
             self._apply_inventory(msg)
@@ -436,10 +463,17 @@ class ConsoleApp:
                 self._accepted = None
             self._assign(review_status=review_text(msg))
             return
-        if kind == "error" and msg.get("code") == "offline" and self._awaiting_stopped:
-            self._assign(unconfirmed=True, awaiting_stopped=False, status=_UNCONFIRMED)
-            self._cancel_stop_timer()
-            await self._finish_after_stop()
+        if kind == "error" and msg.get("code") == "stale":
+            await self._note_stale()
+            return
+        if kind == "error" and msg.get("code") == "offline":
+            await self._on_offline()
+            return
+        if kind == "error" and self._awaiting_reply == "signed_out":
+            await self._return_to_login()
+            return
+        if kind == "error" and self._awaiting_reply == "released":
+            self._show_fleet()
             return
         if kind == "error" and self._view == "fleet" and not self._awaiting_stopped:
             code = msg.get("code")
@@ -522,8 +556,11 @@ class ConsoleApp:
             self._awaiting_stopped = False
             self._after = ""
         self._cancel_stop_timer()
-        if after == "logout":
-            await self._begin_logout()
+        if after == "release":
+            await self._begin_release()
+            return
+        if after == "sign_out":
+            await self._begin_sign_out()
             return
         if after == "quit":
             await self._begin_quit()
@@ -534,36 +571,154 @@ class ConsoleApp:
         with self._lock:
             self._finished_stop = False
             self._mlink_up = False
+            self._stale_stop = False
             self._start_enabled = True
             if self._logged_in:
                 self._view = "config"
 
-    async def _begin_logout(self) -> None:
-        self._assign(logout_busy=True)
+    async def _begin_release(self) -> None:
+        """Detach this robot and stay logged in. The registry socket stays open."""
+        self._assign(awaiting_reply="released")
         if self._open():
             try:
-                await self._session.send_json({"v": 1, "type": "logout"})
+                await self._session.send_json({"v": 1, "type": "release"})
+            except Exception:
+                self._show_fleet()
+                return
+            self._arm_reply_timer()
+            return
+        self._show_fleet()
+
+    async def _begin_sign_out(self) -> None:
+        """Leave the account. The registry closes this login, not the robot row."""
+        self._assign(awaiting_reply="signed_out")
+        if self._open():
+            try:
+                await self._session.send_json({"v": 1, "type": "sign_out"})
             except Exception:
                 await self._return_to_login()
                 return
-            self._assign(awaiting_logout=True)
-            loop = self._loop
-            if loop is not None:
-                self._logout_handle = loop.call_later(
-                    self._logout_timeout, self._logout_timeout_cb
-                )
+            self._arm_reply_timer()
             return
         await self._return_to_login()
 
-    def _logout_timeout_cb(self) -> None:
-        asyncio.create_task(self._logout_timed_out())
+    def _reply_timeout_cb(self) -> None:
+        asyncio.create_task(self._reply_timed_out())
 
-    async def _logout_timed_out(self) -> None:
-        if self._awaiting_logout:
+    async def _reply_timed_out(self) -> None:
+        kind = self._awaiting_reply
+        if kind == "released":
+            self._show_fleet()
+        elif kind == "signed_out":
             await self._return_to_login()
 
+    async def _note_stale(self) -> None:
+        """The registry socket is still open, so stop is still forwarded."""
+        with self._lock:
+            attached = self._logged_in and (
+                self._holding or self._view in {"config", "operate"}
+            )
+            busy = self._stop_busy
+            after = self._after
+            if not attached:
+                return
+            self._stale_stop = True
+            self._status = dashboard_message("stale")
+        if busy:
+            if after not in {"quit", "sign_out"}:
+                self._assign(after="release")
+            return
+        await self._begin_stop("release")
+
+    async def _on_offline(self) -> None:
+        """The robot socket is gone. Stop local mlink only."""
+        with self._lock:
+            after = self._after
+            in_drive = (
+                self._holding
+                or self._view in {"config", "operate"}
+                or self._mlink_up
+            )
+        if after == "quit":
+            self._assign(awaiting_stopped=False, stop_busy=False, finished_stop=True)
+            self._cancel_stop_timer()
+            await self._begin_quit()
+            return
+        if after == "sign_out":
+            self._assign(awaiting_stopped=False, stop_busy=False, finished_stop=True)
+            self._cancel_stop_timer()
+            await self._begin_sign_out()
+            return
+        if not in_drive:
+            text = dashboard_message("offline")
+            if text:
+                self._assign(status=text)
+            return
+        await self._offline_to_fleet()
+
+    async def _offline_to_fleet(self) -> None:
+        with self._lock:
+            mlink = self._mlink_up
+            self._awaiting_stopped = False
+            self._stop_busy = False
+            self._after = ""
+            self._finished_stop = True
+            self._awaiting_reply = ""
+            self._stale_stop = False
+        self._cancel_timers()
+        if mlink:
+            if self._on_disable_link is not None:
+                await asyncio.to_thread(self._on_disable_link)
+            self._mlink_up = False
+            if not dry_run_enabled():
+                await asyncio.to_thread(self._post_helper, "/mlink/stop", {})
+        self._show_fleet(dashboard_message("offline"))
+
+    def _show_fleet(self, status: str | None = None) -> None:
+        """Back to the robot list. The login and the registry socket stay."""
+        self._cancel_timers()
+        with self._lock:
+            stale = self._stale_stop
+            logged_in = self._logged_in
+            self._stale_stop = False
+            self._finished_stop = False
+            self._stop_busy = False
+            self._awaiting_stopped = False
+            self._awaiting_ready = False
+            self._awaiting_reply = ""
+            self._after = ""
+            self._mlink_up = False
+            self._holding = False
+            self._robot_id = ""
+            self._hostname = ""
+            self._accepted = None
+            self._pending = None
+            self._inventory = None
+            self._applied = False
+            self._operate_url = ""
+            self._operate_url_full = ""
+            self._start_enabled = False
+            self._review_status = ""
+            self._unconfirmed = False
+            self._link = "tailscale"
+            self._iface1 = ""
+            self._iface2 = None
+            self._arm = ""
+            self._video = ""
+            self._iface1_choices = []
+            self._iface2_choices = []
+            self._arm_choices = []
+            self._video_choices = []
+            if not logged_in:
+                return
+            self._view = "fleet"
+            if status is None:
+                self._status = dashboard_message("stale") if stale else ""
+            else:
+                self._status = status
+
     async def _begin_quit(self) -> None:
-        """mlink-op is already stopped. This exits the operator process."""
+        """mlink and the robot are already stopped. This exits the process."""
         await asyncio.to_thread(self._post_helper, "/quit", {})
         self._assign(view="quit", status="quit", start_enabled=False)
 
@@ -573,7 +728,6 @@ class ConsoleApp:
                 return
             self._returned = True
             robot_id = self._robot_id
-            unconfirmed = self._unconfirmed
         self._cancel_timers()
         close = getattr(self._session, "close", None)
         if close is not None:
@@ -587,7 +741,7 @@ class ConsoleApp:
             self._view = "login"
             self._logged_in = False
             self._returned = True
-            self._status = ("Logged out. " + _UNCONFIRMED) if unconfirmed else "Logged out."
+            self._status = _SIGNED_OUT
             if alive:
                 self._reader_started = True
 
@@ -767,10 +921,20 @@ class ConsoleApp:
         if handle is not None:
             handle.cancel()
 
+    def _arm_reply_timer(self) -> None:
+        loop = self._loop
+        if loop is None:
+            return
+        handle = self._reply_handle
+        self._reply_handle = None
+        if handle is not None:
+            handle.cancel()
+        self._reply_handle = loop.call_later(self._reply_timeout, self._reply_timeout_cb)
+
     def _cancel_timers(self) -> None:
         self._cancel_stop_timer()
-        handle = self._logout_handle
-        self._logout_handle = None
+        handle = self._reply_handle
+        self._reply_handle = None
         if handle is not None:
             handle.cancel()
 
@@ -892,9 +1056,9 @@ class ConsoleApp:
         self._applied = False
         self._awaiting_ready = False
         self._awaiting_stopped = False
-        self._awaiting_logout = False
+        self._awaiting_reply = ""
         self._stop_busy = False
-        self._logout_busy = False
+        self._stale_stop = False
         self._after = ""
         self._finished_stop = False
         self._unconfirmed = False

@@ -1,7 +1,8 @@
 """Sqlite file for operator accounts and robot token rows.
 
 Importing this module does not create a file. ``connect`` and the admin
-CLI open the database. Password-scaffold sessions are not stored here.
+CLI open the database. Plaintext passwords and device tokens are not
+stored here.
 """
 
 from __future__ import annotations

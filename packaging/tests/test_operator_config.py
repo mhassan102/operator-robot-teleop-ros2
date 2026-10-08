@@ -379,8 +379,10 @@ def test_config_page_values() -> None:
         page = (_WEB / "config.html").read_text(encoding="utf-8")
         assert "Review" in page and "Start" in page
         assert 'id="session-stop"' in page
-        assert 'id="session-logout"' in page
+        assert 'id="session-release"' in page
+        assert 'id="session-signout"' in page
         assert 'id="session-quit"' in page
+        assert 'id="session-logout"' not in page
         reply = _post(
             app, "/api/login", {"username": "lab", "password": _PASSWORD}
         )

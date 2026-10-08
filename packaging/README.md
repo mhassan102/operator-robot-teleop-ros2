@@ -10,8 +10,8 @@ The first WebSocket message chooses the path:
 | First `type` | Path |
 | --- | --- |
 | `join` | Existing ICE room (candidates exchanged as before) |
-| `register` | Robot terminal (SSH, no Qt). The registry stores a password hash. |
-| `login` | Operator desktop app. One operator per robot. |
+| `register` | Robot terminal. A device token is hashed and stored. A password register is `legacy_robot` and the socket closes. |
+| `login` | Operator desktop app. Username and password. A robot-id login is `legacy_login` and the socket closes. |
 
 A later `register` or `login` on a connection that already joined an
 ICE room stays on the ICE path. A bad first frame does too.
@@ -23,21 +23,23 @@ The message list is in `IMPLEMENTATION.md`. The registry checks
 | --- | --- |
 | `inventory`, `config_ok`, `status`, `error` | `config`, `start`, `stop` |
 
-`logout` is not relayed. The registry detaches that operator, replies
-`logged_out`, and tells the robot `operator_detached`. The robot id
-and password hash stay, so the same password can log in again. Closing
-the operator socket detaches the same way.
+`logout` is `unknown_type`. Release detaches the operator and replies
+`released`. The operator socket stays logged in. Sign out replies
+`signed_out` and does not delete the account. Closing the operator
+socket detaches the same way as release.
 
-It does not read the fields inside those messages, and it does not
-carry gripper bytes or video. Passwords are not written to logs.
-Sessions are memory only: a new `register` for an ID replaces the
-previous robot socket and the stored hash. `logged_in` is
-`{"v":1,"type":"logged_in","hostname":"<name from register>"}`.
+It does not read the fields inside the relayed messages, and it does
+not carry gripper bytes or video. Passwords and device tokens are not
+written to logs. Approval and token hashes are in sqlite. Live sockets
+are memory only. A new token `register` for an ID replaces the previous
+robot socket and keeps the stored hash. `logged_in` for an operator is
+`{"v":1,"type":"logged_in","username":"<name>"}`.
 
-Reply codes: `bad_id`, `auth`, `busy`, `offline`. A malformed frame
-is `bad_json`. A frame whose `v` or `type` is not part of this
-session is `unknown_type`. If the robot socket drops, the operator
-is sent `offline` and the session is forgotten.
+Reply codes include `bad_id`, `auth`, `busy`, `offline`, `legacy_robot`,
+and `legacy_login`. A malformed frame is `bad_json`. A frame whose `v`
+or `type` is not part of this session is `unknown_type`, including
+`logout`. If the robot socket drops, the operator is sent `offline`.
+The robot row stays.
 
 Tests bind `127.0.0.1` on a free port. They do not bind 8766, 3479,
 or 50000–50100.

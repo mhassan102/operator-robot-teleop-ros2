@@ -931,12 +931,13 @@ def test_fleet_page_approve_and_attach_send_registry_frames(tmp_path: Path) -> N
             ">Status<",
             ">Mode<",
             ">Action<",
-            "Logout",
+            "Sign out",
             "Quit",
         ):
             assert label in text
+        assert "Logout" not in text
         assert "Release" not in text
-        assert "Sign out" not in text
+        assert 'id="session-stop"' not in text
         _post(app, "/api/login", {"username": "lab", "password": "AB23CD45"})
         approved = _post(app, "/api/approve", {"robot_id": "123456789"})
         assert approved["ok"] is True
@@ -954,17 +955,19 @@ def test_fleet_page_approve_and_attach_send_registry_frames(tmp_path: Path) -> N
         app.close()
 
 
-def test_logout_from_fleet_does_not_stop_first(tmp_path: Path) -> None:
+def test_sign_out_from_fleet_does_not_stop_first(tmp_path: Path) -> None:
     app, script, calls = _session(tmp_path)
     try:
         reply = _post(app, "/api/login", {"username": "lab", "password": "AB23CD45"})
         assert reply["view"] == "fleet"
-        _post(app, "/api/logout")
-        assert script.sent == [{"v": 1, "type": "logout"}]
+        _post(app, "/api/sign-out")
+        assert script.sent == [{"v": 1, "type": "sign_out"}]
         assert not any(item.get("type") == "stop" for item in script.sent)
-        script.push({"v": 1, "type": "error", "code": "unknown_type"})
+        assert not any(item.get("type") == "release" for item in script.sent)
+        script.push({"v": 1, "type": "signed_out"})
         assert _until(lambda: app.snapshot()["view"] == "login")
-        assert app.snapshot()["status"] == "Logged out."
+        assert app.snapshot()["logged_in"] is False
+        assert app.snapshot()["status"] == "Signed out."
         assert ("helper", "/quit") not in calls
     finally:
         app.close()
@@ -992,7 +995,7 @@ def test_start_runs_mlink_then_enables_the_link(tmp_path: Path) -> None:
         app.close()
 
 
-def test_stop_leaves_the_container_and_logout_returns_to_login(tmp_path: Path) -> None:
+def test_stop_stays_on_config_and_release_keeps_the_login(tmp_path: Path) -> None:
     app, script, calls = _session(tmp_path)
     try:
         _accept(app, script)
@@ -1006,6 +1009,7 @@ def test_stop_leaves_the_container_and_logout_returns_to_login(tmp_path: Path) -
         snap = app.snapshot()
         assert snap["start_enabled"] is True
         assert snap["logged_in"] is True
+        assert snap["holding"] is True
         assert ("helper", "/quit") not in calls
         before = len(script.sent)
         _post(app, "/api/start", _config())
@@ -1013,16 +1017,22 @@ def test_stop_leaves_the_container_and_logout_returns_to_login(tmp_path: Path) -
             "config",
             "start",
         ]
-        _post(app, "/api/logout")
+        _post(app, "/api/release")
         script.push({"v": 1, "type": "status", "phase": "stopped", "detail": ""})
-        script.push({"v": 1, "type": "logged_out"})
-        assert _until(lambda: app.snapshot()["view"] == "login")
+        script.push({"v": 1, "type": "released"})
+        assert _until(lambda: app.snapshot()["view"] == "fleet")
         done = app.snapshot()
-        assert done["logged_in"] is False
-        assert done["robot_id"] == "123456789"
-        assert done["status"] == "Logged out."
-        assert any(item.get("type") == "logout" for item in script.sent)
+        assert done["logged_in"] is True
+        assert done["holding"] is False
+        assert done["username"] == "lab"
+        assert any(item.get("type") == "release" for item in script.sent)
+        assert not any(item.get("type") == "sign_out" for item in script.sent)
         assert ("helper", "/quit") not in calls
+        _post(app, "/api/sign-out")
+        script.push({"v": 1, "type": "signed_out"})
+        assert _until(lambda: app.snapshot()["view"] == "login")
+        assert app.snapshot()["logged_in"] is False
+        assert app.snapshot()["status"] == "Signed out."
     finally:
         app.close()
 
@@ -1036,7 +1046,75 @@ def test_quit_exits_after_mlink_stop(tmp_path: Path) -> None:
         assert _until(lambda: ("helper", "/quit") in calls)
         assert app.snapshot()["view"] == "quit"
         assert any(item.get("type") == "stop" for item in script.sent)
+        assert not any(item.get("type") == "sign_out" for item in script.sent)
+        assert not any(item.get("type") == "release" for item in script.sent)
         assert not any(item.get("type") == "logout" for item in script.sent)
+    finally:
+        app.close()
+
+
+def test_release_without_a_drive_sends_release_only(tmp_path: Path) -> None:
+    app, script, calls = _session(tmp_path)
+    try:
+        _accept(app, script)
+        before = len(script.sent)
+        _post(app, "/api/release")
+        assert script.sent[before:] == [{"v": 1, "type": "release"}]
+        script.push({"v": 1, "type": "released"})
+        assert _until(lambda: app.snapshot()["view"] == "fleet")
+        snap = app.snapshot()
+        assert snap["logged_in"] is True
+        assert snap["holding"] is False
+        assert snap["username"] == "lab"
+        assert not any(item.get("type") == "stop" for item in script.sent)
+        assert ("helper", "/quit") not in calls
+        blocked = app.dispatch("GET", "/operate")
+        assert blocked is not None and blocked.status == 403
+    finally:
+        app.close()
+
+
+def test_offline_during_a_drive_stops_local_mlink_only(tmp_path: Path) -> None:
+    app, script, calls = _session(tmp_path)
+    try:
+        _accept(app, script)
+        _post(app, "/api/start", _config())
+        script.push({"v": 1, "type": "status", "phase": "ready", "detail": ""})
+        assert _until(lambda: app.snapshot()["view"] == "operate")
+        before = len(script.sent)
+        script.push({"v": 1, "type": "error", "code": "offline"})
+        assert _until(lambda: app.snapshot()["view"] == "fleet")
+        assert script.sent[before:] == []
+        assert ("disable",) in calls
+        assert ("helper", "/mlink/stop") in calls
+        assert ("helper", "/quit") not in calls
+        snap = app.snapshot()
+        assert snap["logged_in"] is True
+        assert snap["holding"] is False
+        assert snap["status"] == "That robot is offline."
+        blocked = app.dispatch("GET", "/operate")
+        assert blocked is not None and blocked.status == 403
+    finally:
+        app.close()
+
+
+def test_stale_sends_stop_then_release(tmp_path: Path) -> None:
+    app, script, calls = _session(tmp_path)
+    try:
+        _accept(app, script)
+        script.push({"v": 1, "type": "error", "code": "stale"})
+        assert _until(lambda: any(item.get("type") == "stop" for item in script.sent))
+        assert app.snapshot()["status"] == "The robot is not answering. Stopping the arm."
+        script.push({"v": 1, "type": "status", "phase": "stopped", "detail": ""})
+        assert _until(lambda: any(item.get("type") == "release" for item in script.sent))
+        script.push({"v": 1, "type": "released"})
+        assert _until(lambda: app.snapshot()["view"] == "fleet")
+        snap = app.snapshot()
+        assert snap["logged_in"] is True
+        assert snap["holding"] is False
+        assert snap["status"] == "The robot is not answering. Stopping the arm."
+        assert not any(item.get("type") == "sign_out" for item in script.sent)
+        assert ("helper", "/quit") not in calls
     finally:
         app.close()
 

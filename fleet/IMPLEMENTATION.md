@@ -68,7 +68,7 @@ Do not add a pytest section, a design section, or a second copy of
 the commands in the chat. `fleet/docs/F1_usage.md` is the shape.
 The implementer does not run the lab.
 
-F0 is this plan. The next session implements F5.
+F0 is this plan. F1 through F5 are done.
 
 F1, F2, and F3 keep the robot ID and password on the wire. F4 is
 the first lab of the fleet page. EC2 already has the F2 registry,
@@ -92,10 +92,11 @@ then `done`.
 | F2 | Approve, attach, release, and stale | done | done |
 | F3 | Robot identity file, wire unchanged | done | done |
 | F4 | Fleet page and robot token on the wire | done | done |
-| F5 | Release, sign out, and remove the password login | remaining | remaining |
+| F5 | Release, sign out, and remove the password login | done | done |
 
-**Next to implement:** F5. Release and Sign out on the fleet page,
-and the password login is removed.
+**Next to implement:** none. The fleet slice in this file is done.
+Do not push until the user asks. The push goes to GitLab remote
+`gitlab`, not GitHub `origin`.
 
 **Not in F1–F5.** A hired-operator marketplace. An admin role on
 the page. Revoking an approval from the dashboard. GPS. TLS on
@@ -601,7 +602,7 @@ one `g` or `h` tap. `commit: done`.
 
 ---
 
-### F5 — Release, sign out, and remove the password login — STATUS: remaining
+### F5 — Release, sign out, and remove the password login — STATUS: done
 
 **Goal.** The page can leave a robot without dropping the operator
 login, and the password login is gone. This is the first build the
@@ -686,6 +687,10 @@ teleop-operator, then teleop-operator. Login with the operator
 account, approve both robots, Operate the manual one, one tap of
 g or h, Release, then Sign out. The implementer does not run it.
 ```
+
+F5 landed. Release returns to the fleet page and keeps the login.
+Sign out returns to the login page. A robot ID and password are
+no longer accepted. `commit: done`.
 
 ---
 

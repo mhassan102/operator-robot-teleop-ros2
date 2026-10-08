@@ -3,7 +3,9 @@
 Launch serves the pages and holds the registry socket. It does not open
 the mlink UDP socket and does not arm heartbeats. Start opens that
 socket and arms heartbeats only after mlink-op is up. Stop closes them
-and leaves this process up. Quit stops mlink-op first, then this process.
+and leaves this process up. Quit stops mlink, then the robot, then this
+process. It does not send ``sign_out`` and it does not run docker compose.
+Closing the desktop window is that Quit.
 """
 
 from __future__ import annotations
