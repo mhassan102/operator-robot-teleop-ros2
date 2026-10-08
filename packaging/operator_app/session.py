@@ -34,30 +34,46 @@ class OperatorSession:
     def __init__(self) -> None:
         self.ws: Any = None
         self.hostname = ""
+        self.pending: list[dict[str, Any]] = []
         self._url = ""
         self._lock = asyncio.Lock()
 
     def __repr__(self) -> str:
         return f"OperatorSession(open={self.ws is not None}, hostname={self.hostname!r})"
 
-    async def login(self, url: str, robot_id: str, password: str) -> LoginResult:
+    def take_pending(self) -> list[dict[str, Any]]:
+        """Fleet frames read while waiting for ``logged_in``."""
+        found = self.pending
+        self.pending = []
+        return found
+
+    async def login(self, url: str, username: str, password: str) -> LoginResult:
+        """Read until ``logged_in`` or ``error``. A ``fleet`` frame is stored."""
         async with self._lock:
             try:
                 if self._url != url or not _is_open(self.ws):
                     await self._connect(url)
                 assert self.ws is not None
-                await self.ws.send(json.dumps(login_message(robot_id, password)))
-                raw = await asyncio.wait_for(self.ws.recv(), 5)
+                await self.ws.send(json.dumps(login_message(username, password)))
+                while True:
+                    raw = await asyncio.wait_for(self.ws.recv(), 5)
+                    parsed = parse_inbound(raw)
+                    if isinstance(parsed, dict) and parsed.get("type") == "fleet":
+                        self.pending.append(parsed)
+                        continue
+                    result = interpret_login(parsed if parsed is not None else raw)
+                    if result.ok:
+                        self.hostname = result.hostname
+                    else:
+                        self.pending.clear()
+                    return result
             except asyncio.CancelledError:
                 raise
             except Exception:
                 await self.close()
                 self.hostname = ""
+                self.pending.clear()
                 return LoginResult("unreachable")
-            result = interpret_login(raw)
-            if result.ok:
-                self.hostname = result.hostname
-            return result
 
     async def send_json(self, message: dict[str, Any]) -> None:
         async with self._lock:
@@ -92,6 +108,7 @@ class OperatorSession:
         self._url = url
 
     async def close(self) -> None:
+        self.pending.clear()
         ws = self.ws
         self.ws = None
         self._url = ""

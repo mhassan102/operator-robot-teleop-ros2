@@ -1,6 +1,6 @@
 (function () {
   var form = document.getElementById("login-form");
-  var idInput = document.getElementById("robot-id");
+  var username = document.getElementById("username");
   var password = document.getElementById("password");
   var status = document.getElementById("login-status");
 
@@ -10,8 +10,9 @@
 
   function follow(snapshot) {
     if (!snapshot) return;
-    if (snapshot.robot_id && idInput && document.activeElement !== idInput) {
-      idInput.value = snapshot.robot_id;
+    if (snapshot.view === "fleet") {
+      window.location.assign("/fleet");
+      return;
     }
     if (snapshot.view === "config") {
       window.location.assign("/config");
@@ -37,7 +38,7 @@
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
-        robot_id: idInput.value,
+        username: username.value,
         password: password.value
       })
     })

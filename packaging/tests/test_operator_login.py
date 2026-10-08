@@ -26,11 +26,18 @@ from packaging.operator_app.cli import parse_args  # noqa: E402
 from packaging.operator_app.login import (  # noqa: E402
     DEFAULT_REGISTRY,
     LoginResult,
+    dashboard_message,
     interpret_login,
     login_message,
     message_for,
 )
 from packaging.operator_app.session import OperatorSession  # noqa: E402
+from packaging.tests.drive import (  # noqa: E402
+    OPERATOR_PASSWORD,
+    TOKEN,
+    listening,
+    seed,
+)
 from signalling.server import listening_uri, start_server  # noqa: E402
 from websockets.asyncio.client import connect  # noqa: E402
 
@@ -49,8 +56,10 @@ def _register(hostname: str = _HOSTNAME) -> dict[str, Any]:
         "v": 1,
         "type": "register",
         "robot_id": _ROBOT_ID,
-        "password": _PASSWORD,
+        "token": TOKEN,
         "hostname": hostname,
+        "mode": "manual",
+        "location": "",
     }
 
 
@@ -63,31 +72,6 @@ def _inventory() -> dict[str, Any]:
         "videos": [],
         "camera_page": "",
     }
-
-
-@contextlib.asynccontextmanager
-async def _listening():
-    server = None
-    for _ in range(16):
-        candidate = await start_server("127.0.0.1", 0)
-        safe = True
-        for sock in candidate.sockets:
-            host, port = sock.getsockname()[:2]
-            if host != "127.0.0.1" or port in _FORBIDDEN:
-                safe = False
-                break
-        if safe and candidate.sockets:
-            server = candidate
-            break
-        candidate.close()
-        await candidate.wait_closed()
-    if server is None:
-        raise RuntimeError("could not bind 127.0.0.1 on a permitted port")
-    try:
-        yield listening_uri(server)
-    finally:
-        server.close()
-        await server.wait_closed()
 
 
 def _run(coro: Any) -> None:
@@ -116,31 +100,61 @@ def test_interpret_login_frames() -> None:
     assert interpret_login({"v": 2, "type": "logged_in"}).code == "error"
     assert _PASSWORD not in repr(ok)
     assert message_for("auth") == "Wrong password."
-    sent = login_message(_ROBOT_ID, _PASSWORD)
-    assert sent["type"] == "login"
-    assert sent["robot_id"] == _ROBOT_ID
+    assert message_for("empty") == "Enter the operator name and password."
+    assert message_for("already_attached") == "This account is already signed in."
+    assert message_for("legacy_login") == "The registry sent an unexpected reply."
+    assert dashboard_message("not_found") == "That robot is not registered."
+    assert dashboard_message("pending") == "That robot is not approved."
+    assert dashboard_message("offline") == "That robot is offline."
+    assert dashboard_message("busy") == "Another operator is already connected."
+    assert (
+        dashboard_message("already_attached")
+        == "This account is already operating a robot."
+    )
+    assert dashboard_message("stale") == ""
+    sent = login_message("lab", _PASSWORD)
+    assert sent == {
+        "v": 1,
+        "type": "login",
+        "username": "lab",
+        "password": _PASSWORD,
+    }
+    assert "robot_id" not in sent
+
+
+async def _session_frame(session: OperatorSession) -> dict[str, Any]:
+    msg = await asyncio.wait_for(session.next_message(), 5)
+    assert isinstance(msg, dict)
+    return msg
+
+
+async def _until(session: OperatorSession, kind: str) -> dict[str, Any]:
+    for _ in range(8):
+        msg = await _session_frame(session)
+        if msg.get("type") == "fleet":
+            continue
+        if msg.get("type") != kind:
+            raise AssertionError(msg)
+        return msg
+    raise AssertionError(kind)
 
 
 async def _outcomes(uri: str) -> None:
-    lone = OperatorSession()
-    offline = await lone.login(uri, "000000000", _PASSWORD)
-    assert offline.code == "offline"
-    assert lone.ws is not None
-    await lone.close()
-
     down = OperatorSession()
-    unreachable = await down.login("ws://127.0.0.1:1", _ROBOT_ID, _PASSWORD)
+    unreachable = await down.login("ws://127.0.0.1:1", "lab", OPERATOR_PASSWORD)
     assert unreachable.code == "unreachable"
     assert down.ws is None
 
     async with connect(uri) as robot:
         await robot.send(json.dumps(_register()))
-        assert json.loads(await asyncio.wait_for(robot.recv(), 2)) == {
+        registered = json.loads(await asyncio.wait_for(robot.recv(), 2))
+        assert registered == {
             "v": 1,
             "type": "registered",
+            "approval": "pending",
         }
         operator = OperatorSession()
-        auth = await operator.login(uri, _ROBOT_ID, "WRONGPWD")
+        auth = await operator.login(uri, "lab", "WRONGPWD")
         assert auth.code == "auth"
         assert auth.hostname == ""
         held = operator.ws
@@ -152,37 +166,66 @@ async def _outcomes(uri: str) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await leaked
 
-        success = await operator.login(uri, _ROBOT_ID, _PASSWORD)
+        success = await operator.login(uri, "lab", OPERATOR_PASSWORD)
         assert success.ok
-        assert success.hostname == _HOSTNAME
+        assert success.hostname == ""
         assert operator.ws is held
-        assert operator.hostname == _HOSTNAME
-        assert _PASSWORD not in repr(operator)
-        assert _PASSWORD not in success.hostname
-        attached = json.loads(await asyncio.wait_for(robot.recv(), 2))
-        assert attached == {"v": 1, "type": "operator_attached"}
+        assert operator.hostname == ""
+        assert OPERATOR_PASSWORD not in repr(operator)
+        assert TOKEN not in repr(operator)
+        pending = operator.take_pending()
+        if pending:
+            assert pending[0]["type"] == "fleet"
+        else:
+            fleet = await _session_frame(operator)
+            assert fleet["type"] == "fleet"
+
+        await operator.send_json({"v": 1, "type": "attach", "robot_id": _ROBOT_ID})
+        early = await _until(operator, "error")
+        assert early["code"] == "pending"
+
+        await operator.send_json({"v": 1, "type": "approve", "robot_id": _ROBOT_ID})
+        approved = await _until(operator, "approved")
+        assert approved["robot_id"] == _ROBOT_ID
+        await operator.send_json({"v": 1, "type": "attach", "robot_id": _ROBOT_ID})
+        attached = await _until(operator, "attached")
+        assert attached["robot_id"] == _ROBOT_ID
+        assert attached["hostname"] == _HOSTNAME
+
+        robot_note = json.loads(await asyncio.wait_for(robot.recv(), 2))
+        assert robot_note == {"v": 1, "type": "operator_attached"}
+        await robot.send(json.dumps(_inventory()))
+        relayed = await _until(operator, "inventory")
+        assert relayed == _inventory()
+        assert OPERATOR_PASSWORD not in json.dumps(relayed)
+        assert TOKEN not in json.dumps(relayed)
+
+        same = OperatorSession()
+        taken = await same.login(uri, "lab", OPERATOR_PASSWORD)
+        assert taken.code == "already_attached"
+        assert same.ws is not None
+        await same.close()
 
         other = OperatorSession()
-        busy = await other.login(uri, _ROBOT_ID, _PASSWORD)
-        assert busy.code == "busy"
-        assert other.ws is not None
-
-        await robot.send(json.dumps(_inventory()))
-        relayed = json.loads(await asyncio.wait_for(operator.ws.recv(), 2))
-        assert relayed == _inventory()
-        assert _PASSWORD not in json.dumps(relayed)
-
+        other_login = await other.login(uri, "other", OPERATOR_PASSWORD)
+        assert other_login.ok
+        assert other_login.hostname == ""
+        other_pending = other.take_pending()
+        if not other_pending:
+            assert (await _session_frame(other))["type"] == "fleet"
+        await other.send_json({"v": 1, "type": "attach", "robot_id": _ROBOT_ID})
+        busy = await _until(other, "error")
+        assert busy["code"] == "busy"
         await operator.close()
         await other.close()
-        again = await other.login(uri, _ROBOT_ID, _PASSWORD)
-        assert again.ok
-        assert again.hostname == _HOSTNAME
-        await other.close()
 
 
-def test_login_auth_offline_busy_and_success() -> None:
+def test_login_auth_offline_busy_and_success(tmp_path: Path) -> None:
+    db = tmp_path / "registry.sqlite"
+    seed(db, "lab", "other")
+
     async def body() -> None:
-        async with _listening() as uri:
+        async with listening(db) as uri:
             await _outcomes(uri)
 
     _run(body())
@@ -190,7 +233,8 @@ def test_login_auth_offline_busy_and_success() -> None:
 
 
 class _ServerThread:
-    def __init__(self) -> None:
+    def __init__(self, db_path: str) -> None:
+        self.db_path = db_path
         self.loop = asyncio.new_event_loop()
         self.ready = threading.Event()
         self.robot_up = threading.Event()
@@ -213,7 +257,7 @@ class _ServerThread:
 
     async def _open(self) -> None:
         for _ in range(16):
-            candidate = await start_server("127.0.0.1", 0)
+            candidate = await start_server("127.0.0.1", 0, db_path=self.db_path)
             safe = True
             for sock in candidate.sockets:
                 host, port = sock.getsockname()[:2]
@@ -242,8 +286,12 @@ class _ServerThread:
                 await ws.send(json.dumps(_register()))
                 raw = json.loads(await asyncio.wait_for(ws.recv(), 2))
                 assert raw["type"] == "registered"
+                assert raw.get("approval") == "pending"
                 self.robot_up.set()
-                await asyncio.Future()
+                async for incoming in ws:
+                    msg = json.loads(incoming)
+                    if msg.get("type") == "operator_attached":
+                        await ws.send(json.dumps(_inventory()))
 
         self.robot = asyncio.run_coroutine_threadsafe(_hold(), self.loop)
         if not self.robot_up.wait(5):
@@ -284,15 +332,23 @@ def _post(app: Any, path: str, body: dict[str, Any] | None = None) -> dict[str, 
 def test_login_page_has_no_qt_and_stores_no_password() -> None:
     login = (_WEB / "login.html").read_text(encoding="utf-8")
     css = (_WEB / "operate.css").read_text(encoding="utf-8")
-    assert 'placeholder="ID"' in login
+    assert 'placeholder="Operator"' in login
     assert 'placeholder="Password"' in login
     assert 'type="password"' in login
     assert ">Log in<" in login
     assert "login-button" in login
     assert "width: 120px" in css
     pages = "\n".join(
-        ( _WEB / name).read_text(encoding="utf-8")
-        for name in ("login.html", "login.js", "config.html", "config.js", "session_bar.js")
+        (_WEB / name).read_text(encoding="utf-8")
+        for name in (
+            "login.html",
+            "login.js",
+            "config.html",
+            "config.js",
+            "session_bar.js",
+            "fleet.html",
+            "fleet.js",
+        )
     )
     for banned in (
         "localStorage",
@@ -329,12 +385,54 @@ def test_login_page_has_no_qt_and_stores_no_password() -> None:
     )
     login_js = (_WEB / "login.js").read_text(encoding="utf-8")
     assert "if (reply.ok) password.value = \"\";" in login_js
+    assert 'window.location.assign("/fleet")' in login_js
+    fleet = (_WEB / "fleet.html").read_text(encoding="utf-8")
+    for label in (
+        "count-registered",
+        "count-autonomous",
+        "count-needs-manual",
+        "count-in-teleop",
+        ">ID<",
+        ">Location<",
+        ">Status<",
+        ">Mode<",
+        ">Action<",
+        'id="session-logout"',
+        'id="session-quit"',
+    ):
+        assert label in fleet
+    assert "Release" not in fleet
+    assert "Sign out" not in fleet
+    assert 'id="session-stop"' not in fleet
+    fleet_js = (_WEB / "fleet.js").read_text(encoding="utf-8")
+    assert "Approve" in fleet_js
+    assert "Operate" in fleet_js
+    assert "/api/approve" in fleet_js
+    assert "/api/attach" in fleet_js
+    assert "Release" not in fleet_js
+    assert "Sign out" not in fleet_js
+    assert 'snapshot.view === "fleet"' in (_WEB / "session_bar.js").read_text(
+        encoding="utf-8"
+    )
 
 
-def test_login_page_shows_auth_text_and_a_refresh_does_not_login_again() -> None:
+def _until_snap(predicate: Any, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return bool(predicate())
+
+
+def test_login_page_shows_auth_text_and_a_refresh_does_not_login_again(
+    tmp_path: Path,
+) -> None:
     from packaging.operator_app.console import ConsoleApp
 
-    server = _ServerThread()
+    db = tmp_path / "registry.sqlite"
+    seed(db, "lab")
+    server = _ServerThread(str(db))
     apps: list[Any] = []
     try:
         uri = server.start()
@@ -342,35 +440,47 @@ def test_login_page_shows_auth_text_and_a_refresh_does_not_login_again() -> None
         first = ConsoleApp(uri, web_root=_WEB)
         second = ConsoleApp(uri, web_root=_WEB)
         apps.extend((first, second))
-        bad = _post(
-            first, "/api/login", {"robot_id": _ROBOT_ID, "password": "WRONGPWD"}
-        )
+        bad = _post(first, "/api/login", {"username": "lab", "password": "WRONGPWD"})
         assert bad["ok"] is False
         assert bad["message"] == "Wrong password."
-        assert _PASSWORD not in json.dumps(bad)
+        assert OPERATOR_PASSWORD not in json.dumps(bad)
         assert first.login_sends == 1
         good = _post(
-            first, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+            first, "/api/login", {"username": "lab", "password": OPERATOR_PASSWORD}
         )
         assert good["ok"] is True
-        assert good["hostname"] == _HOSTNAME
-        assert good["message"] == "Waiting for the robot."
+        assert good["view"] == "fleet"
+        assert good["hostname"] == ""
+        assert good["message"] == "Waiting for the fleet."
         assert first.login_sends == 2
+        assert _until_snap(lambda: first.snapshot()["fleet_seen"] is True)
+        seen = first.snapshot()
+        assert seen["view"] == "fleet"
+        assert seen["counts"]["registered"] == 0
+        assert seen["robots"][0]["robot_id"] == _ROBOT_ID
+        assert seen["robots"][0]["status"] == "pending"
+        assert TOKEN not in json.dumps(seen)
         refresh = _post(
-            first, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+            first, "/api/login", {"username": "lab", "password": OPERATOR_PASSWORD}
         )
         assert refresh["ok"] is True
         assert first.login_sends == 2
         session = json.loads(first.dispatch("GET", "/api/session").body)
         assert session["logged_in"] is True
-        assert session["robot_id"] == _ROBOT_ID
-        assert _PASSWORD not in json.dumps(session)
+        assert session["robot_id"] == ""
+        assert OPERATOR_PASSWORD not in json.dumps(session)
         assert "ws://" not in json.dumps(session)
         assert first.login_sends == 2
         busy = _post(
-            second, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+            second, "/api/login", {"username": "lab", "password": OPERATOR_PASSWORD}
         )
-        assert busy["message"] == "Another operator is already connected."
+        assert busy["message"] == "This account is already signed in."
+        _post(first, "/api/approve", {"robot_id": _ROBOT_ID})
+        _post(first, "/api/attach", {"robot_id": _ROBOT_ID})
+        assert _until_snap(lambda: first.snapshot()["view"] == "config"), first.snapshot()
+        assert first.snapshot()["hostname"] == _HOSTNAME
+        assert first.snapshot()["robot_id"] == _ROBOT_ID
+        assert first.snapshot()["status"] != "The robot is not answering. Stopping the arm."
         first.close()
         apps.remove(first)
         logged = False
@@ -378,14 +488,15 @@ def test_login_page_shows_auth_text_and_a_refresh_does_not_login_again() -> None
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             reply = _post(
-                second, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+                second, "/api/login", {"username": "lab", "password": OPERATOR_PASSWORD}
             )
             if reply.get("ok"):
                 logged = True
                 break
             time.sleep(0.05)
         assert logged, reply
-        assert reply["hostname"] == _HOSTNAME
+        assert reply["view"] == "fleet"
+        assert reply["hostname"] == ""
     finally:
         for app in list(apps):
             app.close()
@@ -397,7 +508,7 @@ def test_empty_login_does_not_open_a_socket() -> None:
 
     app = ConsoleApp("ws://127.0.0.1:9", web_root=_WEB)
     try:
-        reply = _post(app, "/api/login", {"robot_id": "  ", "password": ""})
+        reply = _post(app, "/api/login", {"username": "  ", "password": ""})
         assert reply["message"] == message_for("empty")
         assert app.login_sends == 0
         assert app._session.ws is None

@@ -26,24 +26,37 @@ from packaging.supervisor.robot_commands import decide_start, status_message
 from packaging.supervisor.robot_stop import decide_stop
 
 DEFAULT_REGISTRY = "ws://127.0.0.1:8765"
+PRESENCE_INTERVAL_S = 10
 _CLOSED = object()
 
 
 class RobotState:
-    """ID stays fixed. A new password bumps the revision and re-registers."""
+    """ID and device token stay fixed. The token is not printed."""
 
-    def __init__(self, robot_id: str, password: str, hostname: str) -> None:
+    def __init__(
+        self,
+        robot_id: str,
+        token: str,
+        hostname: str,
+        mode: str = "manual",
+        location: str = "",
+    ) -> None:
         self.robot_id = robot_id
         self.hostname = hostname
-        self._password = password
-        self._revision = 1
+        self.mode = mode
+        self.location = location
+        self._token = token
+        self._phase = "idle"
         self._stopped = False
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._wake: asyncio.Event | None = None
 
     def __repr__(self) -> str:
-        return f"RobotState({self.robot_id!r}, hostname={self.hostname!r})"
+        return (
+            f"RobotState({self.robot_id!r}, hostname={self.hostname!r}, "
+            f"mode={self.mode!r})"
+        )
 
     def attach_loop(
         self, loop: asyncio.AbstractEventLoop, wake: asyncio.Event
@@ -51,14 +64,20 @@ class RobotState:
         self._loop = loop
         self._wake = wake
 
-    def snapshot(self) -> tuple[str, int]:
+    def registration(self) -> dict[str, Any]:
         with self._lock:
-            return self._password, self._revision
+            token = self._token
+        return register_message(
+            self.robot_id, token, self.hostname, self.mode, self.location
+        )
 
-    def set_password(self, password: str) -> None:
+    def presence_tuple(self) -> tuple[str, str, str]:
         with self._lock:
-            self._password = password
-            self._revision += 1
+            return self.mode, self.location, self._phase
+
+    def set_phase(self, phase: str) -> None:
+        with self._lock:
+            self._phase = phase
         self._wake_threadsafe()
 
     def stop(self) -> None:
@@ -78,13 +97,34 @@ class RobotState:
         loop.call_soon_threadsafe(wake.set)
 
 
-def register_message(robot_id: str, password: str, hostname: str) -> dict[str, Any]:
+def register_message(
+    robot_id: str,
+    token: str,
+    hostname: str,
+    mode: str = "manual",
+    location: str = "",
+) -> dict[str, Any]:
     return {
         "v": 1,
         "type": "register",
         "robot_id": robot_id,
-        "password": password,
+        "token": token,
         "hostname": hostname,
+        "mode": mode,
+        "location": location,
+    }
+
+
+def presence_message(
+    mode: str, location: str, hostname: str, phase: str
+) -> dict[str, Any]:
+    return {
+        "v": 1,
+        "type": "presence",
+        "mode": mode,
+        "location": location,
+        "hostname": hostname,
+        "phase": phase,
     }
 
 
@@ -164,18 +204,40 @@ def _accepted(msg: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _emit_presence(
+    ws: Any, state: RobotState, clock: dict[str, Any]
+) -> None:
+    """Send presence after ``registered``, on phase change, and every 10 s."""
+    if not clock.get("registered"):
+        return
+    mode, location, phase = state.presence_tuple()
+    now = asyncio.get_running_loop().time()
+    same = phase == clock.get("phase")
+    if same and now - float(clock.get("sent", 0.0)) < PRESENCE_INTERVAL_S:
+        return
+    await ws.send(json.dumps(presence_message(mode, location, state.hostname, phase)))
+    clock["phase"] = phase
+    clock["sent"] = now
+
+
 async def _announce(
     ws: Any,
     message: Mapping[str, Any],
     on_status: Callable[[str], None],
     on_line: Callable[[str], None] | None,
+    state: RobotState | None = None,
+    clock: dict[str, Any] | None = None,
 ) -> None:
     if on_line is not None:
         on_line(_status_line(message))
     phase = message.get("phase")
     if isinstance(phase, str) and phase:
         on_status(phase)
+        if state is not None:
+            state.set_phase(phase)
     await ws.send(json.dumps(dict(message)))
+    if state is not None and clock is not None:
+        await _emit_presence(ws, state, clock)
 
 
 async def _run_live(
@@ -187,6 +249,8 @@ async def _run_live(
     *,
     announce: bool,
     done: dict[str, Any],
+    state: RobotState | None = None,
+    clock: dict[str, Any] | None = None,
 ) -> None:
     from packaging.supervisor import robot_exec
 
@@ -197,16 +261,18 @@ async def _run_live(
                 status_message("starting", command.label),
                 on_status,
                 on_line,
+                state,
+                clock,
             )
         try:
             await asyncio.to_thread(robot_exec.execute_command, command, root)
         except Exception:
             detail = command.label or "start failed"
             await _announce(
-                ws, status_message("error", detail), on_status, on_line
+                ws, status_message("error", detail), on_status, on_line, state, clock
             )
             return
-    await _announce(ws, done, on_status, on_line)
+    await _announce(ws, done, on_status, on_line, state, clock)
 
 
 async def _on_start(
@@ -216,6 +282,8 @@ async def _on_start(
     root: Path,
     on_status: Callable[[str], None],
     on_line: Callable[[str], None] | None,
+    state: RobotState | None = None,
+    clock: dict[str, Any] | None = None,
 ) -> None:
     decision = decide_start(
         accepted,
@@ -225,7 +293,7 @@ async def _on_start(
     )
     if decision.commands is None:
         if decision.status is not None:
-            await _announce(ws, decision.status, on_status, on_line)
+            await _announce(ws, decision.status, on_status, on_line, state, clock)
         return
     await _run_live(
         ws,
@@ -235,6 +303,8 @@ async def _on_start(
         root,
         announce=True,
         done=status_message("ready", ""),
+        state=state,
+        clock=clock,
     )
 
 
@@ -243,11 +313,13 @@ async def _on_stop(
     root: Path,
     on_status: Callable[[str], None],
     on_line: Callable[[str], None] | None,
+    state: RobotState | None = None,
+    clock: dict[str, Any] | None = None,
 ) -> None:
     decision = decide_stop(root, dry_run=dry_run_enabled())
     if decision.commands is None:
         if decision.status is not None:
-            await _announce(ws, decision.status, on_status, on_line)
+            await _announce(ws, decision.status, on_status, on_line, state, clock)
         return
     await _run_live(
         ws,
@@ -257,6 +329,8 @@ async def _on_stop(
         root,
         announce=False,
         done=status_message("stopped", ""),
+        state=state,
+        clock=clock,
     )
 
 
@@ -306,27 +380,26 @@ async def _hold(
             incoming.put_nowait(_CLOSED)
 
     reader_task = asyncio.create_task(reader())
-    sent_rev = -1
     last_inventory: dict[str, Any] | None = None
     accepted: dict[str, Any] | None = None
+    clock: dict[str, Any] = {"registered": False, "sent": 0.0, "phase": ""}
     try:
+        await ws.send(json.dumps(state.registration()))
         while not state.stopped():
-            password, rev = state.snapshot()
-            if rev != sent_rev:
-                await ws.send(
-                    json.dumps(
-                        register_message(state.robot_id, password, state.hostname)
-                    )
-                )
-                sent_rev = rev
+            await _emit_presence(ws, state, clock)
             raw, _woke = await _next(incoming, wake)
             if raw is _CLOSED:
                 return
             if raw is None:
                 continue
             event = interpret(raw)
-            if event.status:
+            if event.status and event.action != "detach":
                 on_status(event.status)
+            if event.status == "registered":
+                clock["registered"] = True
+                clock["phase"] = ""
+                clock["sent"] = 0.0
+                await _emit_presence(ws, state, clock)
             if event.send_inventory:
                 payload = inventory_fn()
                 last_inventory = payload
@@ -347,12 +420,22 @@ async def _hold(
                 await ws.send(json.dumps(reply))
             if event.action == "start":
                 await _on_start(
-                    ws, accepted, last_inventory, root, on_status, on_line
+                    ws,
+                    accepted,
+                    last_inventory,
+                    root,
+                    on_status,
+                    on_line,
+                    state,
+                    clock,
                 )
             elif event.action == "stop":
-                await _on_stop(ws, root, on_status, on_line)
+                await _on_stop(ws, root, on_status, on_line, state, clock)
             elif event.action == "detach":
                 accepted = None
+                state.set_phase("idle")
+                on_status("operator_detached")
+                await _emit_presence(ws, state, clock)
     finally:
         reader_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):

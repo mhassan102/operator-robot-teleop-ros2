@@ -1,8 +1,8 @@
 """9-digit robot ID and the on-disk identity file.
 
-The person at the SSH session types the password. This module does not
-generate a password and does not store one. ``load_or_create`` stores
-the id and the device token. It does not print the token.
+``load_or_create`` stores the id and the device token. It does not
+print the token. ``read_profile`` and ``write_profile`` keep that
+token in the file and do not print it.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import os
 import secrets
 import sys
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 ID_LENGTH = 9
 _CANNOT_READ = "Robot credentials file cannot be read."
@@ -166,6 +166,78 @@ def _discard_new(path: Path) -> None:
         os.unlink(path)
     except OSError:
         pass
+
+
+def read_profile(path: str | os.PathLike[str]) -> tuple[str, str]:
+    """Return ``(mode, location)`` from a file ``load_or_create`` accepted.
+
+    A missing or illegal mode is ``manual``. An illegal location is
+    blank. This does not print the token and does not rewrite the file.
+    """
+    data = _read_object(path)
+    mode = data.get("mode")
+    location = data.get("location")
+    if mode not in {"manual", "autonomous"}:
+        mode = "manual"
+    if not isinstance(location, str) or not _location_ok(location):
+        location = ""
+    return mode, location
+
+
+def write_profile(
+    path: str | os.PathLike[str], mode: str, location: str
+) -> None:
+    """Store ``mode`` and ``location``. Keep the id and the token.
+
+    The file stays mode ``0600``. This does not print the token.
+    """
+    target = Path(path)
+    data = _read_object(target)
+    data["mode"] = mode
+    data["location"] = location
+    payload = (json.dumps(data) + "\n").encode("utf-8")
+    temporary = target.with_name(target.name + ".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    try:
+        fd = os.open(os.fspath(temporary), flags, 0o600)
+    except OSError:
+        _reject()
+    try:
+        _write_all(fd, payload)
+        os.fsync(fd)
+    except OSError:
+        os.close(fd)
+        _discard_new(temporary)
+        _reject()
+    try:
+        os.close(fd)
+    except OSError:
+        _discard_new(temporary)
+        _reject()
+    try:
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, target)
+        os.chmod(target, 0o600)
+    except OSError:
+        _discard_new(temporary)
+        _reject()
+
+
+def _read_object(path: str | os.PathLike[str]) -> dict[str, Any]:
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        _reject()
+    if not isinstance(data, dict):
+        _reject()
+    return data
+
+
+def _location_ok(location: str) -> bool:
+    if len(location) > 64:
+        return False
+    return "\n" not in location and "\r" not in location and "\x00" not in location
 
 
 def _reject() -> NoReturn:

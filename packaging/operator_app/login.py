@@ -11,15 +11,27 @@ from typing import Any
 
 DEFAULT_REGISTRY = "ws://127.0.0.1:8765"
 
-_KNOWN_ERRORS = frozenset({"auth", "offline", "busy"})
+_KNOWN_ERRORS = frozenset(
+    {"auth", "offline", "busy", "already_attached", "legacy_login"}
+)
 
 _MESSAGES = {
     "auth": "Wrong password.",
     "offline": "That robot is offline.",
     "busy": "Another operator is already connected.",
+    "already_attached": "This account is already signed in.",
+    "legacy_login": "The registry sent an unexpected reply.",
     "unreachable": "Cannot reach the registry.",
     "error": "The registry sent an unexpected reply.",
-    "empty": "Enter the ID and password from the robot terminal.",
+    "empty": "Enter the operator name and password.",
+}
+
+_DASHBOARD = {
+    "not_found": "That robot is not registered.",
+    "pending": "That robot is not approved.",
+    "offline": "That robot is offline.",
+    "busy": "Another operator is already connected.",
+    "already_attached": "This account is already operating a robot.",
 }
 
 
@@ -27,17 +39,22 @@ def message_for(code: str) -> str:
     return _MESSAGES.get(code, _MESSAGES["error"])
 
 
-def login_message(robot_id: str, password: str) -> dict[str, Any]:
+def dashboard_message(code: str) -> str:
+    """Status line for an attach or approve error. Unknown codes are blank."""
+    return _DASHBOARD.get(code, "")
+
+
+def login_message(username: str, password: str) -> dict[str, Any]:
     return {
         "v": 1,
         "type": "login",
-        "robot_id": robot_id,
+        "username": username,
         "password": password,
     }
 
 
 class LoginResult:
-    """``code`` is ``ok``, ``auth``, ``offline``, ``busy``, or ``error``."""
+    """``code`` is ``ok`` or a registry error code."""
 
     def __init__(self, code: str, hostname: str = "") -> None:
         self.code = code

@@ -20,9 +20,10 @@ if str(_TURN) not in sys.path:
     sys.path.insert(0, str(_TURN))
 
 from packaging.robot_app.cli import (  # noqa: E402
-    apply_new_password,
     command_for,
-    prompt_password,
+    config_path,
+    id_line,
+    open_identity,
     status_line,
 )
 from packaging.robot_app.credentials import new_id  # noqa: E402
@@ -39,18 +40,21 @@ from packaging.robot_app.inventory import (  # noqa: E402
 )
 from packaging.robot_app.session import (  # noqa: E402
     RobotState,
+    _hold,
     interpret,
     register_message,
     run_robot_session,
 )
-from signalling.server import listening_uri, start_server  # noqa: E402
-from websockets.asyncio.client import connect  # noqa: E402
-
-_FORBIDDEN = (
-    frozenset(range(50000, 50101))
-    | frozenset(range(5501, 5505))
-    | {8765, 8766, 3479, 8090, 8091}
+from packaging.tests.drive import (  # noqa: E402
+    TOKEN,
+    approve_when_up,
+    attach,
+    listening,
+    login,
+    recv_type,
+    seed,
 )
+from websockets.asyncio.client import connect  # noqa: E402
 
 SYSFS = """
 # physical NICs, plus the ones the window must hide
@@ -92,8 +96,8 @@ _ROBOT_MODULES = set(sys.modules)
 
 
 def test_terminal_commands_and_no_qt() -> None:
-    assert command_for("n") == "new-password"
-    assert command_for(" N ") == "new-password"
+    assert command_for("n") is None
+    assert command_for(" N ") is None
     assert command_for("q") == "quit"
     assert command_for("quit") == "quit"
     assert command_for("") is None
@@ -111,59 +115,6 @@ def test_new_id_is_nine_digits() -> None:
     assert len(ids) > 1
 
 
-def test_prompt_repeats_until_the_entries_match() -> None:
-    answers = iter(["", "x", "one", "two", "chosen-secret", "chosen-secret"])
-    prompts: list[str] = []
-    notes: list[str] = []
-
-    def read(prompt: str) -> str:
-        prompts.append(prompt)
-        return next(answers)
-
-    got = prompt_password(read, notes.append)
-    assert got == "chosen-secret"
-    assert prompts == [
-        "New password: ",
-        "Retype new password: ",
-        "New password: ",
-        "Retype new password: ",
-        "New password: ",
-        "Retype new password: ",
-    ]
-    assert notes == [
-        "No password supplied.",
-        "Sorry, passwords do not match.",
-        "Password updated.",
-    ]
-    joined = "\n".join(notes)
-    assert "chosen-secret" not in joined
-    assert "one" not in joined
-    assert "two" not in joined
-    assert "x" not in joined
-
-
-def test_password_is_not_stripped() -> None:
-    answers = iter(["  secret", "secret", "  secret", "  secret"])
-
-    def read(_prompt: str) -> str:
-        return next(answers)
-
-    notes: list[str] = []
-    got = prompt_password(read, notes.append)
-    assert got == "  secret"
-    assert notes == ["Sorry, passwords do not match.", "Password updated."]
-    assert "secret" not in "\n".join(notes)
-
-
-def test_interrupt_during_prompt_does_not_print() -> None:
-    def read(_prompt: str) -> str:
-        raise KeyboardInterrupt
-
-    notes: list[str] = []
-    assert prompt_password(read, notes.append) is None
-    assert notes == []
-
-
 def test_status_line_has_the_id_and_not_the_password() -> None:
     secret = "not-printed"
     line = status_line("123456789", "registered")
@@ -172,60 +123,56 @@ def test_status_line_has_the_id_and_not_the_password() -> None:
     assert "Password" not in line
 
 
-def test_replacement_keeps_the_id_and_is_not_printed(capsys: Any) -> None:
-    state = RobotState("123456789", "previous-secret", "unit-test")
-    answers = iter(["", "", "next-secret", "next-secret"])
-
-    def read(_prompt: str) -> str:
-        return next(answers)
-
-    assert apply_new_password(state, read, print) is True
-    assert state.robot_id == "123456789"
-    password, revision = state.snapshot()
-    assert revision == 2
-    assert password == "next-secret"
-    assert register_message(state.robot_id, password, state.hostname) == {
+def test_identity_file_keeps_mode_and_hides_the_token(tmp_path: Path) -> None:
+    path = tmp_path / "robot.json"
+    state, created = open_identity(path, None, None)
+    assert created is True
+    assert state.robot_id.isdigit() and len(state.robot_id) == 9
+    assert state.mode == "manual"
+    assert state.location == ""
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    token = stored["token"]
+    assert token
+    assert token not in repr(state)
+    assert token not in id_line(state.robot_id)
+    assert token not in status_line(state.robot_id, "registered")
+    assert "password" not in path.read_text(encoding="utf-8")
+    chosen, again = open_identity(path, "autonomous", "dubai-lab")
+    assert again is False
+    assert chosen.robot_id == state.robot_id
+    assert chosen.mode == "autonomous"
+    assert chosen.location == "dubai-lab"
+    rewritten = json.loads(path.read_text(encoding="utf-8"))
+    assert rewritten["token"] == token
+    assert rewritten["mode"] == "autonomous"
+    assert rewritten["location"] == "dubai-lab"
+    assert (path.stat().st_mode & 0o777) == 0o600
+    kept, third = open_identity(path, None, None)
+    assert third is False
+    assert kept.robot_id == state.robot_id
+    assert kept.mode == "autonomous"
+    assert kept.location == "dubai-lab"
+    assert register_message(
+        kept.robot_id, token, kept.hostname, kept.mode, kept.location
+    ) == {
         "v": 1,
         "type": "register",
-        "robot_id": "123456789",
-        "password": "next-secret",
-        "hostname": "unit-test",
+        "robot_id": kept.robot_id,
+        "token": token,
+        "hostname": kept.hostname,
+        "mode": "autonomous",
+        "location": "dubai-lab",
     }
-    printed = capsys.readouterr().out
-    assert printed == "No password supplied.\nPassword updated.\n"
-    assert "previous-secret" not in printed
-    assert "next-secret" not in printed
-    assert "next-secret" not in status_line(state.robot_id, "registered")
-    assert "previous-secret" not in repr(state)
-    assert "next-secret" not in repr(state)
 
 
-def test_closed_prompt_keeps_the_previous_password() -> None:
-    state = RobotState("123456789", "previous-secret", "unit-test")
-
-    def read(_prompt: str) -> str:
-        raise EOFError
-
-    notes: list[str] = []
-    assert apply_new_password(state, read, notes.append) is False
-    assert state.snapshot() == ("previous-secret", 1)
-    assert notes == []
-    assert "previous-secret" not in repr(state)
-
-
-def test_missing_tty_does_not_read_a_password(monkeypatch: Any) -> None:
-    import packaging.robot_app.cli as robot_cli
-
-    monkeypatch.setattr(robot_cli, "_have_tty", lambda: False)
-
-    def forbid(_prompt: str) -> str:
-        raise AssertionError("password was read without a terminal")
-
-    monkeypatch.setattr(robot_cli.getpass, "getpass", forbid)
-    notes: list[str] = []
-    assert robot_cli.prompt_password(robot_cli._tty_secret, notes.append) is None
-    assert notes == []
-    assert robot_cli._prompt_active is False
+def test_config_path_prefers_the_flag_then_the_env(monkeypatch: Any, tmp_path: Path) -> None:
+    flag = tmp_path / "flag.json"
+    env = tmp_path / "env.json"
+    monkeypatch.setenv("TELEOP_ROBOT_CONFIG", str(env))
+    assert config_path(str(flag)) == flag
+    assert config_path(None) == env
+    monkeypatch.delenv("TELEOP_ROBOT_CONFIG")
+    assert config_path(None) == Path.home() / ".config" / "teleop" / "robot.json"
 
 
 def test_inventory_fixture_hides_metadata_and_flags_local_nic() -> None:
@@ -424,55 +371,8 @@ def test_interpret_sends_inventory_only_when_the_operator_attaches() -> None:
     assert interpret('{"v":2,"type":"inventory"}').send_inventory is False
 
 
-@contextlib.asynccontextmanager
-async def _listening():
-    server = None
-    for _ in range(16):
-        candidate = await start_server("127.0.0.1", 0)
-        safe = True
-        for sock in candidate.sockets:
-            host, port = sock.getsockname()[:2]
-            if host != "127.0.0.1" or port in _FORBIDDEN:
-                safe = False
-                break
-        if safe and candidate.sockets:
-            server = candidate
-            break
-        candidate.close()
-        await candidate.wait_closed()
-    if server is None:
-        raise RuntimeError("could not bind 127.0.0.1 on a permitted port")
-    try:
-        yield listening_uri(server)
-    finally:
-        server.close()
-        await server.wait_closed()
-
-
 def _run(coro: Any) -> None:
-    asyncio.run(asyncio.wait_for(coro, 10))
-
-
-async def _login_when_up(ws: Any, robot_id: str, password: str) -> None:
-    deadline = asyncio.get_running_loop().time() + 3
-    while True:
-        await ws.send(
-            json.dumps(
-                {
-                    "v": 1,
-                    "type": "login",
-                    "robot_id": robot_id,
-                    "password": password,
-                }
-            )
-        )
-        msg = json.loads(await asyncio.wait_for(ws.recv(), 2))
-        if msg.get("type") == "logged_in":
-            return
-        assert msg == {"v": 1, "type": "error", "code": "offline"}
-        if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError("robot did not register")
-        await asyncio.sleep(0.05)
+    asyncio.run(asyncio.wait_for(coro, 15))
 
 
 async def _attach_sends_inventory(uri: str) -> None:
@@ -482,45 +382,33 @@ async def _attach_sends_inventory(uri: str) -> None:
         SERIAL,
         camera_page="http://100.120.193.52:8889/cam/",
     )
-    state = RobotState("123456789", "AB23CD45", "unit-test")
+    state = RobotState("123456789", TOKEN, "unit-test")
     statuses: list[str] = []
     task = asyncio.create_task(
         run_robot_session(uri, state, lambda: inv, statuses.append)
     )
     try:
         async with connect(uri) as operator:
-            await _login_when_up(operator, "123456789", "AB23CD45")
-            msg = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            await login(operator, "lab")
+            await approve_when_up(operator, "123456789")
+            await attach(operator, "123456789")
+            msg = await recv_type(operator, "inventory")
             assert msg == inv
             assert "password" not in msg
-            assert "AB23CD45" not in json.dumps(msg)
+            assert TOKEN not in json.dumps(msg)
             assert msg["interfaces"][1]["default_route"] is False
             await operator.send(json.dumps({"v": 1, "type": "start"}))
-            refused = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            refused = await recv_type(operator, "status")
             assert refused == {
                 "v": 1,
                 "type": "status",
                 "phase": "error",
                 "detail": "no config",
             }
-            state.set_password("ZZ99YY88")
-            again = json.loads(await asyncio.wait_for(operator.recv(), 2))
-            assert again == inv
-            async with connect(uri) as other:
-                await other.send(
-                    json.dumps(
-                        {
-                            "v": 1,
-                            "type": "login",
-                            "robot_id": "123456789",
-                            "password": "AB23CD45",
-                        }
-                    )
-                )
-                denied = json.loads(await asyncio.wait_for(other.recv(), 2))
-                assert denied == {"v": 1, "type": "error", "code": "auth"}
         assert "registered" in statuses
         assert "operator_attached" in statuses
+        assert TOKEN not in " ".join(statuses)
+        assert TOKEN not in repr(state)
     finally:
         state.stop()
         task.cancel()
@@ -528,15 +416,114 @@ async def _attach_sends_inventory(uri: str) -> None:
             await task
 
 
-def test_attach_sends_inventory(monkeypatch: Any) -> None:
+def test_attach_sends_inventory(monkeypatch: Any, tmp_path: Path) -> None:
     def boom(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError("start must not spawn")
 
     monkeypatch.setattr(subprocess, "Popen", boom)
     monkeypatch.setattr(subprocess, "run", boom)
+    db = tmp_path / "registry.sqlite"
+    seed(db, "lab")
 
     async def body() -> None:
-        async with _listening() as uri:
+        async with listening(db) as uri:
             await _attach_sends_inventory(uri)
+
+    _run(body())
+
+
+class _Pipe:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self._queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    async def send(self, raw: str) -> None:
+        self.sent.append(json.loads(raw))
+
+    def push(self, message: dict[str, Any]) -> None:
+        self._queue.put_nowait(json.dumps(message))
+
+    def __aiter__(self) -> _Pipe:
+        return self
+
+    async def __anext__(self) -> str:
+        item = await self._queue.get()
+        if item is None:
+            raise StopAsyncIteration
+        return item
+
+
+def test_presence_follows_register_and_phase(monkeypatch: Any, tmp_path: Path) -> None:
+    import packaging.robot_app.session as robot_session
+
+    monkeypatch.setattr(robot_session, "PRESENCE_INTERVAL_S", 0.2)
+
+    async def body() -> None:
+        ws = _Pipe()
+        state = RobotState("123456789", TOKEN, "unit-test", "manual", "lab")
+        wake = asyncio.Event()
+        state.attach_loop(asyncio.get_running_loop(), wake)
+        statuses: list[str] = []
+        task = asyncio.create_task(
+            _hold(
+                ws,
+                state,
+                wake,
+                lambda: {"v": 1, "type": "inventory"},
+                statuses.append,
+                None,
+                None,
+                None,
+                tmp_path,
+            )
+        )
+        try:
+            deadline = asyncio.get_running_loop().time() + 2
+            while not ws.sent and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.02)
+            assert ws.sent[0]["type"] == "register"
+            assert ws.sent[0]["token"] == TOKEN
+            assert "password" not in ws.sent[0]
+            ws.push({"v": 1, "type": "registered", "approval": "pending"})
+
+            def _seen(count: int) -> bool:
+                return len(ws.sent) >= count
+
+            async def _wait(count: int) -> None:
+                limit = asyncio.get_running_loop().time() + 2
+                while not _seen(count):
+                    if asyncio.get_running_loop().time() > limit:
+                        raise AssertionError(ws.sent)
+                    await asyncio.sleep(0.02)
+
+            await _wait(2)
+            assert ws.sent[1]["type"] == "presence"
+            assert ws.sent[1]["phase"] == "idle"
+            assert ws.sent[1]["location"] == "lab"
+            await _wait(3)
+            assert ws.sent[2]["type"] == "presence"
+            assert ws.sent[2]["phase"] == "idle"
+            state.set_phase("ready")
+            await _wait(4)
+            assert ws.sent[3]["phase"] == "ready"
+            ws.push({"v": 1, "type": "operator_detached"})
+            limit = asyncio.get_running_loop().time() + 2
+            while not any(
+                item.get("type") == "presence" and item.get("phase") == "idle"
+                for item in ws.sent[4:]
+            ):
+                if asyncio.get_running_loop().time() > limit:
+                    raise AssertionError(ws.sent)
+                await asyncio.sleep(0.02)
+            for item in ws.sent:
+                if item.get("type") == "presence":
+                    assert TOKEN not in json.dumps(item)
+            assert TOKEN not in repr(state)
+            assert TOKEN not in " ".join(statuses)
+        finally:
+            state.stop()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     _run(body())

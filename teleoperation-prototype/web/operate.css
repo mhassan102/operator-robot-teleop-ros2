@@ -272,7 +272,8 @@ kbd {
 }
 
 .login-wrap,
-.config-wrap {
+.config-wrap,
+.fleet-wrap {
   min-height: 100%;
   background: var(--bg);
   color: var(--text);
@@ -386,4 +387,62 @@ kbd {
 .config-actions {
   display: flex;
   gap: 8px;
+}
+
+.fleet-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.fleet-main {
+  width: min(960px, calc(100% - 32px));
+  margin: 24px auto;
+}
+
+.fleet-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.fleet-count {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.fleet-count span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fleet-count strong {
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fleet-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.fleet-table th,
+.fleet-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.fleet-status {
+  margin: 12px 0 0;
+  color: var(--muted);
 }

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teleop</title>
+  <link rel="stylesheet" href="/operate.css">
+</head>
+<body>
+  <div class="fleet-wrap">
+    <header class="header">
+      <div class="brand">
+        <span class="product">Teleop</span>
+      </div>
+      <div class="meta">
+        <button type="button" class="session-button" id="session-logout">Logout</button>
+        <button type="button" class="session-button" id="session-quit">Quit</button>
+      </div>
+    </header>
+    <main class="fleet-main">
+      <div class="fleet-counts">
+        <div class="fleet-count"><span>Registered</span><strong id="count-registered">0</strong></div>
+        <div class="fleet-count"><span>Autonomous</span><strong id="count-autonomous">0</strong></div>
+        <div class="fleet-count"><span>Needs manual</span><strong id="count-needs-manual">0</strong></div>
+        <div class="fleet-count"><span>In teleop</span><strong id="count-in-teleop">0</strong></div>
+      </div>
+      <table class="fleet-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Location</th>
+            <th>Status</th>
+            <th>Mode</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="fleet-rows"></tbody>
+      </table>
+      <p class="fleet-status" id="fleet-status" aria-live="polite">Waiting for the fleet.</p>
+    </main>
+  </div>
+  <script src="/fleet.js"></script>
+  <script src="/session_bar.js"></script>
+</body>
+</html>

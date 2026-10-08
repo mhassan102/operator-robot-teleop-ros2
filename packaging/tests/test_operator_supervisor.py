@@ -339,10 +339,11 @@ class _Script:
         self._loop = loop
         self._queue = asyncio.Queue()
 
-    async def login(self, url: str, robot_id: str, password: str) -> LoginResult:
-        assert password
+    async def login(self, url: str, username: str, password: str) -> LoginResult:
+        assert username == "lab"
+        assert password == "AB23CD45"
         self.ws = object()
-        return LoginResult("ok", "lab-robot")
+        return LoginResult("ok", "")
 
     async def send_json(self, message: dict[str, Any]) -> None:
         self.sent.append(json.loads(json.dumps(message)))
@@ -354,6 +355,9 @@ class _Script:
     def push(self, message: dict[str, Any] | None) -> None:
         assert self._loop is not None and self._queue is not None
         self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
+
+    def take_pending(self) -> list[dict[str, Any]]:
+        return []
 
     async def close(self) -> None:
         self.ws = None
@@ -419,11 +423,24 @@ def _session(tmp_path: Path) -> tuple[ConsoleApp, _Script, list[tuple[Any, ...]]
 
 def _accept(app: ConsoleApp, script: _Script, inventory: dict[str, Any] | None = None) -> None:
     reply = _post(
-        app, "/api/login", {"robot_id": "123456789", "password": "AB23CD45"}
+        app, "/api/login", {"username": "lab", "password": "AB23CD45"}
     )
     assert reply["ok"] is True
+    assert reply["view"] == "fleet"
+    script.push(
+        {
+            "v": 1,
+            "type": "attached",
+            "robot_id": "123456789",
+            "hostname": "lab-robot",
+            "location": "lab-robot",
+            "mode": "manual",
+        }
+    )
     script.push(inventory if inventory is not None else _inventory())
     assert _until(lambda: app.snapshot()["view"] == "config")
+    assert app.snapshot()["hostname"] == "lab-robot"
+    assert app.snapshot()["robot_id"] == "123456789"
     _post(app, "/api/review", _config())
     script.push({"v": 1, "type": "config_ok"})
     assert _until(lambda: app.snapshot()["review_status"] == "config_ok")
@@ -896,6 +913,61 @@ assert CONSOLE_URL == "http://127.0.0.1:8090/"
         check=False,
     )
     assert proc.returncode == 0, proc.stderr + proc.stdout
+
+
+def test_fleet_page_approve_and_attach_send_registry_frames(tmp_path: Path) -> None:
+    app, script, _calls = _session(tmp_path)
+    try:
+        page = app.dispatch("GET", "/fleet")
+        assert page is not None and page.status == 200
+        text = page.body.decode("utf-8")
+        for label in (
+            "count-registered",
+            "count-autonomous",
+            "count-needs-manual",
+            "count-in-teleop",
+            ">ID<",
+            ">Location<",
+            ">Status<",
+            ">Mode<",
+            ">Action<",
+            "Logout",
+            "Quit",
+        ):
+            assert label in text
+        assert "Release" not in text
+        assert "Sign out" not in text
+        _post(app, "/api/login", {"username": "lab", "password": "AB23CD45"})
+        approved = _post(app, "/api/approve", {"robot_id": "123456789"})
+        assert approved["ok"] is True
+        attached = _post(app, "/api/attach", {"robot_id": "123456789"})
+        assert attached["ok"] is True
+        assert script.sent[-2:] == [
+            {"v": 1, "type": "approve", "robot_id": "123456789"},
+            {"v": 1, "type": "attach", "robot_id": "123456789"},
+        ]
+        missing = _post(app, "/api/approve", {"robot_id": "nope"})
+        assert missing["ok"] is False
+        assert missing["message"] == "That robot is not registered."
+        assert script.sent[-1]["type"] == "attach"
+    finally:
+        app.close()
+
+
+def test_logout_from_fleet_does_not_stop_first(tmp_path: Path) -> None:
+    app, script, calls = _session(tmp_path)
+    try:
+        reply = _post(app, "/api/login", {"username": "lab", "password": "AB23CD45"})
+        assert reply["view"] == "fleet"
+        _post(app, "/api/logout")
+        assert script.sent == [{"v": 1, "type": "logout"}]
+        assert not any(item.get("type") == "stop" for item in script.sent)
+        script.push({"v": 1, "type": "error", "code": "unknown_type"})
+        assert _until(lambda: app.snapshot()["view"] == "login")
+        assert app.snapshot()["status"] == "Logged out."
+        assert ("helper", "/quit") not in calls
+    finally:
+        app.close()
 
 
 def test_start_runs_mlink_then_enables_the_link(tmp_path: Path) -> None:

@@ -68,7 +68,7 @@ Do not add a pytest section, a design section, or a second copy of
 the commands in the chat. `fleet/docs/F1_usage.md` is the shape.
 The implementer does not run the lab.
 
-F0 is this plan. The next session implements F4.
+F0 is this plan. The next session implements F5.
 
 F1, F2, and F3 keep the robot ID and password on the wire. F4 is
 the first lab of the fleet page. EC2 already has the F2 registry,
@@ -91,11 +91,11 @@ then `done`.
 | F1 | Registry directory beside the password login | done | done |
 | F2 | Approve, attach, release, and stale | done | done |
 | F3 | Robot identity file, wire unchanged | done | done |
-| F4 | Fleet page and robot token on the wire | remaining | remaining |
+| F4 | Fleet page and robot token on the wire | done | done |
 | F5 | Release, sign out, and remove the password login | remaining | remaining |
 
-**Next to implement:** F4. The robot registers with its token file.
-The operator logs in with an operator username and opens `/fleet`.
+**Next to implement:** F5. Release and Sign out on the fleet page,
+and the password login is removed.
 
 **Not in F1–F5.** A hired-operator marketplace. An admin role on
 the page. Revoking an approval from the dashboard. GPS. TLS on
@@ -482,7 +482,7 @@ gripper with one `g` or `h` tap. `commit: done`.
 
 ---
 
-### F4 — Fleet page and robot token on the wire — STATUS: remaining
+### F4 — Fleet page and robot token on the wire — STATUS: done
 
 **Goal.** The robot registers with the token file. The operator
 logs in with a username and password, sees `/fleet`, and Operate
@@ -594,6 +594,11 @@ Approve, Operate, Review, Start, one tap of g or h, then Stop. The
 implementer does not run it.
 ```
 
+F4 landed. The robot registers with its token file. The operator
+logs in with an operator username and opens `/fleet`. The user
+approved that robot, pressed Operate, and drove the gripper with
+one `g` or `h` tap. `commit: done`.
+
 ---
 
 ### F5 — Release, sign out, and remove the password login — STATUS: remaining
@@ -622,18 +627,18 @@ Quit, `stale`, and `offline`. F4's `console.py` and `session_bar.js`.
   `legacy_login` and closes the socket. `logout` is `unknown_type`.
   The tests that expect the old `registered` body and the logout
   button are rewritten here, not before.
-- `fleet/docs/F5_usage.md` is the lab procedure: rsync
-  `packaging/` and `turn/signalling/server.py` the way
-  `packaging/docs/P3_usage.md` does, set `TELEOP_REGISTRY_DB` to
-  `~/.local/share/teleop/registry.sqlite`, restart only the
-  process `ss -ltnp` shows on TCP 8765, run `add-operator`, start
-  the SO-ARM robot with `--mode manual`, approve it, start a second
-  robot process with `--mode autonomous` and its own config path,
-  approve it, Operate the manual robot, one `g` or `h`, Release,
-  Sign out. Rollback is `81156a4`. The implementer writes these
-  steps and does not run them. The user runs them after the
-  gripper is clear. Do not restart signalling while an arm is in a
-  drive.
+- `fleet/docs/F5_usage.md` follows `fleet/docs/F4_usage.md`.
+  Robot code is unchanged, so that section is only `teleop-robot`
+  for the SO-ARM with `--mode manual`, then a second process with
+  `--mode autonomous` and its own `~/.config/teleop` path. EC2
+  code changes, so rsync `packaging/` and
+  `turn/signalling/server.py` only if that file changed, then
+  start signalling. Do not restart it during a drive. This PC
+  changes, so `build.sh`, `dpkg -i` of `teleop-operator`, then
+  `teleop-operator`. Login, approve both robots, Operate the
+  manual one, one `g` or `h`, Release, Sign out. Rollback is
+  `81156a4`. The implementer writes these steps and does not run
+  them.
 
 **Do not:** commit or push. Do not SSH. Do not restart EC2
 yourself. Do not drive the arm. Do not edit the status board. Do
@@ -667,23 +672,27 @@ Do not commit or push. Do not SSH. Do not rsync or restart EC2
 yourself. Do not start mlink, Docker, or the arm. Do not send g or
 h. Do not change the status board.
 
-When F5 works, list files, print the pytest command, and write
-fleet/docs/F5_usage.md. Those steps are the first real fleet lab:
-EC2 rsync, one signalling restart, add-operator, one manual robot,
-one autonomous robot, approve, Operate, one tap of g or h, Release,
-Sign out, and rollback to 81156a4. The implementer does not run
-them. The user does, after the gripper is clear. Do not restart
-signalling during a drive.
+When F5 works, list files, print the pytest command, and stop.
+Write fleet/docs/F5_usage.md only, in the same shape as
+fleet/docs/F4_usage.md. Assume the robot app and EC2 signalling
+are stopped. Robot PC: no code change, so only teleop-robot for
+the arm with --mode manual, then a second teleop-robot with
+--mode autonomous and its own config path. No build and no dpkg.
+EC2: registry code changed, so rsync packaging/ from this PC, and
+turn/signalling/server.py only if that file changed, then the
+signalling start command. Do not restart signalling during a
+drive. This PC: operator code changed, so build.sh, dpkg -i of
+teleop-operator, then teleop-operator. Login with the operator
+account, approve both robots, Operate the manual one, one tap of
+g or h, Release, then Sign out. The implementer does not run it.
 ```
 
 ---
 
 ## Lab safety (every milestone)
 
-The person at the robot watches the arm. The first fleet motion is
-one tap of `g` or `h` with the gripper clear, and only in the F5
-lab, after the HUD says CONNECTED. F1 through F4 do not replace
-the lab apps. Stop brings mlink down before the robot stack. Quit
-and closing the operator window do that stop and then exit the
-operator process. Packaging and fleet sessions do not run that
-lab. The user does.
+The person at the robot watches the arm. One tap of `g` or `h`
+waits until the HUD says CONNECTED and the gripper is clear. Stop
+brings mlink down before the robot stack. Quit and closing the
+operator window do that stop and then exit the operator process.
+Fleet sessions do not run that lab. The user does.

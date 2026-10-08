@@ -26,6 +26,10 @@
           window.location.assign("/");
           return;
         }
+        if (snapshot.view === "fleet" && window.location.pathname !== "/fleet") {
+          window.location.assign("/fleet");
+          return;
+        }
         if (snapshot.view === "config" && window.location.pathname !== "/config") {
           window.location.assign("/config");
           return;

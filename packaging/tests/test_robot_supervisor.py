@@ -34,14 +34,16 @@ from packaging.supervisor.robot_stop import (  # noqa: E402
     decide_stop,
     robot_stop_plan,
 )
-from signalling.server import listening_uri, start_server  # noqa: E402
-from websockets.asyncio.client import connect  # noqa: E402
-
-_FORBIDDEN = (
-    frozenset(range(50000, 50101))
-    | frozenset(range(5501, 5505))
-    | {8765, 8766, 3479, 8090, 8091}
+from packaging.tests.drive import (  # noqa: E402
+    TOKEN,
+    approve_when_up,
+    attach,
+    listening,
+    login,
+    recv_type,
+    seed,
 )
+from websockets.asyncio.client import connect  # noqa: E402
 _REPO = Path(__file__).resolve().parents[2]
 _DAEMON = _REPO / "mlink-transport" / "scripts" / "start_daemon.sh"
 FOLLOWER = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B61033180-if00"
@@ -345,55 +347,8 @@ def test_ice_config_flag_stays_parse_only() -> None:
     assert "not both" in both.stderr
 
 
-@contextlib.asynccontextmanager
-async def _listening():
-    server = None
-    for _ in range(16):
-        candidate = await start_server("127.0.0.1", 0)
-        safe = True
-        for sock in candidate.sockets:
-            host, port = sock.getsockname()[:2]
-            if host != "127.0.0.1" or port in _FORBIDDEN:
-                safe = False
-                break
-        if safe and candidate.sockets:
-            server = candidate
-            break
-        candidate.close()
-        await candidate.wait_closed()
-    if server is None:
-        raise RuntimeError("could not bind 127.0.0.1 on a permitted port")
-    try:
-        yield listening_uri(server)
-    finally:
-        server.close()
-        await server.wait_closed()
-
-
-async def _login(ws: Any) -> None:
-    deadline = asyncio.get_running_loop().time() + 3
-    while True:
-        await ws.send(
-            json.dumps(
-                {
-                    "v": 1,
-                    "type": "login",
-                    "robot_id": "123456789",
-                    "password": "AB23CD45",
-                }
-            )
-        )
-        msg = json.loads(await asyncio.wait_for(ws.recv(), 2))
-        if msg.get("type") == "logged_in":
-            return
-        assert msg == {"v": 1, "type": "error", "code": "offline"}
-        if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError("robot did not register")
-        await asyncio.sleep(0.05)
-
-
 async def _dry_run_start_and_stop(uri: str, tmp_path: Path) -> None:
-    state = RobotState("123456789", "AB23CD45", "unit-test")
+    state = RobotState("123456789", TOKEN, "unit-test")
     lines: list[str] = []
     task = asyncio.create_task(
         run_robot_session(
@@ -408,16 +363,15 @@ async def _dry_run_start_and_stop(uri: str, tmp_path: Path) -> None:
     )
     try:
         async with connect(uri) as operator:
-            await _login(operator)
-            inventory = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            await login(operator, "lab")
+            await approve_when_up(operator, "123456789")
+            await attach(operator, "123456789")
+            inventory = await recv_type(operator, "inventory")
             assert inventory["type"] == "inventory"
             await operator.send(json.dumps(_config(iface2="enx00e04c2c4570")))
-            assert json.loads(await asyncio.wait_for(operator.recv(), 2)) == {
-                "v": 1,
-                "type": "config_ok",
-            }
+            assert await recv_type(operator, "config_ok") == {"v": 1, "type": "config_ok"}
             await operator.send(json.dumps({"v": 1, "type": "start"}))
-            refused = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            refused = await recv_type(operator, "status")
             assert refused == {
                 "v": 1,
                 "type": "status",
@@ -425,12 +379,9 @@ async def _dry_run_start_and_stop(uri: str, tmp_path: Path) -> None:
                 "detail": _IFACE2,
             }
             await operator.send(json.dumps(_config()))
-            assert json.loads(await asyncio.wait_for(operator.recv(), 2)) == {
-                "v": 1,
-                "type": "config_ok",
-            }
+            assert await recv_type(operator, "config_ok") == {"v": 1, "type": "config_ok"}
             await operator.send(json.dumps({"v": 1, "type": "start"}))
-            ready = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            ready = await recv_type(operator, "status")
             assert ready == {
                 "v": 1,
                 "type": "status",
@@ -438,17 +389,19 @@ async def _dry_run_start_and_stop(uri: str, tmp_path: Path) -> None:
                 "detail": "dry-run",
             }
             await operator.send(json.dumps({"v": 1, "type": "stop"}))
-            stopped = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            stopped = await recv_type(operator, "status")
             assert stopped == {
                 "v": 1,
                 "type": "status",
                 "phase": "stopped",
                 "detail": "dry-run",
             }
+        joined = "\n".join(lines)
         assert any(line == "Status  phase ready  detail dry-run" for line in lines)
         assert not (tmp_path / "packaging" / "run" / "ice-edge.yaml").exists()
         assert not (tmp_path / "packaging" / "run" / "mlink-edge.pid").exists()
-        assert "AB23CD45" not in "\n".join(lines)
+        assert "AB23CD45" not in joined
+        assert TOKEN not in joined
     finally:
         state.stop()
         task.cancel()
@@ -457,7 +410,7 @@ async def _dry_run_start_and_stop(uri: str, tmp_path: Path) -> None:
 
 
 async def _stop_keeps_config_until_logout(uri: str, tmp_path: Path) -> None:
-    state = RobotState("123456789", "AB23CD45", "unit-test")
+    state = RobotState("123456789", TOKEN, "unit-test")
     statuses: list[str] = []
     task = asyncio.create_task(
         run_robot_session(
@@ -470,59 +423,35 @@ async def _stop_keeps_config_until_logout(uri: str, tmp_path: Path) -> None:
     )
     try:
         async with connect(uri) as operator:
-            await _login(operator)
-            assert json.loads(await asyncio.wait_for(operator.recv(), 2))["type"] == (
-                "inventory"
-            )
+            await login(operator, "lab")
+            await approve_when_up(operator, "123456789")
+            await attach(operator, "123456789")
+            assert (await recv_type(operator, "inventory"))["type"] == "inventory"
             await operator.send(json.dumps(_config()))
-            assert json.loads(await asyncio.wait_for(operator.recv(), 2)) == {
-                "v": 1,
-                "type": "config_ok",
-            }
+            assert await recv_type(operator, "config_ok") == {"v": 1, "type": "config_ok"}
             await operator.send(json.dumps({"v": 1, "type": "start"}))
-            assert json.loads(await asyncio.wait_for(operator.recv(), 2))["phase"] == (
-                "ready"
-            )
+            assert (await recv_type(operator, "status"))["phase"] == "ready"
             await operator.send(json.dumps({"v": 1, "type": "stop"}))
-            assert json.loads(await asyncio.wait_for(operator.recv(), 2))["phase"] == (
-                "stopped"
-            )
+            assert (await recv_type(operator, "status"))["phase"] == "stopped"
             await operator.send(json.dumps({"v": 1, "type": "start"}))
-            again = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            again = await recv_type(operator, "status")
             assert again == {
                 "v": 1,
                 "type": "status",
                 "phase": "ready",
                 "detail": "dry-run",
             }
-            await operator.send(json.dumps({"v": 1, "type": "logout"}))
-            assert json.loads(await asyncio.wait_for(operator.recv(), 2)) == {
-                "v": 1,
-                "type": "logged_out",
-            }
-            for _ in range(20):
-                if "operator_detached" in statuses:
-                    break
-                await asyncio.sleep(0.05)
-            assert "operator_detached" in statuses
-            await operator.send(
-                json.dumps(
-                    {
-                        "v": 1,
-                        "type": "login",
-                        "robot_id": "123456789",
-                        "password": "AB23CD45",
-                    }
-                )
-            )
-            assert json.loads(await asyncio.wait_for(operator.recv(), 2))["type"] == (
-                "logged_in"
-            )
-            assert json.loads(await asyncio.wait_for(operator.recv(), 2))["type"] == (
-                "inventory"
-            )
+        for _ in range(40):
+            if "operator_detached" in statuses:
+                break
+            await asyncio.sleep(0.05)
+        assert "operator_detached" in statuses
+        async with connect(uri) as operator:
+            await login(operator, "lab")
+            await attach(operator, "123456789")
+            assert (await recv_type(operator, "inventory"))["type"] == "inventory"
             await operator.send(json.dumps({"v": 1, "type": "start"}))
-            refused = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            refused = await recv_type(operator, "status")
             assert refused == {
                 "v": 1,
                 "type": "status",
@@ -530,7 +459,8 @@ async def _stop_keeps_config_until_logout(uri: str, tmp_path: Path) -> None:
                 "detail": "no config",
             }
         assert state.robot_id == "123456789"
-        assert state.snapshot()[0] == "AB23CD45"
+        assert TOKEN not in repr(state)
+        assert TOKEN not in " ".join(statuses)
         assert not (tmp_path / "packaging" / "run" / "mlink-edge.pid").exists()
     finally:
         state.stop()
@@ -543,12 +473,14 @@ def test_stop_keeps_config_until_logout(monkeypatch: Any, tmp_path: Path) -> Non
     monkeypatch.setenv("TELEOP_SUPERVISOR_DRY_RUN", "1")
     monkeypatch.setattr(subprocess, "Popen", _boom)
     monkeypatch.setattr(subprocess, "run", _boom)
+    db = tmp_path / "registry.sqlite"
+    seed(db, "lab")
 
     async def body() -> None:
-        async with _listening() as uri:
+        async with listening(db) as uri:
             await _stop_keeps_config_until_logout(uri, tmp_path)
 
-    asyncio.run(asyncio.wait_for(body(), 10))
+    asyncio.run(asyncio.wait_for(body(), 15))
 
 
 def test_exit_stop_runs_container_then_edge_then_camera(
@@ -594,7 +526,7 @@ def test_sigint_and_sigterm_request_the_same_stop() -> None:
         signal.getsignal(signal.SIGTERM),
     )
     try:
-        state = RobotState("123456789", "AB23CD45", "unit-test")
+        state = RobotState("123456789", TOKEN, "unit-test")
         handler = install_exit_signals(state)
         assert signal.getsignal(signal.SIGTERM) is handler
         try:
@@ -604,50 +536,13 @@ def test_sigint_and_sigterm_request_the_same_stop() -> None:
         else:
             raise AssertionError("SIGINT did not interrupt")
         assert state.stopped()
-        other = RobotState("123456789", "AB23CD45", "unit-test")
+        assert TOKEN not in repr(state)
+        other = RobotState("123456789", TOKEN, "unit-test")
         handler = install_exit_signals(other)
         handler(signal.SIGTERM, None)
         assert other.stopped()
+        assert TOKEN not in repr(other)
     finally:
-        signal.signal(signal.SIGINT, previous[0])
-        signal.signal(signal.SIGTERM, previous[1])
-
-
-def test_sigint_discards_tty_input_only_during_the_password_prompt(
-    monkeypatch: Any,
-) -> None:
-    import signal
-
-    import packaging.robot_app.cli as robot_cli
-
-    calls: list[str] = []
-    monkeypatch.setattr(robot_cli, "restore_tty_echo", lambda: calls.append("restore"))
-    previous = (
-        signal.getsignal(signal.SIGINT),
-        signal.getsignal(signal.SIGTERM),
-    )
-    robot_cli._prompt_active = False
-    try:
-        idle = RobotState("123456789", "kept-secret", "unit-test")
-        handler = robot_cli.install_exit_signals(idle)
-        handler(signal.SIGTERM, None)
-        assert calls == []
-        assert idle.stopped()
-        assert "kept-secret" not in repr(idle)
-
-        prompting = RobotState("123456789", "kept-secret", "unit-test")
-        handler = robot_cli.install_exit_signals(prompting)
-        robot_cli._prompt_active = True
-        try:
-            handler(signal.SIGINT, None)
-        except KeyboardInterrupt:
-            pass
-        else:
-            raise AssertionError("SIGINT did not interrupt")
-        assert calls == ["restore"]
-        assert prompting.stopped()
-    finally:
-        robot_cli._prompt_active = False
         signal.signal(signal.SIGINT, previous[0])
         signal.signal(signal.SIGTERM, previous[1])
 
@@ -657,8 +552,11 @@ def test_dry_run_session_does_not_spawn(monkeypatch: Any, tmp_path: Path) -> Non
     monkeypatch.setattr(subprocess, "Popen", _boom)
     monkeypatch.setattr(subprocess, "run", _boom)
 
+    db = tmp_path / "registry.sqlite"
+    seed(db, "lab")
+
     async def body() -> None:
-        async with _listening() as uri:
+        async with listening(db) as uri:
             await _dry_run_start_and_stop(uri, tmp_path)
 
-    asyncio.run(asyncio.wait_for(body(), 10))
+    asyncio.run(asyncio.wait_for(body(), 15))

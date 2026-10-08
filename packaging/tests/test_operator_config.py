@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -38,6 +39,16 @@ from packaging.robot_app.session import (  # noqa: E402
     interpret,
     run_robot_session,
 )
+from packaging.tests.drive import (  # noqa: E402
+    OPERATOR_PASSWORD,
+    TOKEN,
+    approve_when_up,
+    attach,
+    listening,
+    login,
+    recv_type,
+    seed,
+)
 from signalling.server import listening_uri, start_server  # noqa: E402
 from websockets.asyncio.client import connect  # noqa: E402
 
@@ -46,6 +57,7 @@ _FORBIDDEN = (
     | frozenset(range(5501, 5505))
     | {8765, 8766, 3479, 8090, 8091}
 )
+
 _ROBOT_ID = "123456789"
 _PASSWORD = "AB23CD45"
 _HOSTNAME = "lab-robot"
@@ -218,56 +230,9 @@ def test_interpret_marks_config() -> None:
     assert interpret('{"v":1,"type":"start"}').config is None
 
 
-@contextlib.asynccontextmanager
-async def _listening():
-    server = None
-    for _ in range(16):
-        candidate = await start_server("127.0.0.1", 0)
-        safe = True
-        for sock in candidate.sockets:
-            host, port = sock.getsockname()[:2]
-            if host != "127.0.0.1" or port in _FORBIDDEN:
-                safe = False
-                break
-        if safe and candidate.sockets:
-            server = candidate
-            break
-        candidate.close()
-        await candidate.wait_closed()
-    if server is None:
-        raise RuntimeError("could not bind 127.0.0.1 on a permitted port")
-    try:
-        yield listening_uri(server)
-    finally:
-        server.close()
-        await server.wait_closed()
-
-
-async def _login_when_up(ws: Any) -> None:
-    deadline = asyncio.get_running_loop().time() + 3
-    while True:
-        await ws.send(
-            json.dumps(
-                {
-                    "v": 1,
-                    "type": "login",
-                    "robot_id": _ROBOT_ID,
-                    "password": _PASSWORD,
-                }
-            )
-        )
-        msg = json.loads(await asyncio.wait_for(ws.recv(), 2))
-        if msg.get("type") == "logged_in":
-            return
-        assert msg == {"v": 1, "type": "error", "code": "offline"}
-        if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError("robot did not register")
-        await asyncio.sleep(0.05)
-
-
 async def _robot_answers(uri: str) -> None:
     inv = _inventory()
-    state = RobotState(_ROBOT_ID, _PASSWORD, _HOSTNAME)
+    state = RobotState(_ROBOT_ID, TOKEN, _HOSTNAME)
     statuses: list[str] = []
     lines: list[str] = []
     task = asyncio.create_task(
@@ -281,18 +246,17 @@ async def _robot_answers(uri: str) -> None:
     )
     try:
         async with connect(uri) as operator:
-            await _login_when_up(operator)
-            inventory = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            await login(operator, "lab")
+            await approve_when_up(operator, _ROBOT_ID)
+            await attach(operator, _ROBOT_ID)
+            inventory = await recv_type(operator, "inventory")
             assert inventory["type"] == "inventory"
             await operator.send(json.dumps(_good()))
-            assert json.loads(await asyncio.wait_for(operator.recv(), 2)) == {
-                "v": 1,
-                "type": "config_ok",
-            }
+            assert await recv_type(operator, "config_ok") == {"v": 1, "type": "config_ok"}
             bad = dict(_good())
             bad["video"] = "/dev/video9"
             await operator.send(json.dumps(bad))
-            reply = json.loads(await asyncio.wait_for(operator.recv(), 2))
+            reply = await recv_type(operator, "error")
             assert reply == {
                 "v": 1,
                 "type": "error",
@@ -303,16 +267,14 @@ async def _robot_answers(uri: str) -> None:
                 "turn", "wlp0s20f3", "enx00e04c2c4570", FOLLOWER, "/dev/video2"
             )
             await operator.send(json.dumps(chosen))
-            assert json.loads(await asyncio.wait_for(operator.recv(), 2)) == {
-                "v": 1,
-                "type": "config_ok",
-            }
+            assert await recv_type(operator, "config_ok") == {"v": 1, "type": "config_ok"}
         assert lines[0] == _GOOD_LINE
         assert lines[1].endswith("bad_config  unknown video")
         assert "iface2 enx00e04c2c4570" in lines[2]
         assert lines[2].endswith("config_ok")
         assert "link turn" in lines[2]
         assert all(_PASSWORD not in line for line in lines)
+        assert all(TOKEN not in line for line in lines)
         assert statuses.count("config_ok") == 2
         assert statuses.count("bad_config") == 1
     finally:
@@ -322,9 +284,12 @@ async def _robot_answers(uri: str) -> None:
             await task
 
 
-def test_robot_answers_config_on_the_socket() -> None:
+def test_robot_answers_config_on_the_socket(tmp_path: Path) -> None:
+    db = tmp_path / "registry.sqlite"
+    seed(db, "lab")
+
     async def body() -> None:
-        async with _listening() as uri:
+        async with listening(db) as uri:
             await _robot_answers(uri)
 
     asyncio.run(asyncio.wait_for(body(), 15))
@@ -344,11 +309,13 @@ class _Script:
         self._loop = loop
         self._queue = asyncio.Queue()
 
-    async def login(self, url: str, robot_id: str, password: str) -> Any:
+    async def login(self, url: str, username: str, password: str) -> Any:
         from packaging.operator_app.login import LoginResult
 
+        assert username
+        assert password
         self.ws = object()
-        return LoginResult("ok", _HOSTNAME)
+        return LoginResult("ok", "")
 
     async def send_json(self, message: dict[str, Any]) -> None:
         return None
@@ -358,6 +325,9 @@ class _Script:
 
     def push(self, message: dict[str, Any] | None) -> None:
         self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
+
+    def take_pending(self) -> list[dict[str, Any]]:
+        return []
 
     async def close(self) -> None:
         self.ws = None
@@ -372,6 +342,20 @@ def _until(predicate: Any, timeout: float = 5.0) -> bool:
             return True
         time.sleep(0.02)
     return bool(predicate())
+
+
+def _show_robot(script: _Script, inventory: dict[str, Any]) -> None:
+    script.push(
+        {
+            "v": 1,
+            "type": "attached",
+            "robot_id": _ROBOT_ID,
+            "hostname": _HOSTNAME,
+            "location": _HOSTNAME,
+            "mode": "manual",
+        }
+    )
+    script.push(inventory)
 
 
 def _post(app: Any, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -398,10 +382,11 @@ def test_config_page_values() -> None:
         assert 'id="session-logout"' in page
         assert 'id="session-quit"' in page
         reply = _post(
-            app, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+            app, "/api/login", {"username": "lab", "password": _PASSWORD}
         )
         assert reply["ok"] is True
-        script.push(_inventory())
+        assert reply["view"] == "fleet"
+        _show_robot(script, _inventory())
         assert _until(lambda: app.snapshot()["view"] == "config")
         snap = app.snapshot()
         assert snap["hostname"] == _HOSTNAME
@@ -438,13 +423,13 @@ def test_config_page_values() -> None:
         session=bare_script,
     )
     try:
-        _post(bare, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD})
+        _post(bare, "/api/login", {"username": "lab", "password": _PASSWORD})
         bare_inventory = inventory_from(
             "net wlo1 up device\nvideo video0 Integrated Camera\n",
             "addr wlo1 192.168.222.56\nroute wlo1\n",
             {"usb-1a86_USB_Single_Serial_5B3E090040-if00": "/dev/ttyACM1"},
         )
-        bare_script.push(bare_inventory)
+        _show_robot(bare_script, bare_inventory)
         assert _until(lambda: bare.snapshot()["view"] == "config")
         selected = bare.snapshot()["selected"]
         assert len(bare.snapshot()["choices"]["arm"]) == 1
@@ -464,7 +449,9 @@ class _Rig:
         self.server: Any = None
         self.error: BaseException | None = None
         self.robot_task: asyncio.Task[None] | None = None
-        self.state = RobotState(_ROBOT_ID, _PASSWORD, _HOSTNAME)
+        self.state = RobotState(_ROBOT_ID, TOKEN, _HOSTNAME)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self._tmp.name) / "registry.sqlite"
         self.statuses: list[str] = []
         self.lines: list[str] = []
         self.thread = threading.Thread(target=self._run, name="config-test-server", daemon=True)
@@ -483,7 +470,7 @@ class _Rig:
 
     async def _open(self) -> None:
         for _ in range(16):
-            candidate = await start_server("127.0.0.1", 0)
+            candidate = await start_server("127.0.0.1", 0, db_path=str(self.db))
             safe = True
             for sock in candidate.sockets:
                 host, port = sock.getsockname()[:2]
@@ -510,6 +497,7 @@ class _Rig:
         )
 
     def start(self) -> str:
+        seed(self.db, "lab")
         self.thread.start()
         assert self.ready.wait(5)
         if self.error is not None:
@@ -540,6 +528,7 @@ class _Rig:
                 pass
             loop.call_soon_threadsafe(loop.stop)
         self.thread.join(timeout=3)
+        self._tmp.cleanup()
 
 def test_review_button_reaches_config_ok() -> None:
     from packaging.operator_app.console import ConsoleApp
@@ -552,9 +541,12 @@ def test_review_button_reaches_config_ok() -> None:
         assert _until(lambda: "registered" in rig.statuses)
         app = ConsoleApp(uri, web_root=_WEB, operator_nic="wlo1")
         reply = _post(
-            app, "/api/login", {"robot_id": _ROBOT_ID, "password": _PASSWORD}
+            app, "/api/login", {"username": "lab", "password": OPERATOR_PASSWORD}
         )
         assert reply["ok"] is True, reply
+        assert reply["view"] == "fleet"
+        _post(app, "/api/approve", {"robot_id": _ROBOT_ID})
+        _post(app, "/api/attach", {"robot_id": _ROBOT_ID})
         assert _until(lambda: app.snapshot()["view"] == "config"), app.snapshot()
         snap = app.snapshot()
         assert snap["hostname"] == _HOSTNAME
@@ -580,6 +572,8 @@ def test_review_button_reaches_config_ok() -> None:
             )
         ), list(rig.lines)
         assert all(_PASSWORD not in line for line in rig.lines)
+        assert all(TOKEN not in line for line in rig.lines)
+        assert all(OPERATOR_PASSWORD not in line for line in rig.lines)
         assert "start_daemon" not in "\n".join(rig.lines)
     finally:
         if app is not None:

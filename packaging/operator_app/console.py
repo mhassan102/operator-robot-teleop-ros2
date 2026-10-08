@@ -34,7 +34,7 @@ from packaging.operator_app.config import (
     review_text,
     video_choices,
 )
-from packaging.operator_app.login import message_for
+from packaging.operator_app.login import dashboard_message, message_for
 from packaging.operator_app.session import OperatorSession
 from packaging.supervisor.operator_commands import (
     console_url,
@@ -53,6 +53,7 @@ _STATIC = {
     "/reader.js": "text/javascript; charset=utf-8",
     "/login.js": "text/javascript; charset=utf-8",
     "/config.js": "text/javascript; charset=utf-8",
+    "/fleet.js": "text/javascript; charset=utf-8",
     "/session_bar.js": "text/javascript; charset=utf-8",
 }
 HelperPost = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -176,9 +177,14 @@ class ConsoleApp:
             return {
                 "view": self._view,
                 "logged_in": self._logged_in,
+                "username": self._username,
                 "robot_id": self._robot_id,
                 "hostname": self._hostname,
                 "status": self._status,
+                "holding": self._holding,
+                "fleet_seen": self._fleet_seen,
+                "counts": dict(self._counts),
+                "robots": [dict(row) for row in self._robots],
                 "review_status": self._review_status,
                 "start_enabled": self._start_enabled and self._view == "config",
                 "operate_url": self._operate_url,
@@ -206,6 +212,8 @@ class ConsoleApp:
             return _json(200, self.snapshot())
         if path == "/":
             return _page(self.web_root / "login.html")
+        if path == "/fleet":
+            return _page(self.web_root / "fleet.html")
         if path == "/config":
             return _page(self.web_root / "config.html")
         if path == "/operate":
@@ -222,6 +230,8 @@ class ConsoleApp:
     def _post(self, path: str, body: bytes) -> HttpResult | None:
         routes = {
             "/api/login": self._login,
+            "/api/approve": self._approve,
+            "/api/attach": self._attach,
             "/api/review": self._review,
             "/api/start": self._start,
             "/api/stop": self._stop,
@@ -249,28 +259,64 @@ class ConsoleApp:
                     "ok": True,
                     "message": self._status,
                 }
-        robot_id = raw.get("robot_id")
+        username = raw.get("username")
         password = raw.get("password")
-        robot_text = robot_id.strip() if isinstance(robot_id, str) else ""
+        username_text = username.strip() if isinstance(username, str) else ""
         password_text = password if isinstance(password, str) else ""
-        if robot_text == "" or password_text == "":
+        if username_text == "" or password_text == "":
             self._assign(status=message_for("empty"), view="login")
             return self.snapshot() | {"ok": False, "message": message_for("empty")}
         self.login_sends += 1
-        result = await self._session.login(self.registry_url, robot_text, password_text)
+        result = await self._session.login(
+            self.registry_url, username_text, password_text
+        )
         password_text = ""
         if not result.ok:
             self._assign(logged_in=False, status=message_for(result.code), view="login")
             return self.snapshot() | {"ok": False, "message": message_for(result.code)}
         with self._lock:
             self._logged_in = True
-            self._robot_id = robot_text
-            self._hostname = result.hostname
-            self._view = "waiting"
-            self._status = "Waiting for the robot."
+            self._username = username_text
+            self._robot_id = ""
+            self._hostname = ""
+            self._view = "fleet"
+            self._status = "Waiting for the fleet."
             self._returned = False
+        for frame in self._session.take_pending():
+            self._apply_fleet(frame)
         self._start_reader()
-        return self.snapshot() | {"ok": True, "message": "Waiting for the robot."}
+        message = self.snapshot()["status"] or "Waiting for the fleet."
+        return self.snapshot() | {"ok": True, "message": message}
+
+    async def _approve(self, raw: dict[str, Any]) -> dict[str, Any]:
+        return await self._fleet_command("approve", raw)
+
+    async def _attach(self, raw: dict[str, Any]) -> dict[str, Any]:
+        return await self._fleet_command("attach", raw)
+
+    async def _fleet_command(self, kind: str, raw: dict[str, Any]) -> dict[str, Any]:
+        if not self._open():
+            self._assign(status="Cannot reach the registry.")
+            return self.snapshot() | {
+                "ok": False,
+                "message": "Cannot reach the registry.",
+            }
+        robot_id = raw.get("robot_id")
+        if not isinstance(robot_id, str) or len(robot_id) != 9 or not robot_id.isdigit():
+            text = dashboard_message("not_found")
+            self._assign(status=text)
+            return self.snapshot() | {"ok": False, "message": text}
+        try:
+            await self._session.send_json(
+                {"v": 1, "type": kind, "robot_id": robot_id}
+            )
+        except Exception:
+            self._assign(status="Cannot reach the registry.")
+            return self.snapshot() | {
+                "ok": False,
+                "message": "Cannot reach the registry.",
+            }
+        return self.snapshot() | {"ok": True, "message": self.snapshot()["status"]}
 
     async def _review(self, raw: dict[str, Any]) -> dict[str, Any]:
         if not self._open():
@@ -312,9 +358,17 @@ class ConsoleApp:
         return await self._begin_stop("config")
 
     async def _logout(self, raw: dict[str, Any]) -> dict[str, Any]:
-        if not self._logged_in and self._view == "login":
+        with self._lock:
+            logged_in = self._logged_in
+            view = self._view
+            holding = self._holding
+            mlink_up = self._mlink_up
+        if not logged_in and view == "login":
             return self.snapshot() | {"ok": True, "message": self.snapshot()["status"]}
-        return await self._begin_stop("logout")
+        if holding or mlink_up:
+            return await self._begin_stop("logout")
+        await self._begin_logout()
+        return self.snapshot() | {"ok": True, "message": self.snapshot()["status"]}
 
     async def _quit(self, raw: dict[str, Any]) -> dict[str, Any]:
         return await self._begin_stop("quit")
@@ -358,6 +412,15 @@ class ConsoleApp:
         if kind == "logged_out":
             await self._return_to_login()
             return
+        if kind == "fleet":
+            self._apply_fleet(msg)
+            return
+        if kind == "attached":
+            self._note_attached(msg)
+            return
+        if kind == "error" and self._awaiting_logout:
+            await self._return_to_login()
+            return
         if kind == "inventory":
             self._apply_inventory(msg)
             return
@@ -377,6 +440,12 @@ class ConsoleApp:
             self._assign(unconfirmed=True, awaiting_stopped=False, status=_UNCONFIRMED)
             self._cancel_stop_timer()
             await self._finish_after_stop()
+            return
+        if kind == "error" and self._view == "fleet" and not self._awaiting_stopped:
+            code = msg.get("code")
+            text = dashboard_message(code if isinstance(code, str) else "")
+            if text:
+                self._assign(status=text)
 
     async def _on_status(self, msg: dict[str, Any]) -> None:
         phase = msg.get("phase")
@@ -522,8 +591,57 @@ class ConsoleApp:
             if alive:
                 self._reader_started = True
 
+    def _note_attached(self, msg: Mapping[str, Any]) -> None:
+        robot_id = msg.get("robot_id")
+        hostname = msg.get("hostname")
+        self._assign(
+            holding=True,
+            robot_id=robot_id if isinstance(robot_id, str) else "",
+            hostname=hostname if isinstance(hostname, str) else "",
+            status="Waiting for the robot.",
+            view="fleet",
+        )
+
+    def _apply_fleet(self, msg: Mapping[str, Any]) -> None:
+        raw_counts = msg.get("counts")
+        counts = raw_counts if isinstance(raw_counts, Mapping) else {}
+        raw_robots = msg.get("robots")
+        robots: list[dict[str, Any]] = []
+        if isinstance(raw_robots, list):
+            for row in raw_robots:
+                if not isinstance(row, Mapping):
+                    continue
+                robot_id = row.get("robot_id")
+                location = row.get("location")
+                status = row.get("status")
+                mode = row.get("mode")
+                operator = row.get("operator")
+                robots.append(
+                    {
+                        "robot_id": robot_id if isinstance(robot_id, str) else "",
+                        "location": location if isinstance(location, str) else "",
+                        "status": status if isinstance(status, str) else "",
+                        "mode": mode if isinstance(mode, str) else "",
+                        "operator": operator
+                        if isinstance(operator, str) and operator
+                        else None,
+                    }
+                )
+        robots.sort(key=lambda item: item["robot_id"])
+        numbers = {
+            "registered": _nonneg(counts.get("registered")),
+            "autonomous": _nonneg(counts.get("autonomous")),
+            "needs_manual": _nonneg(counts.get("needs_manual")),
+            "in_teleop": _nonneg(counts.get("in_teleop")),
+        }
+        with self._lock:
+            waiting = self._status == "Waiting for the fleet."
+        self._assign(counts=numbers, robots=robots, fleet_seen=True)
+        if waiting:
+            self._assign(status="")
+
     def _apply_inventory(self, inventory: Mapping[str, Any]) -> None:
-        if not self._logged_in or not isinstance(inventory, Mapping):
+        if not self._logged_in or not self._holding or not isinstance(inventory, Mapping):
             return
         iface1 = interface1_choices(inventory)
         iface2 = interface2_choices(inventory)
@@ -713,9 +831,14 @@ class ConsoleApp:
         return {
             "view": self._view,
             "logged_in": self._logged_in,
+            "username": self._username,
             "robot_id": self._robot_id,
             "hostname": self._hostname,
             "status": self._status,
+            "holding": self._holding,
+            "fleet_seen": self._fleet_seen,
+            "counts": dict(self._counts),
+            "robots": [dict(row) for row in self._robots],
             "review_status": self._review_status,
             "start_enabled": self._start_enabled and self._view == "config",
             "operate_url": self._operate_url,
@@ -741,8 +864,13 @@ class ConsoleApp:
     def _reset_session_locked(self, keep_id: str) -> None:
         self._view = "login"
         self._logged_in = False
+        self._username = ""
         self._robot_id = keep_id
         self._hostname = ""
+        self._holding = False
+        self._fleet_seen = False
+        self._counts = _empty_counts()
+        self._robots: list[dict[str, Any]] = []
         self._status = ""
         self._review_status = ""
         self._start_enabled = False
@@ -772,6 +900,23 @@ class ConsoleApp:
         self._unconfirmed = False
         self._returned = False
         self._mlink_up = False
+
+
+def _empty_counts() -> dict[str, int]:
+    return {
+        "registered": 0,
+        "autonomous": 0,
+        "needs_manual": 0,
+        "in_teleop": 0,
+    }
+
+
+def _nonneg(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    if value < 0:
+        return 0
+    return value
 
 
 def _choice_tuple(message: Mapping[str, Any]) -> tuple[Any, ...]:
