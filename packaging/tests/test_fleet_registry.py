@@ -28,6 +28,7 @@ if str(_TURN) not in sys.path:
 import getpass
 
 from packaging.registry import session as registry_session
+from packaging.registry import store as registry_store
 from packaging.registry.admin import main as admin_main
 from packaging.registry.session import (
     Registry,
@@ -36,12 +37,19 @@ from packaging.registry.session import (
 )
 from packaging.registry.store import (
     FLEET_ITERATIONS,
+    MAINTAIN_INTERVAL_S,
+    PENDING_KEEP_S,
+    STALE_STOP_WAIT_S,
     RobotRow,
+    add_operator,
     classify,
+    clear_robot,
     connect as store_connect,
     counts_from_classes,
     default_db_path,
     insert_robot,
+    set_operator_disabled,
+    set_operator_password,
     status_label,
     utc_now,
 )
@@ -1363,16 +1371,12 @@ def test_password_and_token_logins_on_one_server(
                 assert fleet["robots"][0]["operator"] is None
                 assert fleet["counts"]["registered"] == 0
                 _no_secret(fleet, _TOKEN, _ROBOT_PASSWORD, _OPERATOR_PASSWORD)
-                for kind in ("approve", "attach", "release", "sign_out", "logout"):
-                    body = {"v": 1, "type": kind}
-                    if kind in ("approve", "attach"):
-                        body["robot_id"] = "222222222"
-                    await _send(dashboard, body)
-                    assert await _recv(dashboard) == {
-                        "v": 1,
-                        "type": "error",
-                        "code": "unknown_type",
-                    }
+                await _send(dashboard, {"v": 1, "type": "logout"})
+                assert await _recv(dashboard) == {
+                    "v": 1,
+                    "type": "error",
+                    "code": "unknown_type",
+                }
                 async with connect(uri) as second:
                     await _send(
                         second,
@@ -1535,3 +1539,703 @@ def test_classify_treats_a_missing_last_seen_as_not_stale() -> None:
     )
     assert fresh
     assert status_label("pending", True, True, "ready", True, fresh, now) == "pending"
+
+
+def _ago(seconds: float) -> str:
+    moment = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _add_user(reg: Registry, username: str, password: str) -> None:
+    assert add_operator(
+        reg._db,
+        username,
+        hash_password(password, FLEET_ITERATIONS),
+        FLEET_ITERATIONS,
+        utc_now(),
+    )
+
+
+async def _login_user(reg: Registry, username: str, password: str) -> FakeWS:
+    ws = FakeWS()
+    await reg._accept_username_login(
+        ws,
+        {"v": 1, "type": "login", "username": username, "password": password},
+        username,
+    )
+    return ws
+
+
+async def _register_token(
+    reg: Registry,
+    robot_id: str,
+    *,
+    mode: str = "manual",
+    location: str = "dubai-lab",
+    hostname: str = "AUTOOS-DEV-MUHAMMADOSAMA",
+) -> FakeWS:
+    robot = FakeWS()
+    created = await reg._accept_register(
+        robot,
+        {
+            "v": 1,
+            "type": "register",
+            "robot_id": robot_id,
+            "token": _TOKEN,
+            "hostname": hostname,
+            "mode": mode,
+            "location": location,
+        },
+    )
+    assert created is reg.robots[robot_id]
+    return robot
+
+
+async def _fleets(ws: FakeWS) -> list:
+    await asyncio.sleep(0.12)
+    return [msg for msg in ws.sent if msg.get("type") == "fleet"]
+
+
+def test_old_pending_rows_are_deleted_on_open(tmp_path: Path) -> None:
+    assert PENDING_KEEP_S == 7 * 24 * 60 * 60
+    path = tmp_path / "registry.sqlite"
+    conn = store_connect(str(path))
+    created = utc_now()
+    old = _ago(PENDING_KEEP_S + 120)
+    young = _ago(PENDING_KEEP_S - 120)
+
+    def _row(robot_id: str, approval: str, seen: str) -> None:
+        insert_robot(
+            conn,
+            robot_id,
+            b"\x33" * 48,
+            FLEET_ITERATIONS,
+            "host",
+            "",
+            "manual",
+            approval,
+            "idle",
+            seen,
+            created,
+        )
+
+    _row("333333333", "pending", old)
+    _row("444444444", "pending", young)
+    _row("555555555", "pending", young)
+    _row("666666666", "approved", old)
+    conn.execute("UPDATE robots SET last_seen=NULL WHERE robot_id='555555555'")
+    conn.commit()
+    conn.close()
+
+    reg = Registry(str(path))
+    try:
+        assert "333333333" not in reg.robots
+        assert set(reg.robots) == {"444444444", "555555555", "666666666"}
+        assert reg.robots["666666666"].approval == "approved"
+        assert reg.robots["444444444"].approval == "pending"
+    finally:
+        reg.close()
+
+
+def test_approve_attach_release_sign_out_and_stale(tmp_path: Path) -> None:
+    assert STALE_STOP_WAIT_S == 30.0
+    assert MAINTAIN_INTERVAL_S == 1.0
+    path = tmp_path / "registry.sqlite"
+
+    async def _body() -> None:
+        reg = Registry(str(path))
+        try:
+            _add_user(reg, "lab", _OPERATOR_PASSWORD)
+            _add_user(reg, "other", "other-password")
+            robot = await _register_token(reg, "222222222")
+            offline = await _register_token(reg, "333333333", location="")
+            await reg._drop(offline)
+            op = await _login_user(reg, "lab", _OPERATOR_PASSWORD)
+            assert op.sent[0] == {"v": 1, "type": "logged_in", "username": "lab"}
+            other = await _login_user(reg, "other", "other-password")
+            password_robot = FakeWS()
+            password_op = FakeWS()
+            password = registry_session.Session("111111111")
+            password.robot_ws = password_robot
+            password.operator_ws = password_op
+            reg.sessions["111111111"] = password
+
+            await reg._username_frame(
+                op, {"v": 1, "type": "approve", "robot_id": "999999999"}
+            )
+            assert op.sent[-1] == {"v": 1, "type": "error", "code": "not_found"}
+            assert op.closed is False
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "999999999"}
+            )
+            assert op.sent[-1]["code"] == "not_found"
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            assert op.sent[-1] == {"v": 1, "type": "error", "code": "pending"}
+            assert robot.sent[-1]["type"] == "registered"
+            await reg._username_frame(
+                op, {"v": 1, "type": "approve", "robot_id": "333333333"}
+            )
+            assert op.sent[-1] == {
+                "v": 1,
+                "type": "approved",
+                "robot_id": "333333333",
+            }
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "333333333"}
+            )
+            assert op.sent[-1]["code"] == "offline"
+            await reg._username_frame(
+                op, {"v": 1, "type": "approve", "robot_id": "222222222"}
+            )
+            assert op.sent[-1] == {
+                "v": 1,
+                "type": "approved",
+                "robot_id": "222222222",
+            }
+            reg.robots["222222222"].last_seen = _ago(31)
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            assert op.sent[-1]["code"] == "offline"
+            reg.robots["222222222"].last_seen = utc_now()
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            attached = op.sent[-1]
+            assert attached["type"] == "attached"
+            assert attached["robot_id"] == "222222222"
+            assert attached["hostname"] == "AUTOOS-DEV-MUHAMMADOSAMA"
+            assert attached["location"] == "dubai-lab"
+            assert attached["mode"] == "manual"
+            assert robot.sent[-1] == {"v": 1, "type": "operator_attached"}
+            _no_secret(attached, _TOKEN, _OPERATOR_PASSWORD)
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            assert op.sent[-1]["code"] == "already_attached"
+            second = await _register_token(reg, "444444444")
+            await reg._username_frame(
+                op, {"v": 1, "type": "approve", "robot_id": "444444444"}
+            )
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "444444444"}
+            )
+            assert op.sent[-1]["code"] == "already_attached"
+            assert second.sent[-1]["type"] == "registered"
+            assert reg.robots["222222222"].operator_name == "lab"
+            await reg._username_frame(
+                other, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            assert other.sent[-1]["code"] == "busy"
+
+            await reg._forward(
+                reg.robots["222222222"],
+                robot,
+                "robot",
+                {"v": 1, "type": "inventory", "marker": "INV-MARKER-9"},
+            )
+            assert op.sent[-1]["marker"] == "INV-MARKER-9"
+            await reg._forward(
+                reg.robots["222222222"],
+                op,
+                "operator",
+                {"v": 1, "type": "config", "marker": "CFG-MARKER-9"},
+            )
+            assert robot.sent[-1]["marker"] == "CFG-MARKER-9"
+            await reg._forward(
+                reg.robots["222222222"],
+                op,
+                "operator",
+                {"v": 1, "type": "start"},
+            )
+            assert robot.sent[-1] == {"v": 1, "type": "start"}
+            assert reg.robots["222222222"].start_in_progress is True
+            await reg._forward(
+                reg.robots["222222222"],
+                robot,
+                "robot",
+                {"v": 1, "type": "status", "phase": "ready", "detail": ""},
+            )
+            assert op.sent[-1]["phase"] == "ready"
+            record = reg.robots["222222222"]
+            assert record.phase == "ready"
+            assert record.start_in_progress is False
+            running = (await _fleets(op))[-1]
+            assert running["robots"][0]["status"] == "running"
+            assert running["counts"]["in_teleop"] == 1
+            assert running["robots"][0]["operator"] == "lab"
+            _no_secret(running, _TOKEN)
+            side = sqlite3.connect(path)
+            assert (
+                side.execute(
+                    "SELECT approval, phase FROM robots WHERE robot_id='222222222'"
+                ).fetchone()
+                == ("approved", "ready")
+            )
+            side.close()
+
+            await reg._username_frame(op, {"v": 1, "type": "release"})
+            assert robot.sent[-1] == {"v": 1, "type": "operator_detached"}
+            assert op.sent[-1] == {"v": 1, "type": "released"}
+            assert reg._ws_user[op] == "lab"
+            assert record.operator_ws is None
+            released = (await _fleets(op))[-1]
+            row = next(
+                item for item in released["robots"] if item["robot_id"] == "222222222"
+            )
+            assert row["operator"] is None
+            assert row["status"] == "online"
+            assert released["counts"]["in_teleop"] == 0
+            await reg._username_frame(
+                op, {"v": 1, "type": "config", "marker": "CFG-MARKER-9"}
+            )
+            assert op.sent[-1]["code"] == "offline"
+            await reg._username_frame(op, {"v": 1, "type": "release"})
+            assert op.sent[-1] == {"v": 1, "type": "released"}
+
+            record.last_seen = _ago(31)
+            record.sweep_mark = None
+            before = len(op.sent)
+            await reg._maintain_once()
+            stale_fleet = (await _fleets(op))[-1]
+            shown = next(
+                item
+                for item in stale_fleet["robots"]
+                if item["robot_id"] == "222222222"
+            )
+            assert shown["status"] == "offline"
+            assert len([m for m in robot.sent if m.get("type") == "stop"]) == 0
+            assert robot.closed is False
+            assert password_robot.sent == []
+            assert password_op.sent == []
+            assert reg.sessions["111111111"] is password
+            marked = len(op.sent)
+            await reg._maintain_once()
+            await asyncio.sleep(0.12)
+            assert len(op.sent) == marked
+            assert len(op.sent) > before
+            record.last_seen = None
+            await reg._maintain_once()
+            missing = (await _fleets(op))[-1]
+            missing_row = next(
+                item for item in missing["robots"] if item["robot_id"] == "222222222"
+            )
+            assert missing_row["status"] == "online"
+
+            record.last_seen = utc_now()
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            assert op.sent[-1]["type"] == "attached"
+            record.last_seen = _ago(31)
+            stops = len([m for m in robot.sent if m.get("type") == "stop"])
+            await reg._maintain_once()
+            assert any(m.get("code") == "stale" for m in op.sent)
+            assert record.operator_ws is op
+            assert record.sweep_mark == "stale"
+            assert record.stale_deadline is not None
+            assert record.stale_deadline >= time.monotonic() + STALE_STOP_WAIT_S - 1
+            await reg._forward(
+                record, op, "operator", {"v": 1, "type": "stop"}
+            )
+            assert robot.sent[-1] == {"v": 1, "type": "stop"}
+            await reg._forward(
+                record,
+                robot,
+                "robot",
+                {"v": 1, "type": "status", "phase": "stopped", "detail": ""},
+            )
+            assert record.stale_deadline is None
+            await reg._maintain_once()
+            assert len([m for m in robot.sent if m.get("type") == "stop"]) == stops + 1
+            await reg._username_frame(op, {"v": 1, "type": "release"})
+            assert op.sent[-1]["type"] == "released"
+
+            record.last_seen = utc_now()
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            record.last_seen = _ago(31)
+            await reg._maintain_once()
+            assert any(m.get("code") == "stale" for m in op.sent)
+            record.stale_deadline = time.monotonic() - 1
+            sent_before = len(op.sent)
+            await reg._maintain_once()
+            assert robot.sent[-1] == {"v": 1, "type": "stop"}
+            fresh_notes = op.sent[sent_before:]
+            assert {"v": 1, "type": "operator_detached"} in fresh_notes
+            assert not any(m.get("code") == "offline" for m in fresh_notes)
+            assert record.operator_ws is None
+            assert reg._ws_user[op] == "lab"
+            await reg._username_frame(op, {"v": 1, "type": "release"})
+            assert op.sent[-1] == {"v": 1, "type": "released"}
+
+            record.last_seen = utc_now()
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            stops = len([m for m in robot.sent if m.get("type") == "stop"])
+            await reg._drop(robot)
+            assert record.robot_ws is None
+            assert record.operator_ws is None
+            assert op.sent[-1] == {"v": 1, "type": "error", "code": "offline"}
+            assert len([m for m in robot.sent if m.get("type") == "stop"]) == stops
+
+            fresh_robot = await _register_token(reg, "222222222")
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            assert fresh_robot.sent[-1] == {"v": 1, "type": "operator_attached"}
+            await reg._username_frame(op, {"v": 1, "type": "sign_out"})
+            assert fresh_robot.sent[-1] == {"v": 1, "type": "operator_detached"}
+            assert op.sent[-1] == {"v": 1, "type": "signed_out"}
+            assert op not in reg._ws_user
+            names = {
+                row[0]
+                for row in reg._db.execute(
+                    "SELECT username FROM operators ORDER BY username"
+                )
+            }
+            assert names == {"lab", "other"}
+            again = await _login_user(reg, "lab", _OPERATOR_PASSWORD)
+            assert again.sent[0]["type"] == "logged_in"
+        finally:
+            reg.close()
+
+    _run(_body())
+    again = Registry(str(path))
+    try:
+        assert again.robots["222222222"].approval == "approved"
+        assert again.robots["333333333"].approval == "approved"
+        assert again.robots["222222222"].phase == "idle"
+        assert b"INV-MARKER-9" not in path.read_bytes()
+        assert b"CFG-MARKER-9" not in path.read_bytes()
+    finally:
+        again.close()
+
+
+def test_maintain_applies_disable_password_and_clear(tmp_path: Path) -> None:
+    path = tmp_path / "registry.sqlite"
+
+    async def _body() -> None:
+        reg = Registry(str(path))
+        try:
+            _add_user(reg, "lab", _OPERATOR_PASSWORD)
+            for _ in range(4):
+                bad = FakeWS()
+                await reg._accept_username_login(
+                    bad,
+                    {
+                        "v": 1,
+                        "type": "login",
+                        "username": "lab",
+                        "password": "wrong-password",
+                    },
+                    "lab",
+                )
+                assert bad.sent[-1]["code"] == "auth"
+            assert reg._fail_count["lab"] >= 4
+            set_operator_password(
+                reg._db,
+                "lab",
+                hash_password("new-password", FLEET_ITERATIONS),
+                FLEET_ITERATIONS,
+            )
+            await reg._maintain_once()
+            assert reg._fail_count.get("lab", 0) == 0
+            op = await _login_user(reg, "lab", "new-password")
+            assert op.sent[0]["type"] == "logged_in"
+            robot = await _register_token(reg, "222222222")
+            await reg._username_frame(
+                op, {"v": 1, "type": "approve", "robot_id": "222222222"}
+            )
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            assert robot.sent[-1]["type"] == "operator_attached"
+            set_operator_password(
+                reg._db,
+                "lab",
+                hash_password("newer-password", FLEET_ITERATIONS),
+                FLEET_ITERATIONS,
+            )
+            await reg._maintain_once()
+            assert op.closed is True
+            assert robot.sent[-1] == {"v": 1, "type": "operator_detached"}
+            assert reg.robots["222222222"].operator_ws is None
+            op = await _login_user(reg, "lab", "newer-password")
+            assert op.sent[0]["type"] == "logged_in"
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            assert robot.sent[-1]["type"] == "operator_attached"
+            set_operator_disabled(reg._db, "lab", 1)
+            await reg._maintain_once()
+            assert op.closed is True
+            assert "lab" not in reg._operator_ws
+            assert reg.robots["222222222"].operator_ws is None
+            assert robot.sent[-1] == {"v": 1, "type": "operator_detached"}
+            blocked = await _login_user(reg, "lab", "newer-password")
+            assert blocked.sent[-1]["code"] == "auth"
+            assert blocked.closed is False
+            set_operator_disabled(reg._db, "lab", 0)
+            op = await _login_user(reg, "lab", "newer-password")
+            await reg._username_frame(
+                op, {"v": 1, "type": "attach", "robot_id": "222222222"}
+            )
+            assert robot.sent[-1]["type"] == "operator_attached"
+            clear_robot(reg._db, "222222222")
+            await reg._maintain_once()
+            assert robot.closed is True
+            assert "222222222" not in reg.robots
+            assert any(m.get("code") == "offline" for m in op.sent)
+            assert not any(m.get("type") == "stop" for m in robot.sent)
+            assert reg._db.execute("SELECT COUNT(*) FROM operators").fetchone()[0] == 1
+            assert op.closed is False
+            assert reg._ws_user[op] == "lab"
+        finally:
+            reg.close()
+
+    _run(_body())
+
+
+def test_live_maintain_and_relay(tmp_path: Path, monkeypatch: Any) -> None:
+    assert MAINTAIN_INTERVAL_S == 1.0
+    path = tmp_path / "registry.sqlite"
+    monkeypatch.setenv("TELEOP_REGISTRY_DB", str(path))
+    monkeypatch.setattr(registry_store, "MAINTAIN_INTERVAL_S", 0.05)
+    monkeypatch.setattr(getpass, "getpass", lambda prompt="": _OPERATOR_PASSWORD)
+    assert admin_main(["add-operator", "lab"]) == 0
+
+    async def _until_closed(ws: Any) -> list:
+        found = []
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                raw = await asyncio.wait_for(ws.recv(), deadline - time.monotonic())
+            except ConnectionClosed:
+                return found
+            found.append(json.loads(raw))
+        raise AssertionError("socket stayed open")
+
+    async def _body() -> None:
+        async with _listening(db_path=str(path)) as uri:
+            async with connect(uri) as password_robot, connect(uri) as operator:
+                await _send(
+                    password_robot,
+                    {
+                        "v": 1,
+                        "type": "register",
+                        "robot_id": "111111111",
+                        "password": _ROBOT_PASSWORD,
+                        "hostname": "password-host",
+                    },
+                )
+                assert await _recv(password_robot) == {"v": 1, "type": "registered"}
+                await _send(
+                    operator,
+                    {
+                        "v": 1,
+                        "type": "login",
+                        "robot_id": "111111111",
+                        "password": _ROBOT_PASSWORD,
+                    },
+                )
+                assert await _recv(operator) == {
+                    "v": 1,
+                    "type": "logged_in",
+                    "hostname": "password-host",
+                }
+                await _send(operator, {"v": 1, "type": "logout"})
+                assert await _recv(operator) == {"v": 1, "type": "logged_out"}
+            async with (
+                connect(uri) as robot,
+                connect(uri) as dashboard,
+            ):
+                await _send(
+                    robot,
+                    {
+                        "v": 1,
+                        "type": "register",
+                        "robot_id": "222222222",
+                        "token": _TOKEN,
+                        "hostname": "AUTOOS-DEV-MUHAMMADOSAMA",
+                        "mode": "manual",
+                        "location": "dubai-lab",
+                    },
+                )
+                assert (await _recv(robot))["approval"] == "pending"
+                await _send(
+                    dashboard,
+                    {
+                        "v": 1,
+                        "type": "login",
+                        "username": "lab",
+                        "password": _OPERATOR_PASSWORD,
+                    },
+                )
+                assert (await _recv(dashboard))["username"] == "lab"
+                assert (await _recv(dashboard))["type"] == "fleet"
+                await _send(
+                    dashboard, {"v": 1, "type": "approve", "robot_id": "222222222"}
+                )
+                assert await _recv(dashboard) == {
+                    "v": 1,
+                    "type": "approved",
+                    "robot_id": "222222222",
+                }
+                approved = await _recv(dashboard)
+                assert approved["type"] == "fleet"
+                assert approved["robots"][0]["status"] == "online"
+                await _send(
+                    dashboard, {"v": 1, "type": "attach", "robot_id": "222222222"}
+                )
+                attached = await _recv(dashboard)
+                assert attached["type"] == "attached"
+                assert attached["location"] == "dubai-lab"
+                assert await _recv(robot) == {"v": 1, "type": "operator_attached"}
+                fleet = await _recv(dashboard)
+                assert fleet["counts"]["in_teleop"] == 1
+                assert fleet["robots"][0]["operator"] == "lab"
+                await _send(
+                    robot, {"v": 1, "type": "inventory", "marker": "INV-MARKER-9"}
+                )
+                assert (await _recv(dashboard))["marker"] == "INV-MARKER-9"
+                await _send(
+                    dashboard, {"v": 1, "type": "config", "marker": "CFG-MARKER-9"}
+                )
+                assert (await _recv(robot))["marker"] == "CFG-MARKER-9"
+                await _send(dashboard, {"v": 1, "type": "start"})
+                assert await _recv(robot) == {"v": 1, "type": "start"}
+                started = await _recv(dashboard)
+                assert started["type"] == "fleet"
+                assert started["robots"][0]["status"] == "starting"
+                await _send(
+                    robot,
+                    {"v": 1, "type": "status", "phase": "ready", "detail": ""},
+                )
+                assert (await _recv(dashboard))["phase"] == "ready"
+                running = await _recv(dashboard)
+                assert running["robots"][0]["status"] == "running"
+                await _send(dashboard, {"v": 1, "type": "stop"})
+                assert await _recv(robot) == {"v": 1, "type": "stop"}
+                await _send(
+                    robot,
+                    {"v": 1, "type": "status", "phase": "stopped", "detail": ""},
+                )
+                assert (await _recv(dashboard))["phase"] == "stopped"
+                stopped = await _recv(dashboard)
+                assert stopped["type"] == "fleet"
+                assert stopped["robots"][0]["phase"] == "stopped"
+                await _send(dashboard, {"v": 1, "type": "release"})
+                assert await _recv(robot) == {"v": 1, "type": "operator_detached"}
+                assert await _recv(dashboard) == {"v": 1, "type": "released"}
+                freed = await _recv(dashboard)
+                assert freed["type"] == "fleet"
+                assert freed["robots"][0]["operator"] is None
+                await _send(dashboard, {"v": 1, "type": "sign_out"})
+                assert await _recv(dashboard) == {"v": 1, "type": "signed_out"}
+                await _send(
+                    dashboard,
+                    {
+                        "v": 1,
+                        "type": "login",
+                        "username": "lab",
+                        "password": _OPERATOR_PASSWORD,
+                    },
+                )
+                assert (await _recv(dashboard))["type"] == "logged_in"
+                assert admin_main(["disable-operator", "lab"]) == 0
+                await _until_closed(dashboard)
+            async with connect(uri) as blocked:
+                await _send(
+                    blocked,
+                    {
+                        "v": 1,
+                        "type": "login",
+                        "username": "lab",
+                        "password": _OPERATOR_PASSWORD,
+                    },
+                )
+                assert (await _recv(blocked))["code"] == "auth"
+                await _send(
+                    blocked,
+                    {
+                        "v": 1,
+                        "type": "login",
+                        "username": "lab",
+                        "password": _OPERATOR_PASSWORD,
+                    },
+                )
+                assert (await _recv(blocked))["code"] == "auth"
+            assert admin_main(["enable-operator", "lab"]) == 0
+            monkeypatch.setattr(getpass, "getpass", lambda prompt="": "new-password")
+            assert admin_main(["set-password", "lab"]) == 0
+            async with connect(uri) as dashboard, connect(uri) as robot:
+                await _send(
+                    dashboard,
+                    {
+                        "v": 1,
+                        "type": "login",
+                        "username": "lab",
+                        "password": "new-password",
+                    },
+                )
+                assert (await _recv(dashboard))["type"] == "logged_in"
+                await _recv(dashboard)
+                await _send(
+                    robot,
+                    {
+                        "v": 1,
+                        "type": "register",
+                        "robot_id": "222222222",
+                        "token": _TOKEN,
+                        "hostname": "AUTOOS-DEV-MUHAMMADOSAMA",
+                    },
+                )
+                registered = await _recv(robot)
+                assert registered["approval"] == "approved"
+                await _send(
+                    dashboard, {"v": 1, "type": "attach", "robot_id": "222222222"}
+                )
+                attached = None
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline and attached is None:
+                    msg = await _recv(dashboard)
+                    if msg.get("type") == "attached":
+                        attached = msg
+                assert attached is not None
+                assert attached["type"] == "attached"
+                assert await _recv(robot) == {"v": 1, "type": "operator_attached"}
+                assert admin_main(["clear-robot", "222222222"]) == 0
+                robot_frames = await _until_closed(robot)
+                assert not any(frame.get("type") == "stop" for frame in robot_frames)
+                deadline = time.monotonic() + 2
+                saw_offline = False
+                while time.monotonic() < deadline and not saw_offline:
+                    msg = await _recv(dashboard)
+                    saw_offline = msg.get("code") == "offline"
+                assert saw_offline
+                await _send(dashboard, {"v": 1, "type": "sign_out"})
+                signed = None
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline and signed is None:
+                    msg = await _recv(dashboard)
+                    if msg.get("type") == "signed_out":
+                        signed = msg
+                assert signed == {"v": 1, "type": "signed_out"}
+
+    _run(_body())
+    conn = sqlite3.connect(path)
+    try:
+        assert [row[0] for row in conn.execute("SELECT username FROM operators")] == [
+            "lab"
+        ]
+        assert (
+            conn.execute("SELECT COUNT(*) FROM robots").fetchone()[0] == 0
+        )
+        assert b"INV-MARKER-9" not in path.read_bytes()
+    finally:
+        conn.close()

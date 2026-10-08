@@ -6,6 +6,7 @@ device token are never logged and never copied into an outbound message.
 
 ``logged_in`` for a password session includes the robot hostname.
 A username login includes ``username`` and then one ``fleet`` snapshot.
+That login can approve a robot and attach to one online approved robot.
 ``v`` stays 1.
 """
 
@@ -24,21 +25,28 @@ from typing import Any, Optional
 
 from websockets.exceptions import ConnectionClosed
 
+from packaging.registry import store as registry_store
 from packaging.registry.store import (
     FLEET_COALESCE_S,
     FLEET_ITERATIONS,
     LAST_SEEN_INTERVAL_S,
     PENDING_CAP,
     RobotRow,
+    age_seconds,
     classify,
     counts_from_classes,
+    delete_old_pending,
     field_text,
     insert_robot,
     load_robots,
+    operator_rows,
     read_operator,
+    robot_ids,
+    set_robot_approval,
     status_label,
     connect as connect_db,
     update_robot_last_seen,
+    update_robot_phase,
     update_robot_registration,
     update_robot_state,
     utc_now,
@@ -158,6 +166,8 @@ class RobotRecord:
         self.operator_name: Optional[str] = None
         self.start_in_progress = False
         self.last_seen_written = time.monotonic()
+        self.sweep_mark: Optional[str] = None
+        self.stale_deadline: Optional[float] = None
         self.lock = asyncio.Lock()
 
 
@@ -167,26 +177,37 @@ class Registry:
     def __init__(self, db_path: str = ":memory:") -> None:
         self.db_path = db_path
         self._db = connect_db(db_path)
+        delete_old_pending(self._db)
         self.sessions: dict = {}
         self.robots: dict = {}
         for row in load_robots(self._db):
             self.robots[row.robot_id] = RobotRecord(row)
         self._operator_ws: dict = {}
         self._ws_user: dict = {}
+        self._login_hash: dict = {}
         self._fail_count: dict = {}
         self._fail_hash: dict = {}
         self._fleet_task: Optional[asyncio.Task] = None
+        self._maintain_task: Optional[asyncio.Task] = None
         self._scale_robots = False
         self._scale_dashboards = False
 
     def close(self) -> None:
-        task = self._fleet_task
-        self._fleet_task = None
-        if task is not None and not task.done():
-            task.cancel()
+        for name in ("_fleet_task", "_maintain_task"):
+            task = getattr(self, name)
+            setattr(self, name, None)
+            if task is not None and not task.done():
+                task.cancel()
         self._db.close()
 
+    def _ensure_maintain(self) -> None:
+        task = self._maintain_task
+        if task is not None and not task.done():
+            return
+        self._maintain_task = asyncio.get_running_loop().create_task(self._maintain())
+
     async def handle(self, ws: Any, first: dict) -> None:
+        self._ensure_maintain()
         try:
             kind = first.get("type")
             if kind == "register":
@@ -224,6 +245,8 @@ class Registry:
         while True:
             if msg is None:
                 await _send(ws, _error("bad_json"))
+            elif ws in self._ws_user:
+                await self._username_frame(ws, msg)
             elif session is not None and not self._still(session, ws, "operator"):
                 session = None
                 if msg.get("type") == "login":
@@ -421,6 +444,8 @@ class Registry:
             record.location = location
             record.mode = mode
             record.last_seen = now
+            record.sweep_mark = None
+            record.stale_deadline = None
         record.last_seen_written = time.monotonic()
         update_robot_registration(
             self._db, record.robot_id, hostname, location, mode, now
@@ -496,11 +521,13 @@ class Registry:
                 now,
             )
             record.last_seen_written = time.monotonic()
+            self._clear_sweep_if_fresh(record)
             self._kick_fleet()
             return
         if time.monotonic() - record.last_seen_written >= LAST_SEEN_INTERVAL_S:
             update_robot_last_seen(self._db, record.robot_id, now)
             record.last_seen_written = time.monotonic()
+        self._clear_sweep_if_fresh(record)
 
     async def _accept_login(self, ws: Any, msg: dict) -> Optional[Session]:
         if msg.get("v") != 1 or msg.get("type") != "login":
@@ -606,6 +633,7 @@ class Registry:
             return
         self._fail_count.pop(username, None)
         self._fail_hash.pop(username, None)
+        self._login_hash[username] = bytes(secret_hash)
         await _send(ws, {"v": 1, "type": "logged_in", "username": username})
         self._operator_ws[username] = ws
         self._ws_user[ws] = username
@@ -635,6 +663,8 @@ class Registry:
         if msg.get("v") != 1 or msg.get("type") not in allowed:
             await _send(ws, _error("unknown_type"))
             return
+        status_phase: Any = None
+        started = False
         async with session.lock:
             if side == "robot" and session.robot_ws is not ws:
                 return
@@ -646,7 +676,18 @@ class Registry:
                 if side == "operator":
                     await _send(ws, _error("offline"))
                 return
+            if getattr(session, "durable", False):
+                if side == "robot" and msg.get("type") == "status":
+                    status_phase = msg.get("phase")
+                if side == "operator" and msg.get("type") == "start":
+                    if not session.start_in_progress:
+                        session.start_in_progress = True
+                        started = True
             await _send(peer, msg)
+        if status_phase is not None and session.robot_ws is ws:
+            self._apply_status(session, status_phase)
+        if started:
+            self._kick_fleet()
 
     def _still(self, session: Any, ws: Any, side: str) -> bool:
         if getattr(session, "durable", False):
@@ -664,6 +705,11 @@ class Registry:
         if username is not None:
             if self._operator_ws.get(username) is ws:
                 self._operator_ws.pop(username, None)
+            if self._login_hash.get(username) is not None and (
+                self._operator_ws.get(username) is None
+            ):
+                self._login_hash.pop(username, None)
+            await self._release_hold(ws, reply=False)
             self._kick_fleet()
             return
         for record in list(self.robots.values()):
@@ -717,10 +763,14 @@ class Registry:
                 record.operator_ws = None
                 record.operator_name = None
                 record.start_in_progress = False
+                record.stale_deadline = None
+                record.sweep_mark = None
             elif record.operator_ws is ws:
                 record.operator_ws = None
                 record.operator_name = None
                 record.start_in_progress = False
+                record.stale_deadline = None
+                self._mark_after_detach(record)
                 notify_robot = record.robot_ws
             else:
                 return
@@ -730,6 +780,347 @@ class Registry:
         if notify_robot is not None and notify_robot is not ws:
             with contextlib.suppress(ConnectionClosed):
                 await _send(notify_robot, {"v": 1, "type": "operator_detached"})
+        self._kick_fleet()
+
+    async def _username_frame(self, ws: Any, msg: dict) -> None:
+        if msg.get("v") != 1:
+            await _send(ws, _error("unknown_type"))
+            return
+        kind = msg.get("type")
+        if kind == "approve":
+            await self._approve(ws, msg)
+        elif kind == "attach":
+            await self._attach(ws, msg)
+        elif kind == "release":
+            await self._release(ws)
+        elif kind == "sign_out":
+            await self._sign_out(ws)
+        elif kind == "login":
+            await _send(ws, _error("already_attached"))
+        elif kind in _FROM_OPERATOR:
+            record = self._held_record(ws)
+            if record is None:
+                await _send(ws, _error("offline"))
+                return
+            await self._forward(record, ws, "operator", msg)
+        else:
+            await _send(ws, _error("unknown_type"))
+
+    async def _approve(self, ws: Any, msg: dict) -> None:
+        robot_id = msg.get("robot_id")
+        record = self.robots.get(robot_id) if valid_robot_id(robot_id) else None
+        if record is None:
+            await _send(ws, _error("not_found"))
+            log.info("approve code=not_found")
+            return
+        record.approval = "approved"
+        set_robot_approval(self._db, record.robot_id, "approved")
+        await _send(
+            ws, {"v": 1, "type": "approved", "robot_id": record.robot_id}
+        )
+        log.info("approve robot_id=%s code=approved", record.robot_id)
+        self._kick_fleet()
+
+    async def _attach(self, ws: Any, msg: dict) -> None:
+        username = self._ws_user.get(ws)
+        robot_id = msg.get("robot_id")
+        record = self.robots.get(robot_id) if valid_robot_id(robot_id) else None
+        if record is None:
+            await _send(ws, _error("not_found"))
+            log.info("attach code=not_found")
+            return
+        if record.approval != "approved":
+            await _send(ws, _error("pending"))
+            log.info("attach robot_id=%s code=pending", record.robot_id)
+            return
+        if not self._online_for_attach(record):
+            await _send(ws, _error("offline"))
+            log.info("attach robot_id=%s code=offline", record.robot_id)
+            return
+        if record.operator_ws is not None and record.operator_ws is not ws:
+            await _send(ws, _error("busy"))
+            log.info("attach robot_id=%s code=busy", record.robot_id)
+            return
+        if self._held_record(ws) is not None:
+            await _send(ws, _error("already_attached"))
+            log.info(
+                "attach robot_id=%s code=already_attached", record.robot_id
+            )
+            return
+        robot: Any = None
+        hostname = ""
+        location = ""
+        mode = "manual"
+        async with record.lock:
+            if record.approval != "approved":
+                code = "pending"
+            elif not self._online_for_attach(record):
+                code = "offline"
+            elif record.operator_ws is not None and record.operator_ws is not ws:
+                code = "busy"
+            elif self._held_record(ws) is not None:
+                code = "already_attached"
+            else:
+                code = ""
+                record.operator_ws = ws
+                record.operator_name = username if isinstance(username, str) else None
+                robot = record.robot_ws
+                hostname = record.hostname
+                location = record.location if record.location else record.hostname
+                mode = record.mode
+                robot_id = record.robot_id
+        if code:
+            await _send(ws, _error(code))
+            log.info("attach robot_id=%s code=%s", record.robot_id, code)
+            return
+        await _send(
+            ws,
+            {
+                "v": 1,
+                "type": "attached",
+                "robot_id": robot_id,
+                "hostname": hostname,
+                "location": location,
+                "mode": mode,
+            },
+        )
+        if robot is not None:
+            with contextlib.suppress(ConnectionClosed):
+                await _send(robot, {"v": 1, "type": "operator_attached"})
+        log.info(
+            "attach robot_id=%s username=%s code=attached", robot_id, username
+        )
+        self._kick_fleet()
+
+    async def _release(self, ws: Any) -> None:
+        if ws not in self._ws_user:
+            await _send(ws, _error("unknown_type"))
+            return
+        await self._release_hold(ws, reply=True)
+
+    async def _sign_out(self, ws: Any) -> None:
+        username = self._ws_user.get(ws)
+        if self._held_record(ws) is not None:
+            await self._release_hold(ws, reply=False)
+        if username is not None and self._operator_ws.get(username) is ws:
+            self._operator_ws.pop(username, None)
+        self._ws_user.pop(ws, None)
+        if username is not None and self._operator_ws.get(username) is None:
+            self._login_hash.pop(username, None)
+        await _send(ws, {"v": 1, "type": "signed_out"})
+        log.info("sign_out username=%s code=signed_out", username or "")
+
+    async def _release_hold(self, ws: Any, reply: bool) -> bool:
+        """Clear this socket's hold. A logged-in socket with no hold still gets ``released``."""
+        record = self._held_record(ws)
+        if record is None:
+            if reply and ws in self._ws_user:
+                await _send(ws, {"v": 1, "type": "released"})
+            return False
+        robot: Any = None
+        async with record.lock:
+            if record.operator_ws is not ws:
+                robot = None
+                cleared = False
+            else:
+                record.operator_ws = None
+                record.operator_name = None
+                record.start_in_progress = False
+                record.stale_deadline = None
+                robot = record.robot_ws
+                cleared = True
+        if not cleared:
+            if reply and ws in self._ws_user:
+                await _send(ws, {"v": 1, "type": "released"})
+            return False
+        self._mark_after_detach(record)
+        if robot is not None and robot is not ws:
+            with contextlib.suppress(ConnectionClosed):
+                await _send(robot, {"v": 1, "type": "operator_detached"})
+        if reply:
+            await _send(ws, {"v": 1, "type": "released"})
+            log.info("release robot_id=%s code=released", record.robot_id)
+        self._kick_fleet()
+        return True
+
+    def _held_record(self, ws: Any) -> Optional[RobotRecord]:
+        for record in self.robots.values():
+            if record.operator_ws is ws:
+                return record
+        return None
+
+    def _is_stale(self, record: RobotRecord) -> bool:
+        """Open socket and a ``last_seen`` older than 30s. Missing is not stale."""
+        if record.robot_ws is None:
+            return False
+        age = age_seconds(record.last_seen)
+        if age is None:
+            return False
+        return age >= registry_store.STALE_AFTER_S
+
+    def _online_for_attach(self, record: RobotRecord) -> bool:
+        if record.robot_ws is None:
+            return False
+        if record.operator_ws is not None:
+            return True
+        return not self._is_stale(record)
+
+    def _mark_after_detach(self, record: RobotRecord) -> None:
+        record.stale_deadline = None
+        if self._is_stale(record):
+            record.sweep_mark = "offline"
+        else:
+            record.sweep_mark = None
+
+    def _clear_sweep_if_fresh(self, record: RobotRecord) -> None:
+        if self._is_stale(record):
+            return
+        if record.sweep_mark is None and record.stale_deadline is None:
+            return
+        record.sweep_mark = None
+        record.stale_deadline = None
+        self._kick_fleet()
+
+    def _apply_status(self, record: RobotRecord, phase: object) -> None:
+        if phase not in _PHASES:
+            return
+        if phase == "stopped":
+            record.stale_deadline = None
+        changed = phase != record.phase
+        if changed:
+            record.phase = str(phase)
+            update_robot_phase(self._db, record.robot_id, record.phase)
+        if phase in ("ready", "stopped", "error") and record.start_in_progress:
+            record.start_in_progress = False
+            changed = True
+        if changed:
+            self._kick_fleet()
+
+    async def _maintain(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(registry_store.MAINTAIN_INTERVAL_S)
+            except asyncio.CancelledError:
+                raise
+            try:
+                await self._maintain_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.error("registry maintain failed: %s", type(exc).__name__)
+
+    async def _maintain_once(self) -> None:
+        await self._reload_operators()
+        await self._reload_robots()
+
+    async def _reload_operators(self) -> None:
+        for username, secret_hash, disabled in operator_rows(self._db):
+            seen = self._fail_hash.get(username, _UNSEEN)
+            if seen is not _UNSEEN and seen != secret_hash:
+                self._fail_count.pop(username, None)
+                self._fail_hash[username] = secret_hash
+            ws = self._operator_ws.get(username)
+            if ws is None:
+                continue
+            logged = self._login_hash.get(username)
+            if disabled or (logged is not None and logged != secret_hash):
+                await self._disconnect_username(ws)
+
+    async def _disconnect_username(self, ws: Any) -> None:
+        await self._drop(ws)
+        with contextlib.suppress(ConnectionClosed):
+            await ws.close()
+
+    async def _reload_robots(self) -> None:
+        # Password sessions live in ``self.sessions`` and are not in this set.
+        ids = robot_ids(self._db)
+        for robot_id in list(self.robots):
+            record = self.robots.get(robot_id)
+            if record is None:
+                continue
+            if robot_id not in ids:
+                await self._forget_robot(record)
+                continue
+            await self._sweep_robot(record)
+
+    async def _forget_robot(self, record: RobotRecord) -> None:
+        if self.robots.get(record.robot_id) is not record:
+            return
+        if record.robot_id in robot_ids(self._db):
+            return
+        self.robots.pop(record.robot_id, None)
+        robot = record.robot_ws
+        operator = record.operator_ws
+        record.robot_ws = None
+        record.operator_ws = None
+        record.operator_name = None
+        record.start_in_progress = False
+        record.stale_deadline = None
+        record.sweep_mark = None
+        if operator is not None and operator is not robot:
+            with contextlib.suppress(ConnectionClosed):
+                await _send(operator, _error("offline"))
+        if robot is not None:
+            with contextlib.suppress(ConnectionClosed):
+                await robot.close()
+        log.info("clear-robot robot_id=%s code=offline", record.robot_id)
+        self._kick_fleet()
+
+    async def _sweep_robot(self, record: RobotRecord) -> None:
+        # Stale is an open socket with an old stamp. A gone socket is ``offline``
+        # from ``_drop`` and does not get ``stop``.
+        if record.robot_ws is None:
+            record.stale_deadline = None
+            return
+        if not self._is_stale(record):
+            if record.sweep_mark is not None or record.stale_deadline is not None:
+                record.sweep_mark = None
+                record.stale_deadline = None
+                self._kick_fleet()
+            return
+        if record.operator_ws is None:
+            record.stale_deadline = None
+            if record.approval != "approved":
+                return
+            if record.sweep_mark != "offline":
+                record.sweep_mark = "offline"
+                self._kick_fleet()
+            return
+        if record.sweep_mark != "stale":
+            record.sweep_mark = "stale"
+            record.stale_deadline = (
+                time.monotonic() + registry_store.STALE_STOP_WAIT_S
+            )
+            operator = record.operator_ws
+            if operator is not None:
+                with contextlib.suppress(ConnectionClosed):
+                    await _send(operator, _error("stale"))
+            self._kick_fleet()
+            return
+        if record.stale_deadline is None:
+            return
+        if time.monotonic() < record.stale_deadline:
+            return
+        await self._stale_stop(record)
+
+    async def _stale_stop(self, record: RobotRecord) -> None:
+        robot = record.robot_ws
+        operator = record.operator_ws
+        async with record.lock:
+            if record.robot_ws is not robot or record.operator_ws is not operator:
+                return
+            if robot is None or operator is None:
+                return
+            record.operator_ws = None
+            record.operator_name = None
+            record.start_in_progress = False
+            record.stale_deadline = None
+        record.sweep_mark = "offline"
+        with contextlib.suppress(ConnectionClosed):
+            await _send(robot, {"v": 1, "type": "stop"})
+        with contextlib.suppress(ConnectionClosed):
+            await _send(operator, {"v": 1, "type": "operator_detached"})
+        log.info("stale robot_id=%s code=stop", record.robot_id)
         self._kick_fleet()
 
     def _pending_count(self) -> int:

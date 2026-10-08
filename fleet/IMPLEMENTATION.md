@@ -58,7 +58,7 @@ order:
    `teleop-robot` command.
 2. **EC2.** If this milestone changes registry or signalling code:
    the rsync from this PC, then the start command on EC2. If it
-   does not: say that EC2 is left as it is.
+   does not: only the start command, with no rsync.
 3. **This PC.** If this milestone changes the operator app: from
    this PC run `packaging/debian/build.sh`, then `dpkg -i`, then
    the `teleop-operator` command. If it does not: only the
@@ -68,7 +68,7 @@ Do not add a pytest section, a design section, or a second copy of
 the commands in the chat. `fleet/docs/F1_usage.md` is the shape.
 The implementer does not run the lab.
 
-F0 is this plan. The next session implements F2.
+F0 is this plan. The next session implements F3.
 
 F1, F2, and F3 must not change what the lab speaks today. Their
 real-arm step is a regression of the current ID-and-password
@@ -90,14 +90,14 @@ then `done`.
 | -- | --------- | ------ | ------ |
 | F0 | This plan | done | done |
 | F1 | Registry directory beside the password login | done | done |
-| F2 | Approve, attach, release, and stale | remaining | remaining |
+| F2 | Approve, attach, release, and stale | done | done |
 | F3 | Robot identity file, wire unchanged | remaining | remaining |
 | F4 | Fleet page and robot token on the wire | remaining | remaining |
 | F5 | Release, sign out, and remove the password login | remaining | remaining |
 
-**Next to implement:** F2. Approve, attach, release, sign out, and
-the stale sweep. The robot app and the operator app stay as they
-are. The lab still logs in with the robot ID and password.
+**Next to implement:** F3. The robot identity file on disk. `launch`
+still asks for a password, and the lab still logs in with the
+robot ID and password.
 
 **Not in F1–F5.** A hired-operator marketplace. An admin role on
 the page. Revoking an approval from the dashboard. GPS. TLS on
@@ -312,7 +312,7 @@ the gripper with one `g` or `h` tap. `commit: done`.
 
 ---
 
-### F2 — Approve, attach, release, and stale — STATUS: remaining
+### F2 — Approve, attach, release, and stale — STATUS: done
 
 **Goal.** A logged-in operator can approve a robot and attach to
 one of them. The existing inventory, config, start, stop, and
@@ -405,6 +405,10 @@ drive is still the robot ID and password, one tap of g or h. The
 implementer does not run it.
 ```
 
+F2 landed. Approve, attach, release, and the stale sweep are in
+the registry. The lab still logs in with the robot ID and password.
+The user drove the gripper with one `g` or `h` tap. `commit: done`.
+
 ---
 
 ### F3 — Robot identity file, wire unchanged — STATUS: remaining
@@ -435,10 +439,14 @@ pages. Do not commit or push. Do not drive the arm.
 
 **Verify:** the same pytest command as F1.
 
-**Lab:** write `fleet/docs/F3_usage.md`. The robot terminal still
-asks for a password. The real-arm check is the current teleop.
-The file helper is proven by pytest. The implementer does not run
-the arm and does not rsync EC2.
+**Lab:** write `fleet/docs/F3_usage.md` in the same shape as
+`fleet/docs/F2_usage.md`. Robot code changes, so that section is
+`packaging/debian/build.sh` on this PC, the rsync of the
+`teleop-robot` deb, `dpkg -i` on the robot PC, then `teleop-robot`.
+EC2 has no code change, so only the signalling start command.
+This PC has no operator change, so only `teleop-operator`. The
+terminal still asks for a password. One `g` or `h`. The
+implementer does not run it.
 
 **Session prompt:**
 
@@ -459,9 +467,15 @@ edit the operator app or the registry. Do not commit or push. Do not
 SSH. Do not rsync EC2. Do not start mlink, Docker, or the arm. Do
 not send g or h. Do not change the status board.
 
-When F3 works, list files, print the pytest command, and write
-fleet/docs/F3_usage.md. The real-arm check is the current teleop,
-one tap of g or h. The implementer does not run it.
+When F3 works, list files, print the pytest command, and stop.
+Write fleet/docs/F3_usage.md only, in the same shape as
+fleet/docs/F2_usage.md. Assume the robot app and EC2 signalling
+are stopped. Robot PC: code changed, so build.sh on this PC, rsync
+the teleop-robot deb, dpkg -i, then the teleop-robot command. EC2:
+no code change, so only the signalling start command, no rsync.
+This PC: no operator change, so only the teleop-operator command.
+The terminal still asks for a password. One tap of g or h. The
+implementer does not run it.
 ```
 
 ---

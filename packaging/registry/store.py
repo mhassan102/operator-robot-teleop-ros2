@@ -9,13 +9,16 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
 
 FLEET_ITERATIONS = 200_000
 PENDING_CAP = 500
 STALE_AFTER_S = 30.0
+STALE_STOP_WAIT_S = 30.0
+MAINTAIN_INTERVAL_S = 1.0
+PENDING_KEEP_S = 7 * 24 * 60 * 60
 LAST_SEEN_INTERVAL_S = 30.0
 FLEET_COALESCE_S = 0.05
 
@@ -397,6 +400,72 @@ def clear_robot(conn: sqlite3.Connection, robot_id: str) -> bool:
     conn.commit()
     _harden_conn(conn)
     return cur.rowcount == 1
+
+
+def set_robot_approval(
+    conn: sqlite3.Connection, robot_id: str, approval: str
+) -> None:
+    conn.execute(
+        "UPDATE robots SET approval=? WHERE robot_id=?",
+        (approval, robot_id),
+    )
+    conn.commit()
+    _harden_conn(conn)
+
+
+def update_robot_phase(conn: sqlite3.Connection, robot_id: str, phase: str) -> None:
+    """Phase only. ``last_seen`` stays the register or presence stamp."""
+    conn.execute(
+        "UPDATE robots SET phase=? WHERE robot_id=?",
+        (phase, robot_id),
+    )
+    conn.commit()
+    _harden_conn(conn)
+
+
+def delete_old_pending(
+    conn: sqlite3.Connection, now: Optional[datetime] = None
+) -> None:
+    """Drop pending rows with no socket whose ``last_seen`` is older than 7 days.
+
+    Called from ``Registry`` startup, before any socket exists. Approved rows
+    stay. A missing ``last_seen`` is not old.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(seconds=PENDING_KEEP_S)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    conn.execute(
+        """
+        DELETE FROM robots
+        WHERE approval = 'pending'
+          AND last_seen IS NOT NULL
+          AND last_seen < ?
+        """,
+        (cutoff,),
+    )
+    conn.commit()
+    _harden_conn(conn)
+
+
+def robot_ids(conn: sqlite3.Connection) -> set:
+    conn.commit()
+    rows = conn.execute("SELECT robot_id FROM robots").fetchall()
+    conn.commit()
+    return {row["robot_id"] for row in rows}
+
+
+def operator_rows(conn: sqlite3.Connection) -> list:
+    conn.commit()
+    rows = conn.execute(
+        "SELECT username, secret_hash, disabled FROM operators"
+    ).fetchall()
+    conn.commit()
+    return [
+        (row["username"], bytes(row["secret_hash"]), int(row["disabled"]))
+        for row in rows
+    ]
 
 
 def _private_dir(parent: str) -> None:
