@@ -68,13 +68,12 @@ Do not add a pytest section, a design section, or a second copy of
 the commands in the chat. `fleet/docs/F1_usage.md` is the shape.
 The implementer does not run the lab.
 
-F0 is this plan. The next session implements F3.
+F0 is this plan. The next session implements F4.
 
-F1, F2, and F3 must not change what the lab speaks today. Their
-real-arm step is a regression of the current ID-and-password
-teleop. F4 changes the apps, so those apps must not be installed
-on the lab PCs. The first fleet drive of the real arm is F5, after
-the user updates EC2.
+F1, F2, and F3 keep the robot ID and password on the wire. F4 is
+the first lab of the fleet page. EC2 already has the F2 registry,
+so F4 does not rsync it. The robot package and the operator package
+are installed. F5 removes the password login.
 
 ---
 
@@ -91,13 +90,12 @@ then `done`.
 | F0 | This plan | done | done |
 | F1 | Registry directory beside the password login | done | done |
 | F2 | Approve, attach, release, and stale | done | done |
-| F3 | Robot identity file, wire unchanged | remaining | remaining |
+| F3 | Robot identity file, wire unchanged | done | done |
 | F4 | Fleet page and robot token on the wire | remaining | remaining |
 | F5 | Release, sign out, and remove the password login | remaining | remaining |
 
-**Next to implement:** F3. The robot identity file on disk. `launch`
-still asks for a password, and the lab still logs in with the
-robot ID and password.
+**Next to implement:** F4. The robot registers with its token file.
+The operator logs in with an operator username and opens `/fleet`.
 
 **Not in F1–F5.** A hired-operator marketplace. An admin role on
 the page. Revoking an approval from the dashboard. GPS. TLS on
@@ -411,7 +409,7 @@ The user drove the gripper with one `g` or `h` tap. `commit: done`.
 
 ---
 
-### F3 — Robot identity file, wire unchanged — STATUS: remaining
+### F3 — Robot identity file, wire unchanged — STATUS: done
 
 **Goal.** A robot can load a stable id and a device token from a
 `0600` file. `launch` does not use that file yet. The lab robot
@@ -478,6 +476,10 @@ The terminal still asks for a password. One tap of g or h. The
 implementer does not run it.
 ```
 
+F3 landed. The robot package can store a stable id and a device
+token. `launch` still asks for a password. The user drove the
+gripper with one `g` or `h` tap. `commit: done`.
+
 ---
 
 ### F4 — Fleet page and robot token on the wire — STATUS: remaining
@@ -485,8 +487,8 @@ implementer does not run it.
 **Goal.** The robot registers with the token file. The operator
 logs in with a username and password, sees `/fleet`, and Operate
 opens the existing config page and `/operate`. Logout on the page
-still sends `logout` until F5. Do not install this build on the
-lab PCs. EC2 still speaks the password login.
+still sends `logout` until F5. EC2 already runs the F2 registry,
+so this milestone does not change it.
 
 **Read:** `fleet/ARCHITECTURE.md` section "1. Operator app", and
 `packaging/operator_app/host.py`, `console.py`, `login.py`,
@@ -528,19 +530,25 @@ lab PCs. EC2 still speaks the password login.
   because the scaffold is still there for any leftover password
   client.
 
-**Do not:** rsync EC2. Do not install this operator or this robot
-app on the lab machines. The current EC2 process rejects a token
-register. Do not add Docker or ROS to the operator package. Do not
-rewrite `operate.js`. Do not commit or push. Do not drive the arm.
-Do not edit the status board.
+**Do not:** edit the registry or `turn/signalling/server.py`. Do not
+rsync EC2 yourself. Do not install the packages yourself. Do not
+add Docker or ROS to the operator package. Do not rewrite
+`operate.js`. Do not commit or push. Do not drive the arm. Do not
+edit the status board.
 
 **Verify:** the same pytest command as F1. It must pass without
 PyQt installed.
 
-**Lab:** write `fleet/docs/F4_usage.md`. The steps say not to
-replace the lab apps and not to restart EC2. The user's check is
-the previous build, still the ID-and-password teleop. The new page
-is proven by pytest.
+**Lab:** write `fleet/docs/F4_usage.md` in the same shape as
+`fleet/docs/F3_usage.md`. Robot code changes, so that section is
+`build.sh`, rsync of the `teleop-robot` deb, `dpkg -i`, then
+`teleop-robot`. The terminal prints the id and does not ask for a
+password. EC2 has no code change, so only the signalling start
+command, then `add-operator` if that account is not already there.
+This PC changes, so `build.sh`, `dpkg -i` of `teleop-operator`,
+then `teleop-operator`. Login is the operator username and
+password. Approve the robot, Operate, Review, Start, one `g` or
+`h`, then Stop. The implementer does not run it.
 
 **Session prompt:**
 
@@ -567,15 +575,23 @@ Sign out. That is F5. Do not delete the password scaffold in the
 registry. test_registry.py still expects a password register to
 reply {"v":1,"type":"registered"} with no approval field.
 
-Do not rsync EC2. Do not install this build on the lab PCs. Do not
-commit or push. Do not SSH. Do not start mlink, Docker, or the arm.
-Do not send g or h. Do not change the status board. Tests must pass
-without PyQt.
+Do not edit the registry or turn/signalling/server.py. Do not
+commit or push. Do not SSH. Do not rsync EC2. Do not install the
+packages. Do not start mlink, Docker, or the arm. Do not send g or
+h. Do not change the status board. Tests must pass without PyQt.
 
-When F4 works, list files, print the pytest command, and write
-fleet/docs/F4_usage.md. Those steps tell the user not to replace the
-lab apps. The real-arm check stays the previous ID-and-password
-teleop. The implementer does not run it.
+When F4 works, list files, print the pytest command, and stop.
+Write fleet/docs/F4_usage.md only, in the same shape as
+fleet/docs/F3_usage.md. Assume the robot app and EC2 signalling
+are stopped. Robot PC: code changed, so build.sh on this PC, rsync
+the teleop-robot deb, dpkg -i, then teleop-robot. The terminal
+prints the id and does not ask for a password. EC2: no code
+change, so only the signalling start command, no rsync, then
+add-operator if the account is not already there. This PC: operator
+code changed, so build.sh, dpkg -i of teleop-operator, then
+teleop-operator. Login is the operator username and password.
+Approve, Operate, Review, Start, one tap of g or h, then Stop. The
+implementer does not run it.
 ```
 
 ---
