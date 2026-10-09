@@ -446,3 +446,91 @@ kbd {
   margin: 12px 0 0;
   color: var(--muted);
 }
+
+.fleet-table th,
+.fleet-table td {
+  vertical-align: middle;
+}
+
+.fleet-mark,
+.fleet-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fleet-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+
+.fleet-dot-pending {
+  background: #e6b325;
+}
+
+.fleet-dot-online {
+  background: #3cba6f;
+}
+
+.fleet-dot-offline {
+  background: #e15b5b;
+}
+
+.fleet-mode-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.fleet-mode-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.fleet-mode-manual .fleet-mode-icon {
+  color: #e4d2b0;
+}
+
+.fleet-mode-autonomous .fleet-mode-icon {
+  color: #8ebfff;
+}
+
+.fleet-approve,
+.fleet-operate {
+  min-width: 92px;
+  padding: 6px 14px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.fleet-approve {
+  color: #1c1404;
+  background: #e2b340;
+}
+
+.fleet-approve:hover {
+  background: #f0c65a;
+}
+
+.fleet-operate {
+  color: #f4fffa;
+  background: #2f8f63;
+}
+
+.fleet-operate:hover {
+  background: #38a572;
+}
+
+.fleet-approve:focus-visible,
+.fleet-operate:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}

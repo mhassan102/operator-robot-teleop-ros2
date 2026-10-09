@@ -23,6 +23,7 @@ from typing import Any
 
 from packaging.robot_app.credentials import load_or_create, read_profile, write_profile
 from packaging.robot_app.inventory import format_inventory, live_inventory
+from packaging.robot_app.place import lookup_place
 from packaging.robot_app.session import (
     DEFAULT_REGISTRY,
     RobotState,
@@ -136,6 +137,11 @@ def launch(
     emit(id_line(state.robot_id))
     if created:
         emit(_STORED + str(path))
+    if state.location == "":
+        looked_up = lookup_place()
+        if looked_up:
+            state.location = looked_up
+            emit(f"Location  {looked_up}")
 
     def on_status(status: str) -> None:
         emit(status_line(state.robot_id, status))
