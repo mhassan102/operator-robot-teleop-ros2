@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# SO-ARM laptop camera: USB capture -> x264enc -> MediaMTX on TCP 8889.
+# SO-ARM laptop cameras: USB capture -> x264enc -> MediaMTX on TCP 8889.
 # DEVICE defaults to /dev/video2 and that node must be USB2.0_CAM1.
+# The integrated camera is published as /top/ on UDP 5006 when it is present.
 # SO_ARM_CAMERA_PARSE_ONLY=1 prints the device and exits before MediaMTX.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -112,6 +113,17 @@ paths:
       m=video 5004 RTP/AVP 96
       a=rtpmap:96 H264/90000
       a=fmtp:96 packetization-mode=1
+  top:
+    source: udp+rtp://127.0.0.1:5006
+    rtpSDP: |
+      v=0
+      o=- 0 0 IN IP4 127.0.0.1
+      s=top
+      c=IN IP4 127.0.0.1
+      t=0 0
+      m=video 5006 RTP/AVP 96
+      a=rtpmap:96 H264/90000
+      a=fmtp:96 packetization-mode=1
 EOF
 
 if [[ -n "${SO_ARM_MEDIAMTX_BIN:-}" ]]; then
@@ -135,4 +147,47 @@ disown || true
 
 echo "SO-ARM camera publishing ${DEVICE} -> RTP 127.0.0.1:5004"
 echo "  page: TCP 8889 /cam/"
+
+top_device="${TOP_DEVICE:-}"
+if [[ -z "${top_device}" ]]; then
+  shopt -s nullglob
+  for candidate in /dev/v4l/by-id/*Integrated_Camera*-video-index0; do
+    top_device="${candidate}"
+    break
+  done
+  shopt -u nullglob
+  if [[ -z "${top_device}" && -e /dev/video0 ]]; then
+    top_device="/dev/video0"
+  fi
+fi
+
+top_skip=""
+if [[ -z "${top_device}" ]]; then
+  top_skip="no integrated camera"
+elif [[ ! -e "${top_device}" ]]; then
+  top_skip="${top_device} does not exist"
+else
+  top_node="$(basename "$(readlink -f "${top_device}")")"
+  top_name=""
+  if [[ -f "${SYSFS}/${top_node}/name" ]]; then
+    top_name="$(tr -d '\r\n' < "${SYSFS}/${top_node}/name")"
+  fi
+  if [[ "${top_name,,}" == *metadata* ]]; then
+    top_skip="${top_device} is metadata"
+  elif [[ "$(readlink -f "${top_device}")" == "$(readlink -f "${DEVICE}")" ]]; then
+    top_skip="same device as the gripper camera"
+  fi
+fi
+
+if [[ -n "${top_skip}" ]]; then
+  echo "SO-ARM top camera not started (${top_skip})"
+else
+  : > "${ROOT}/logs/gst-top.log"
+  DEVICE="${top_device}" UDP_PORT=5006 nohup "${ROOT}/gst-publish.sh" >> "${ROOT}/logs/gst-top.log" 2>&1 &
+  echo $! > "${ROOT}/run/gst-top.pid"
+  disown || true
+  echo "SO-ARM top camera ${top_device} name ${top_name} -> RTP 127.0.0.1:5006"
+  echo "  page: TCP 8889 /top/"
+fi
+
 echo "stop with: ${ROOT}/stop.sh"

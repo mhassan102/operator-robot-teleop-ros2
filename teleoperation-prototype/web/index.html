@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=1280">
   <title>Teleop · lab-arm · localhost</title>
-  <link rel="stylesheet" href="/operate.css?v=f7v">
+  <link rel="stylesheet" href="/operate.css?v=f9v">
 </head>
 <body>
   <div class="shell">
@@ -24,10 +24,16 @@
     </header>
 
     <main class="stage">
-      <section class="camera" aria-label="Camera">
+      <section class="camera" aria-label="Cameras">
         <div class="camera-frame">
+          <span class="camera-label">gripper</span>
           <video id="camera" autoplay playsinline muted></video>
-          <p class="camera-msg" id="camera-msg">camera: connecting…</p>
+          <p class="camera-msg" id="camera-msg">gripper: connecting…</p>
+        </div>
+        <div class="camera-frame">
+          <span class="camera-label">top</span>
+          <video id="camera-top" autoplay playsinline muted></video>
+          <p class="camera-msg" id="camera-top-msg">top: connecting…</p>
         </div>
       </section>
 
@@ -112,7 +118,7 @@
     </footer>
   </div>
   <script src="/reader.js"></script>
-  <script src="/operate.js?v=f9v"></script>
+  <script src="/operate.js?v=f10v"></script>
   <script src="/session_bar.js"></script>
 </body>
 </html>

@@ -132,6 +132,9 @@ def test_mediamtx_config_shape() -> None:
     assert "webrtcAddress: :8889" in text
     assert "webrtcIPsFromInterfacesList: [tailscale0]" in text
     assert "udp+rtp://127.0.0.1:5004" in text
+    assert "udp+rtp://127.0.0.1:5006" in text
+    assert "\n  top:\n" in text
+    assert "gst-top.pid" in (_REPO / "video" / "so-arm" / "stop.sh").read_text(encoding="utf-8")
     assert "tailscale ip -4" in text
     parse_at = text.index('SO_ARM_CAMERA_PARSE_ONLY:-}" == "1"')
     publish_at = text.index("gst-publish.sh")

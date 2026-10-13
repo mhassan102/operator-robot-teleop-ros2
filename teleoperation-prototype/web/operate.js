@@ -218,21 +218,34 @@ async function postNamedPose(name) {
   }
 }
 
-function cameraWhepUrl() {
+function cameraPage() {
   const raw = new URLSearchParams(window.location.search).get("cam") || DEFAULT_CAM;
-  let base = (raw || DEFAULT_CAM).trim();
-  base = base.replace(/\/+$/, "");
+  let base = (raw || DEFAULT_CAM).trim().replace(/\/+$/, "");
   if (!base) {
-    base = DEFAULT_CAM;
+    base = DEFAULT_CAM.replace(/\/+$/, "");
   }
-  if (!/\/whep$/i.test(base)) {
-    base = base + "/whep";
-  }
-  return base;
+  return base.replace(/\/whep$/i, "");
 }
 
-function setCameraMsg(text) {
-  const el = document.getElementById("camera-msg");
+function pageWithName(page, name) {
+  const trimmed = page.replace(/\/+$/, "");
+  const slash = trimmed.lastIndexOf("/");
+  if (slash < "http://".length) {
+    return trimmed + "/" + name;
+  }
+  return trimmed.slice(0, slash + 1) + name;
+}
+
+function whepUrl(page) {
+  const base = page.replace(/\/+$/, "");
+  if (/\/whep$/i.test(base)) {
+    return base;
+  }
+  return base + "/whep";
+}
+
+function setCameraMsg(id, text) {
+  const el = document.getElementById(id);
   if (!el) {
     return;
   }
@@ -245,30 +258,41 @@ function setCameraMsg(text) {
   }
 }
 
-function startCamera() {
-  const video = document.getElementById("camera");
+function startOneCamera(videoId, msgId, label, page) {
+  const video = document.getElementById(videoId);
   if (!video) {
-    return;
+    return null;
   }
   if (typeof MediaMTXWebRTCReader !== "function") {
-    setCameraMsg("camera unavailable");
-    return;
+    setCameraMsg(msgId, label + ": unavailable");
+    return null;
   }
-  const whepUrl = cameraWhepUrl();
-  setCameraMsg("camera: connecting…");
-  const reader = new MediaMTXWebRTCReader({
-    url: whepUrl,
+  setCameraMsg(msgId, label + ": connecting…");
+  return new MediaMTXWebRTCReader({
+    url: whepUrl(page),
     onError: () => {
-      setCameraMsg("camera: connecting…");
+      setCameraMsg(msgId, label + ": connecting…");
     },
     onTrack: (event) => {
       video.srcObject = event.streams[0];
       video.play().catch(() => {});
-      setCameraMsg("");
+      setCameraMsg(msgId, "");
     },
   });
+}
+
+function startCamera() {
+  const page = cameraPage();
+  const readers = [
+    startOneCamera("camera", "camera-msg", "gripper", page),
+    startOneCamera("camera-top", "camera-top-msg", "top", pageWithName(page, "top")),
+  ];
   window.addEventListener("beforeunload", () => {
-    reader.close();
+    readers.forEach((reader) => {
+      if (reader) {
+        reader.close();
+      }
+    });
   });
 }
 

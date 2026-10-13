@@ -22,5 +22,6 @@ kill_pidfile() {
 }
 
 kill_pidfile run/gst.pid
+kill_pidfile run/gst-top.pid
 kill_pidfile run/mediamtx.pid
 echo "stopped"
