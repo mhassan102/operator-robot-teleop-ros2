@@ -1,10 +1,15 @@
-"""ROS-free SO-ARM gripper policy: one 48-tick step per press, then hold.
+"""ROS-free SO-ARM gripper policy.
 
-/gripper_safe is still one float. 1.0 and 0.75 request an open step. 0.0 and
-0.25 request a close step. Any other value, including 0.5, holds. A repeated
-float is the safety node's latch, not another press. The first sample after
-the link goes live is that latch and does not move the jaw. Deadman drops
-torque, clears the step, and does not write a close.
+/gripper_safe is still one float. The keyboard tokens are exact: 1.0 and
+0.75 request an open step, 0.0 and 0.25 request a close step, and 0.5 holds.
+A repeated token is a latch, not another press. The first keyboard sample
+after the link goes live is that latch and does not move the jaw.
+
+Any other finite value is a leader jaw fraction, 0 closed to 1 open. Each
+tick walks at most 48 ticks toward that opening, including while the same
+fraction keeps arriving, and holds once it is there. A leader fraction on
+the first live sample starts that walk. Deadman drops torque, clears the
+goal, and does not write a close.
 """
 
 from __future__ import annotations
@@ -59,9 +64,21 @@ def clamp_tiny_delta(target: int, anchor: int, max_delta: int) -> int:
 OPEN_LEVEL = 0.75
 CLOSE_LEVEL = 0.25
 
+# Exact floats the operator keyboard sends. Leader fractions avoid these.
+# packaging.operator_app.leader.KEYBOARD_TOKENS matches this tuple.
+KEYBOARD_TOKENS = (0.0, 0.25, 0.5, 0.75, 1.0)
+KEYBOARD_TOKEN_TOLERANCE = 1e-4
+
+
+def is_keyboard_gripper(value: float) -> bool:
+    """True for g/h step tokens and hold. Anything else is a jaw fraction."""
+    return any(
+        abs(float(value) - token) <= KEYBOARD_TOKEN_TOLERANCE for token in KEYBOARD_TOKENS
+    )
+
 
 def gripper_motion(value: float) -> int:
-    """+1 open one step, -1 close one step, 0 hold."""
+    """+1 open one step, -1 close one step, 0 hold. Keyboard tokens only."""
     if value >= OPEN_LEVEL:
         return 1
     if value <= CLOSE_LEVEL:
@@ -121,11 +138,17 @@ class GripperController:
         present = int(present_position)
         value = float(self._last_value)
         if not self._live:
-            # Safety is already publishing the latched float. Adopting it
-            # keeps a reconnect or the initial 0.0 from taking a step.
+            # A keyboard float is adopted so a reconnect or the initial 0.0
+            # does not take a step. A leader fraction starts walking now.
             self._live = True
             self._seen = value
+            if not is_keyboard_gripper(value):
+                self._track_position(present, value)
+                return self._live_output()
             self._output = self._clamp_goal(present)
+            return self._live_output()
+        if not is_keyboard_gripper(value):
+            self._track_position(present, value)
             return self._live_output()
         if value != self._seen:
             motion = gripper_motion(value)
@@ -135,6 +158,19 @@ class GripperController:
                 self._goal = self._clamp_goal(base + motion * self.max_delta_ticks)
                 self._output = self._goal
         return self._live_output()
+
+    def _track_position(self, present: int, value: float) -> None:
+        """Walk from the last goal toward this jaw fraction, at most one step."""
+        base = self._goal if self._goal is not None else int(present)
+        target = self._clamp_goal(
+            map_gripper_to_ticks(value, self.range_min, self.range_max)
+        )
+        stepped = self._clamp_goal(
+            clamp_tiny_delta(target, base, self.max_delta_ticks)
+        )
+        self._goal = stepped
+        self._output = stepped
+        self._seen = float(value)
 
     @property
     def goal(self) -> int | None:

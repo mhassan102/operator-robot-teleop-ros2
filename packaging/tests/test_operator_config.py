@@ -378,6 +378,8 @@ def test_config_page_values() -> None:
     try:
         page = (_WEB / "config.html").read_text(encoding="utf-8")
         assert "Review" in page and "Start" in page
+        assert 'id="input"' in page
+        assert "Leader arm" in page
         assert 'id="session-stop"' in page
         assert 'id="session-release"' in page
         assert 'id="session-signout"' in page
@@ -408,6 +410,11 @@ def test_config_page_values() -> None:
             item["label"] for item in snap["choices"]["arm"] if item["value"] == FOLLOWER
         )
         assert snap["selected"]["video"] == "/dev/video2"
+        assert snap["selected"]["input"] == "keyboard"
+        assert list(snap["choices"]["input"]) == [
+            {"label": "Keyboard", "value": "keyboard"},
+            {"label": "Leader arm", "value": "leader"},
+        ]
         joined = " ".join(item["label"] for item in snap["choices"]["video"])
         assert "Metadata" not in joined
         assert snap["operator_network"] == "Operator network: wlo1"

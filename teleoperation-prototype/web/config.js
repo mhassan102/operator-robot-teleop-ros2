@@ -10,7 +10,8 @@
     iface1: document.getElementById("iface1"),
     iface2: document.getElementById("iface2"),
     arm: document.getElementById("arm"),
-    video: document.getElementById("video")
+    video: document.getElementById("video"),
+    input: document.getElementById("input")
   };
 
   function follow(snapshot) {
@@ -68,7 +69,8 @@
       iface1: fields.iface1.value,
       iface2: fields.iface2.value || null,
       arm: fields.arm.value,
-      video: fields.video.value
+      video: fields.video.value,
+      input: fields.input ? fields.input.value : "keyboard"
     };
   }
 

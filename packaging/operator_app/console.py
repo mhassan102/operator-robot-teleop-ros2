@@ -48,6 +48,10 @@ from packaging.supervisor.operator_commands import (
 
 _MAX_BODY = 65536
 _CHOICE_KEYS = ("link", "iface1", "iface2", "arm", "video")
+_INPUT_CHOICES = (
+    {"label": "Keyboard", "value": "keyboard"},
+    {"label": "Leader arm", "value": "leader"},
+)
 _UNCONFIRMED = "The robot did not confirm stop."
 _REVIEW_FIRST = "Review the changed config before Start."
 _SIGNED_OUT = "Signed out."
@@ -202,12 +206,14 @@ class ConsoleApp:
                     "iface2": self._iface2,
                     "arm": self._arm,
                     "video": self._video,
+                    "input": self._input,
                 },
                 "choices": {
                     "iface1": _choice_json(self._iface1_choices),
                     "iface2": _choice_json(self._iface2_choices),
                     "arm": _choice_json(self._arm_choices),
                     "video": _choice_json(self._video_choices),
+                    "input": _INPUT_CHOICES,
                 },
             }
 
@@ -350,6 +356,8 @@ class ConsoleApp:
         if refused:
             self._assign(status=refused)
             return self.snapshot() | {"ok": False, "message": refused}
+        chosen = _normalize_input(raw.get("input"))
+        self._assign(accepted_input=chosen, input=chosen)
         try:
             await self._session.send_json(dict(accepted))
             await self._session.send_json({"v": 1, "type": "start"})
@@ -705,6 +713,8 @@ class ConsoleApp:
             self._iface2 = None
             self._arm = ""
             self._video = ""
+            self._input = "keyboard"
+            self._accepted_input = "keyboard"
             self._iface1_choices = []
             self._iface2_choices = []
             self._arm_choices = []
@@ -1016,12 +1026,14 @@ class ConsoleApp:
                 "iface2": self._iface2,
                 "arm": self._arm,
                 "video": self._video,
+                "input": self._input,
             },
             "choices": {
                 "iface1": _choice_json(self._iface1_choices),
                 "iface2": _choice_json(self._iface2_choices),
                 "arm": _choice_json(self._arm_choices),
                 "video": _choice_json(self._video_choices),
+                "input": _INPUT_CHOICES,
             },
         }
 
@@ -1046,6 +1058,8 @@ class ConsoleApp:
         self._iface2 = None
         self._arm = ""
         self._video = ""
+        self._input = "keyboard"
+        self._accepted_input = "keyboard"
         self._iface1_choices: list[Any] = []
         self._iface2_choices: list[Any] = []
         self._arm_choices: list[Any] = []
@@ -1065,6 +1079,14 @@ class ConsoleApp:
         self._returned = False
         self._mlink_up = False
 
+    def accepted_input(self) -> str:
+        """Input committed by Start. Keyboard does not open the leader port."""
+        with self._lock:
+            mode = self._accepted_input
+        if mode == "leader":
+            return "leader"
+        return "keyboard"
+
 
 def _empty_counts() -> dict[str, int]:
     return {
@@ -1081,6 +1103,12 @@ def _nonneg(value: Any) -> int:
     if value < 0:
         return 0
     return value
+
+
+def _normalize_input(value: Any) -> str:
+    if value == "leader":
+        return "leader"
+    return "keyboard"
 
 
 def _choice_tuple(message: Mapping[str, Any]) -> tuple[Any, ...]:

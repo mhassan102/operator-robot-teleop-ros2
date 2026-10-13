@@ -215,6 +215,66 @@ def test_gripper_keys_send_the_robot_datagram_and_ignore_the_rest(tmp_path: Path
         host.shutdown()
 
 
+def test_leader_input_sends_a_fraction_and_ignores_gripper_keys(tmp_path: Path) -> None:
+    from packaging.operator_app.leader import encode_gripper_fraction
+
+    robot = _robot_codec()
+    fake = _FakeUdp()
+    host = OperatorHost(
+        tmp_path,
+        "ws://127.0.0.1:9",
+        opener=lambda: fake,
+        clock=lambda: (10, 20),
+        timers=False,
+    )
+
+    class _ScriptLeader:
+        def __init__(self) -> None:
+            self.value: float | None = 0.4
+            self.started = 0
+            self.stopped = 0
+
+        def start(self, wait_s: float = 0.4) -> None:
+            self.started += 1
+
+        def stop(self) -> None:
+            self.stopped += 1
+
+        def fraction(self) -> float | None:
+            return self.value
+
+    script = _ScriptLeader()
+    host._leader = script  # type: ignore[assignment]
+    try:
+        host._connection = _Open()  # type: ignore[assignment]
+        host.session_id = "sess"
+        host._input_mode = "leader"
+        host.enable_link()
+        host.apply_key("g", True)
+        host.apply_key("h", True)
+        assert host._gripper == 0.5
+        host.command_sequence = 0
+        host.publish_command()
+        _kind, msg = robot.decode(fake.sent[-1])
+        assert msg.gripper == encode_gripper_fraction(0.4)
+        assert msg.gripper not in (0.0, 0.25, 0.5, 0.75, 1.0)
+        assert (msg.lx, msg.ly, msg.lz, msg.ax, msg.ay, msg.az) == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        script.value = None
+        host.publish_command()
+        _kind, held = robot.decode(fake.sent[-1])
+        assert held.gripper == 0.5
+        host._console._accepted_input = "leader"
+        conn = _Open()
+        host.attach_session(conn)
+        assert script.started == 1
+        assert host._input_mode == "leader"
+        host.detach_session(conn)
+        assert host._input_mode == "keyboard"
+        assert script.stopped >= 1
+    finally:
+        host.shutdown()
+
+
 def _command_grippers(fake: _FakeUdp, robot: Any) -> list[float]:
     values: list[float] = []
     for payload in fake.sent:

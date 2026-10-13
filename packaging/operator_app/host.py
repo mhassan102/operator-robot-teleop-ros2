@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 from packaging.operator_app.console import ConsoleApp
 from packaging.operator_app.helper import Helper
+from packaging.operator_app.leader import LeaderReader, encode_gripper_fraction
 from packaging.operator_app.keys import (
     COMMAND_RATE_HZ,
     COMMANDS,
@@ -119,6 +120,8 @@ class OperatorHost:
         self._state_session_id = ""
         self._state_disposition = ""
         self._pose: dict[str, float] | None = None
+        self._input_mode = "keyboard"
+        self._leader = LeaderReader()
 
     @property
     def heartbeat_armed(self) -> bool:
@@ -191,6 +194,10 @@ class OperatorHost:
 
     def disable_link(self) -> None:
         """Stop heartbeats first, then close the UDP socket."""
+        self._leader.stop()
+        with self._lock:
+            self._input_mode = "keyboard"
+            self._gripper = GRIPPER_HOLD
         with self._link_lock:
             self._hold = False
             self._armed = False
@@ -215,6 +222,12 @@ class OperatorHost:
     def apply_key(self, key: str, down: bool) -> None:
         direction = KEY_BINDINGS.get(key)
         if direction is None:
+            return
+        with self._lock:
+            leader = self._input_mode == "leader"
+        if leader:
+            if down:
+                log.info("KEY %s ignored (leader input)", direction)
             return
         if not direction_allowed(direction):
             if down:
@@ -274,6 +287,9 @@ class OperatorHost:
     def _note_gripper_sent(self) -> None:
         self._gripper_sent = self._gripper
         self._gripper_unsent = False
+        if self._input_mode == "leader":
+            self._gripper_release = False
+            return
         if not self._gripper_release:
             return
         self._gripper_release = False
@@ -282,9 +298,14 @@ class OperatorHost:
         self._label = "hold"
 
     def attach_session(self, connection: WsConnection) -> str:
+        mode = self._console.accepted_input()
         with self._lock:
             old = self._end_locked()
+            self._input_mode = mode
             session_id = self._begin_locked(connection)
+        self._leader.stop()
+        if mode == "leader":
+            self._leader.start()
         if old is not None:
             old.close()
         return session_id
@@ -294,6 +315,8 @@ class OperatorHost:
             if self._connection is not connection:
                 return
             old = self._end_locked()
+            self._input_mode = "keyboard"
+        self._leader.stop()
         if old is not None:
             old.close()
 
@@ -379,6 +402,15 @@ class OperatorHost:
     def _emit_command_locked(self) -> None:
         if self._socket is None:
             return
+        if self._input_mode == "leader":
+            sample = self._leader.fraction()
+            self._motion = COMMANDS["stop"][:6]
+            if sample is None:
+                self._gripper = GRIPPER_HOLD
+                self._label = "leader-hold"
+            else:
+                self._gripper = encode_gripper_fraction(sample)
+                self._label = "leader"
         sec, nsec = self._stamp()
         motion = self._motion
         self._socket.send(

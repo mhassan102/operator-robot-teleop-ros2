@@ -440,3 +440,59 @@ def test_gripper_id_cannot_be_an_arm_joint() -> None:
     transport = FakeTransport()
     with pytest.raises(ForbiddenServoCommand):
         FeetechBus(transport, gripper_id=1)
+
+
+def test_leader_fraction_walks_to_the_opening_and_then_holds() -> None:
+    """A non-keyboard float is a jaw fraction. The same value keeps walking."""
+    controller = GripperController()
+    present = VERIFIED_RANGE_MIN
+    _arm(controller, present)
+    opening = 0.9
+    goal = map_gripper_to_ticks(opening)
+    assert goal > present + DEFAULT_MAX_DELTA_TICKS
+    now = 0.1
+    first = _press(controller, opening, present, now)
+    assert first.goal_position == present + DEFAULT_MAX_DELTA_TICKS
+    jaw = first.goal_position
+    now += 0.02
+    for _ in range(40):
+        stepped = _press(controller, opening, 9999, now)
+        now += 0.02
+        assert stepped.goal_position is not None
+        assert stepped.torque_enable is True
+        assert jaw <= stepped.goal_position <= goal
+        assert stepped.goal_position - jaw <= DEFAULT_MAX_DELTA_TICKS
+        jaw = stepped.goal_position
+        if jaw == goal:
+            break
+    assert jaw == goal
+    assert _press(controller, opening, 9999, now).goal_position == goal
+
+
+def test_leader_fraction_on_the_first_sample_starts_the_walk() -> None:
+    controller = GripperController()
+    controller.on_teleop_state(CONNECTED, WATCHDOG_OK)
+    controller.on_gripper_safe(0.2, 0.0)
+    output = controller.tick(0.01, 3000)
+    target = map_gripper_to_ticks(0.2)
+    assert target < 3000
+    assert output.deadman is False
+    assert output.goal_position == 3000 - DEFAULT_MAX_DELTA_TICKS
+
+
+def test_leader_deadman_does_not_close_and_resume_walks_from_present() -> None:
+    controller = GripperController()
+    _arm(controller, 2500)
+    moved = _press(controller, 0.8, 2500, 0.1)
+    assert moved.goal_position is not None
+    assert moved.goal_position > 2500
+    controller.on_teleop_state(TIMEOUT, SAFE_STOP)
+    dead = controller.tick(0.2, 2600)
+    assert dead.deadman is True
+    assert dead.goal_position is None
+    assert dead.torque_enable is False
+    controller.on_teleop_state(CONNECTED, WATCHDOG_OK)
+    controller.on_gripper_safe(0.8, 0.3)
+    resumed = controller.tick(0.31, 2600)
+    assert resumed.deadman is False
+    assert resumed.goal_position == 2600 + DEFAULT_MAX_DELTA_TICKS
