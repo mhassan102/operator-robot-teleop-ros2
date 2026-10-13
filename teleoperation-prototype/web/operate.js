@@ -38,6 +38,33 @@ function formatPose(pose) {
   return `${pose.x.toFixed(3)} ${pose.y.toFixed(3)} ${pose.z.toFixed(3)}`;
 }
 
+function fillJoints(listId, pose) {
+  const list = document.getElementById(listId);
+  if (!list) {
+    return;
+  }
+  list.querySelectorAll("[data-joint]").forEach((el) => {
+    const name = el.getAttribute("data-joint");
+    const value = pose && Object.prototype.hasOwnProperty.call(pose, name) ? pose[name] : null;
+    el.textContent = typeof value === "number" ? String(value) : "—";
+  });
+}
+
+function showLeaderJoints(leader) {
+  const keys = document.getElementById("keys-block");
+  const leaderBlock = document.getElementById("leader-joints-block");
+  const followerBlock = document.getElementById("follower-joints-block");
+  if (keys) {
+    keys.hidden = leader;
+  }
+  if (leaderBlock) {
+    leaderBlock.hidden = !leader;
+  }
+  if (followerBlock) {
+    followerBlock.hidden = !leader;
+  }
+}
+
 function applyState(msg) {
   if (msg.connection_state) {
     setHud("hud-connection", msg.connection_state);
@@ -49,6 +76,11 @@ function applyState(msg) {
     setHud("hud-session", msg.session_id);
   }
   setHud("hud-pose", formatPose(msg.pose));
+  if (msg.input === "leader" || msg.input === "keyboard") {
+    showLeaderJoints(msg.input === "leader");
+  }
+  fillJoints("leader-joints", msg.leader || {});
+  fillJoints("follower-joints", msg.follower || {});
 }
 
 function pageIsLive() {

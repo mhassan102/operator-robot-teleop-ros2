@@ -35,16 +35,19 @@ from packaging.operator_app.keys import (
     gripper_step_value,
 )
 from packaging.operator_app.payload import (
+    TYPE_JOINT_TICKS,
     TYPE_STATE,
     TYPE_TOOL_POSE,
     Command,
     Heartbeat,
+    JointTicks,
     PayloadError,
     State,
     ToolPose,
     decode,
     encode_command,
     encode_heartbeat,
+    present_ticks,
 )
 from packaging.operator_app.udp import open_mlink_udp
 from packaging.operator_app.wsproto import (
@@ -121,6 +124,7 @@ class OperatorHost:
         self._state_disposition = ""
         self._pose: dict[str, float] | None = None
         self._input_mode = "keyboard"
+        self._follower_joints: dict[str, int] = {}
         self._leader = LeaderReader()
 
     @property
@@ -197,6 +201,7 @@ class OperatorHost:
         self._leader.stop()
         with self._lock:
             self._input_mode = "keyboard"
+            self._follower_joints = {}
             self._gripper = GRIPPER_HOLD
         with self._link_lock:
             self._hold = False
@@ -492,6 +497,8 @@ class OperatorHost:
                 self._apply_state(msg)
             elif kind == TYPE_TOOL_POSE and isinstance(msg, ToolPose):
                 self._apply_pose(msg)
+            elif kind == TYPE_JOINT_TICKS and isinstance(msg, JointTicks):
+                self._apply_joints(msg)
 
     def _apply_state(self, msg: State) -> None:
         with self._lock:
@@ -522,6 +529,11 @@ class OperatorHost:
                 "stamp_nanosec": msg.stamp_nsec,
             }
 
+    def _apply_joints(self, msg: JointTicks) -> None:
+        present = present_ticks(msg)
+        with self._lock:
+            self._follower_joints = present
+
     def _publish_telemetry(self) -> None:
         with self._lock:
             conn = self._connection
@@ -532,13 +544,21 @@ class OperatorHost:
 
     def _state_payload_locked(self) -> dict[str, Any]:
         pose = None if self._pose is None else dict(self._pose)
+        leader: dict[str, int] = {}
+        follower: dict[str, int] = {}
+        if self._input_mode == "leader":
+            leader = self._leader.positions()
+            follower = dict(self._follower_joints)
         return {
             "type": "state",
+            "input": self._input_mode,
             "connection_state": self._state_connection,
             "watchdog_state": self._state_watchdog,
             "session_id": self._state_session_id or self.session_id,
             "last_disposition": self._state_disposition,
             "pose": pose,
+            "leader": leader,
+            "follower": follower,
         }
 
 

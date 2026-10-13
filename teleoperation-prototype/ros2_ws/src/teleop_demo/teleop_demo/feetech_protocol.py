@@ -1,7 +1,9 @@
 """Feetech SMS/STS (protocol 0) packets for the SO-ARM gripper.
 
 Only ping, RAM read, torque-enable, and goal-position are allowed.
-EEPROM writes, factory reset, broadcast, and arm joint IDs are refused.
+EEPROM writes, factory reset, broadcast, and writes to arm joints are refused.
+A present-position read is allowed for servo ids 1-6 so the drive page can
+show the follower. Those reads do not enable torque and do not write a goal.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ ALLOWED_READ_ADDRESSES = frozenset(
 )
 
 ARM_JOINT_IDS = frozenset({1, 2, 3, 4, 5})
+PRESENT_READ_IDS = frozenset({1, 2, 3, 4, 5, 6})
 
 
 class ForbiddenServoCommand(ValueError):
@@ -128,6 +131,12 @@ def assert_command_allowed(
         raise ForbiddenServoCommand(
             f"broadcast ID {BROADCAST_ID:#x} is forbidden; gripper id is {gripper_id}"
         )
+    if (
+        instruction == INST_READ
+        and address == ADDR_PRESENT_POSITION
+        and servo_id in PRESENT_READ_IDS
+    ):
+        return
     if servo_id != gripper_id:
         raise ForbiddenServoCommand(
             f"servo id {servo_id} is not gripper id {gripper_id}; "

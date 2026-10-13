@@ -6,8 +6,10 @@ Runs in the robot container. mlink-edge stays a separate host process.
 from __future__ import annotations
 
 import signal
+import struct
 
 from geometry_msgs.msg import PoseStamped, Twist
+from std_msgs.msg import Int32MultiArray
 from teleop_demo_msgs.msg import TeleopAck, TeleopCommand, TeleopHeartbeat, TeleopState
 from teleop_demo_msgs.srv import GoNamedPose
 import rclpy
@@ -20,6 +22,7 @@ from teleop_demo.mlink_payload import (
     Ack,
     Command,
     Heartbeat,
+    JointTicks,
     NamedPoseRep,
     NamedPoseReq,
     PayloadError,
@@ -27,6 +30,7 @@ from teleop_demo.mlink_payload import (
     ToolPose,
     decode,
     encode_ack,
+    encode_joint_ticks,
     encode_named_pose_rep,
     encode_state,
     encode_tool_pose,
@@ -54,6 +58,9 @@ class RobotMlinkBridge(Node):
         self.create_subscription(TeleopState, "/teleop/state", self._on_state, qos)
         self.create_subscription(
             PoseStamped, "/teleop/tool_pose", self._on_pose, qos
+        )
+        self.create_subscription(
+            Int32MultiArray, "/teleop/joint_ticks", self._on_joints, qos
         )
         self._named = self.create_client(GoNamedPose, "/teleop/go_named_pose")
         self._pending: list[tuple[int, str, object]] = []
@@ -150,6 +157,23 @@ class RobotMlinkBridge(Node):
                 )
             )
         )
+
+    def _on_joints(self, message: Int32MultiArray) -> None:
+        raw = [int(value) for value in message.data]
+        while len(raw) < 6:
+            raw.append(-1)
+        ticks = []
+        for value in raw[:6]:
+            if value < 0:
+                ticks.append(-1)
+            elif value > 32767:
+                ticks.append(32767)
+            else:
+                ticks.append(value)
+        try:
+            self._mlink.send(encode_joint_ticks(JointTicks(*ticks)))
+        except (OSError, PayloadError, struct.error):
+            return
 
     def _on_pose(self, message: PoseStamped) -> None:
         position = message.pose.position

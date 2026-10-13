@@ -229,7 +229,23 @@ class ConsoleApp:
         if path == "/operate":
             if self.snapshot()["view"] != "operate":
                 return HttpResult(403, "text/plain; charset=utf-8", b"not ready")
-            return _page(self.web_root / "index.html")
+            page = _page(self.web_root / "index.html")
+            if page.status != 200 or self.accepted_input() != "leader":
+                return page
+            body = page.body.replace(
+                b'id="leader-joints-block" hidden',
+                b'id="leader-joints-block"',
+                1,
+            ).replace(
+                b'id="follower-joints-block" hidden',
+                b'id="follower-joints-block"',
+                1,
+            ).replace(
+                b'id="keys-block"',
+                b'id="keys-block" hidden',
+                1,
+            )
+            return HttpResult(page.status, page.content_type, body)
         if path == "/index.html":
             return HttpResult(404, "text/plain; charset=utf-8", b"not found")
         content_type = _STATIC.get(path)

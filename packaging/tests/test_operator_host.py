@@ -25,8 +25,10 @@ from packaging.operator_app.keys import (
 from packaging.operator_app.payload import (
     Command,
     Heartbeat,
+    JointTicks,
     encode_command,
     encode_heartbeat,
+    encode_joint_ticks,
 )
 
 _FORBIDDEN = {8090, 8091, 8765, 5501, 5502, 5503, 5504}
@@ -129,6 +131,17 @@ def test_command_and_heartbeat_bytes_match_the_robot_codec() -> None:
     assert encode_command(Command(**fields)) == robot.encode_command(robot.Command(**fields))
     beat = dict(sequence=9, stamp_sec=10, stamp_nsec=20, session_id="abc")
     assert encode_heartbeat(Heartbeat(**beat)) == robot.encode_heartbeat(robot.Heartbeat(**beat))
+    ticks = dict(
+        shoulder_pan=11,
+        shoulder_lift=22,
+        elbow_flex=33,
+        wrist_flex=44,
+        wrist_roll=55,
+        gripper=66,
+    )
+    assert encode_joint_ticks(JointTicks(**ticks)) == robot.encode_joint_ticks(
+        robot.JointTicks(**ticks)
+    )
 
 
 def test_gripper_keys_send_the_robot_datagram_and_ignore_the_rest(tmp_path: Path) -> None:

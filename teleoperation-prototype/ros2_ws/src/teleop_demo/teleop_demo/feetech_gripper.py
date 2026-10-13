@@ -1,7 +1,8 @@
 """ROS 2 node: /gripper_safe -> Feetech STS3215 gripper (TELEOP_ARM=real only).
 
-Writes torque/goal to the verified gripper id only. Joints 1-5 are never
-addressed. Missing/busy serial exits without starting Gazebo.
+Writes torque/goal to the verified gripper id only. Joints 1-5 are read
+for the drive page and are never written. Missing/busy serial exits
+without starting Gazebo.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 import sys
 import time
 
-from std_msgs.msg import Float64
+from std_msgs.msg import Float64, Int32MultiArray
 from teleop_demo_msgs.msg import TeleopState
 import rclpy
 from rclpy.node import Node
@@ -22,6 +23,7 @@ from teleop_demo.feetech_bus import (
     SerialMissingError,
     SerialTransport,
 )
+from teleop_demo.feetech_protocol import ForbiddenServoCommand
 from teleop_demo.gripper_control import (
     DEFAULT_MAX_DELTA_TICKS,
     VERIFIED_GRIPPER_ID,
@@ -59,11 +61,16 @@ class FeetechGripper(Node):
         )
         self._last_deadman: bool | None = None
         self._present = 0
+        self._joint_ticks = [-1, -1, -1, -1, -1, -1]
+        self._joint_cursor = 0
         self.bus = bus if bus is not None else self._open_bus()
         self.actuator = GripperActuator(self.bus)
         self._present = self._connect()
 
         qos = command_qos()
+        self._joint_pub = self.create_publisher(
+            Int32MultiArray, "/teleop/joint_ticks", qos
+        )
         self.create_subscription(Float64, "/gripper_safe", self._on_gripper, qos)
         self.create_subscription(TeleopState, "/teleop/state", self._on_state, qos)
         self.create_timer(1.0 / rate, self._tick)
@@ -127,6 +134,22 @@ class FeetechGripper(Node):
             )
             self._last_deadman = False
         self.actuator.apply(output)
+        self._sample_one_joint()
+
+    def _sample_one_joint(self) -> None:
+        """One present-position read per tick. A miss keeps the last tick."""
+        index = self._joint_cursor
+        self._joint_cursor = (index + 1) % 6
+        try:
+            tick = self.bus.read_present_position(index + 1)
+        except (FeetechBusError, ForbiddenServoCommand, OSError):
+            return
+        if tick < 0 or tick > 32767:
+            return
+        self._joint_ticks[index] = int(tick)
+        message = Int32MultiArray()
+        message.data = list(self._joint_ticks)
+        self._joint_pub.publish(message)
 
     def destroy_node(self) -> bool:
         try:

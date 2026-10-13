@@ -1,6 +1,8 @@
-"""Exclusive Feetech bus: one owner of the serial port, gripper ID only.
+"""Exclusive Feetech bus: one owner of the serial port.
 
-Wrong or missing serial fails clearly. Never falls back to Gazebo.
+Writes stay on the gripper id. A present-position read may address
+servos 1-6. Wrong or missing serial fails clearly. Never falls back
+to Gazebo.
 """
 
 from __future__ import annotations
@@ -284,7 +286,7 @@ class FakeTransport:
 
 
 class FeetechBus:
-    """Gripper-only view of a Feetech transport."""
+    """Feetech transport. Writes are gripper-only. Present reads cover ids 1-6."""
 
     def __init__(self, transport: Transport, gripper_id: int = 6) -> None:
         if gripper_id in ARM_JOINT_IDS or gripper_id == BROADCAST_ID:
@@ -301,9 +303,10 @@ class FeetechBus:
                 _gazebo_refused(f"no ping reply from gripper id {self.gripper_id}")
             )
 
-    def read_present_position(self) -> int:
+    def read_present_position(self, servo_id: int | None = None) -> int:
+        servo = self.gripper_id if servo_id is None else int(servo_id)
         rx = self._send(
-            self.gripper_id,
+            servo,
             INST_READ,
             bytes((ADDR_PRESENT_POSITION, 2)),
         )

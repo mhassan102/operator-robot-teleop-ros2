@@ -20,8 +20,11 @@ Types:
   5 TOOL_POSE        robot → operator
   6 NAMED_POSE_REQ   operator → robot
   7 NAMED_POSE_REP   robot → operator
+  8 JOINT_TICKS      robot → operator
 
 Strings: u8 length + UTF-8 bytes (max 255).
+Joint ticks are six little-endian int16 values, in JOINT_NAMES order.
+A tick below 0 means that joint has not been read.
 """
 
 from __future__ import annotations
@@ -41,6 +44,17 @@ TYPE_STATE = 4
 TYPE_TOOL_POSE = 5
 TYPE_NAMED_POSE_REQ = 6
 TYPE_NAMED_POSE_REP = 7
+TYPE_JOINT_TICKS = 8
+
+# Same order as the drive-page rows and servo ids 1..6.
+JOINT_NAMES = (
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_roll",
+    "gripper",
+)
 
 _HDR = struct.Struct("<BBH")
 _CMD = struct.Struct("<QII7d")
@@ -50,6 +64,7 @@ _STATE_TWIST = struct.Struct("<7d")
 _POSE = struct.Struct("<II7d")
 _REQ = struct.Struct("<I")
 _REP = struct.Struct("<IB")
+_JOINTS = struct.Struct("<6h")
 
 assert _HDR.size == HEADER_SIZE
 
@@ -137,7 +152,21 @@ class NamedPoseRep:
     message: str
 
 
-Decoded = Union[Command, Heartbeat, Ack, State, ToolPose, NamedPoseReq, NamedPoseRep]
+@dataclass(frozen=True)
+class JointTicks:
+    """Present position of the six follower servos. Negative means unread."""
+
+    shoulder_pan: int
+    shoulder_lift: int
+    elbow_flex: int
+    wrist_flex: int
+    wrist_roll: int
+    gripper: int
+
+
+Decoded = Union[
+    Command, Heartbeat, Ack, State, ToolPose, NamedPoseReq, NamedPoseRep, JointTicks
+]
 
 
 def encode_command(msg: Command) -> bytes:
@@ -222,6 +251,35 @@ def encode_named_pose_rep(msg: NamedPoseRep) -> bytes:
     return _frame(TYPE_NAMED_POSE_REP, bytes(body))
 
 
+def encode_joint_ticks(msg: JointTicks) -> bytes:
+    body = _JOINTS.pack(
+        msg.shoulder_pan,
+        msg.shoulder_lift,
+        msg.elbow_flex,
+        msg.wrist_flex,
+        msg.wrist_roll,
+        msg.gripper,
+    )
+    return _frame(TYPE_JOINT_TICKS, body)
+
+
+def present_ticks(msg: JointTicks) -> dict[str, int]:
+    """Joint name to present tick. Unread joints are left out."""
+    values = (
+        msg.shoulder_pan,
+        msg.shoulder_lift,
+        msg.elbow_flex,
+        msg.wrist_flex,
+        msg.wrist_roll,
+        msg.gripper,
+    )
+    present: dict[str, int] = {}
+    for name, tick in zip(JOINT_NAMES, values):
+        if int(tick) >= 0:
+            present[name] = int(tick)
+    return present
+
+
 def decode(data: bytes) -> tuple[int, Decoded]:
     if len(data) < HEADER_SIZE:
         raise PayloadError(f"truncated header ({len(data)} bytes)")
@@ -248,6 +306,8 @@ def decode(data: bytes) -> tuple[int, Decoded]:
         return msg_type, _decode_named_pose_req(body)
     if msg_type == TYPE_NAMED_POSE_REP:
         return msg_type, _decode_named_pose_rep(body)
+    if msg_type == TYPE_JOINT_TICKS:
+        return msg_type, _decode_joint_ticks(body)
     raise PayloadError(f"unknown msg_type {msg_type}")
 
 
@@ -384,3 +444,9 @@ def _decode_named_pose_rep(body: bytes) -> NamedPoseRep:
     req_id, success = _REP.unpack_from(body, 0)
     message, _offset = _get_str(body, _REP.size)
     return NamedPoseRep(req_id, bool(success), message)
+
+
+def _decode_joint_ticks(body: bytes) -> JointTicks:
+    if len(body) < _JOINTS.size:
+        raise PayloadError("truncated joint ticks")
+    return JointTicks(*_JOINTS.unpack_from(body, 0))

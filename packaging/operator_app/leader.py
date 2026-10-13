@@ -1,10 +1,12 @@
-"""Read-only SO-101 leader gripper for the operator process.
+"""Read-only SO-101 leader for the operator process.
 
-The leader is servo 6 on the operator PC. This module never enables
-torque and never writes a goal. A jaw sample becomes a fraction of the
-leader's own travel. The host sends that fraction on the existing
+The leader is plugged into the operator PC. This module never enables
+torque and never writes a goal. Servo 6 becomes a fraction of the
+leader's own travel, and the host sends that fraction on the existing
 gripper float. The five keyboard values stay reserved, so a fraction
 that would land on one of them is nudged by a few follower ticks.
+Servos 1-6 are also read for the drive-page joint list. Those ticks
+do not change the command.
 """
 
 from __future__ import annotations
@@ -19,6 +21,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Callable, Protocol
+
+from packaging.operator_app.payload import JOINT_NAMES
 
 log = logging.getLogger("teleop.leader")
 
@@ -167,13 +171,39 @@ class SerialLeaderBus:
     def read_u16(self, address: int) -> int:
         packet = read_packet(GRIPPER_ID, address, 2)
         self._write(packet)
-        data = self._read_status()
+        data = self._read_status(GRIPPER_ID)
         if len(data) < 2:
             raise LeaderReadError(f"short leader reply for address {address}")
         raw = data[0] | (data[1] << 8)
         if address == ADDR_MAX_TORQUE:
             return raw
         return raw & 0x7FFF
+
+    def read_present(self, servo_id: int) -> int:
+        """Present position of one joint. Read only."""
+        servo_id = int(servo_id)
+        if servo_id < 1 or servo_id > GRIPPER_ID:
+            raise LeaderReadError(f"leader servo {servo_id} is not a joint")
+        packet = read_packet(servo_id, ADDR_PRESENT_POSITION, 2)
+        self._write(packet)
+        try:
+            data = self._read_status(servo_id)
+        except LeaderReadError:
+            self._flush()
+            raise
+        if len(data) < 2:
+            self._flush()
+            raise LeaderReadError(f"short leader reply from servo {servo_id}")
+        return (data[0] | (data[1] << 8)) & 0x7FFF
+
+    def _flush(self) -> None:
+        fd = self._fd
+        if fd < 0:
+            return
+        try:
+            termios.tcflush(fd, termios.TCIFLUSH)
+        except OSError:
+            pass
 
     def _write(self, packet: bytes) -> None:
         """Queue the read packet. This tty does not report writable to select."""
@@ -194,7 +224,7 @@ class SerialLeaderBus:
                 raise LeaderReadError("leader port did not accept the read")
             view = view[wrote:]
 
-    def _read_status(self) -> bytes:
+    def _read_status(self, servo_id: int) -> bytes:
         fd = self._fd
         if fd < 0:
             raise LeaderReadError("leader port is closed")
@@ -212,12 +242,12 @@ class SerialLeaderBus:
             if not piece:
                 break
             buf += piece
-            data = _status_data(buf, GRIPPER_ID)
+            data = _status_data(buf, servo_id)
             if data is not None:
                 return data
             if len(buf) > 256:
                 buf = buf[-8:]
-        raise LeaderReadError("no reply from the leader gripper")
+        raise LeaderReadError(f"no reply from leader servo {servo_id}")
 
 
 def _status_data(buf: bytes, servo_id: int) -> bytes | None:
@@ -275,6 +305,7 @@ class LeaderReader:
         self._low = 0
         self._high = 0
         self._published: int | None = None
+        self._positions: dict[str, int] = {}
         self._misses = 0
         self._logged = 0.0
 
@@ -299,12 +330,18 @@ class LeaderReader:
         self._close_bus()
         with self._lock:
             self._fraction = None
+            self._positions = {}
         self._published = None
         self._misses = 0
 
     def fraction(self) -> float | None:
         with self._lock:
             return self._fraction
+
+    def positions(self) -> dict[str, int]:
+        """Latest present tick of each joint that has answered."""
+        with self._lock:
+            return dict(self._positions)
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -313,7 +350,9 @@ class LeaderReader:
                     self._open()
                 assert self._bus is not None
                 present = self._bus.read_u16(ADDR_PRESENT_POSITION)
+                self._remember(GRIPPER_ID, present)
                 self._accept(present)
+                self._read_arm(self._bus)
                 self._misses = 0
                 self._ready.set()
             except (OSError, LeaderReadError, AssertionError) as exc:
@@ -322,6 +361,7 @@ class LeaderReader:
                 if self._misses >= 3:
                     with self._lock:
                         self._fraction = None
+                        self._positions = {}
                     self._published = None
                 self._log_once(exc)
                 if self._misses >= 2:
@@ -358,6 +398,23 @@ class LeaderReader:
         log.info(
             "leader gripper ticks=%s fraction=%.3f", present, fraction
         )
+
+    def _remember(self, servo_id: int, present: int) -> None:
+        name = JOINT_NAMES[int(servo_id) - 1]
+        with self._lock:
+            self._positions[name] = int(present) & 0x7FFF
+
+    def _read_arm(self, bus: LeaderBus) -> None:
+        """Present ticks for the panel. A miss keeps the last sample."""
+        reader = getattr(bus, "read_present", None)
+        if reader is None:
+            return
+        for servo_id in range(1, GRIPPER_ID):
+            try:
+                present = reader(servo_id)
+            except (OSError, LeaderReadError):
+                continue
+            self._remember(servo_id, present)
 
     def _close_bus(self) -> None:
         bus = self._bus

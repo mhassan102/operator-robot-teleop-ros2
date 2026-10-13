@@ -386,7 +386,7 @@ def test_login_page_has_no_qt_and_stores_no_password() -> None:
     assert 'id="session-signout"' in drive
     assert 'id="session-quit"' in drive
     assert 'id="session-logout"' not in drive
-    assert "/operate.js?v=f8v" in drive
+    assert "/operate.js?v=f9v" in drive
     assert 'SESSION_PATH = "/ws/session"' in (_WEB / "operate.js").read_text(
         encoding="utf-8"
     )

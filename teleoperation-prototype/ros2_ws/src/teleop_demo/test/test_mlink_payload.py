@@ -9,6 +9,7 @@ from teleop_demo.mlink_payload import (
     TYPE_ACK,
     TYPE_COMMAND,
     TYPE_HEARTBEAT,
+    TYPE_JOINT_TICKS,
     TYPE_NAMED_POSE_REP,
     TYPE_NAMED_POSE_REQ,
     TYPE_STATE,
@@ -16,6 +17,7 @@ from teleop_demo.mlink_payload import (
     Ack,
     Command,
     Heartbeat,
+    JointTicks,
     NamedPoseRep,
     NamedPoseReq,
     PayloadError,
@@ -25,10 +27,12 @@ from teleop_demo.mlink_payload import (
     encode_ack,
     encode_command,
     encode_heartbeat,
+    encode_joint_ticks,
     encode_named_pose_rep,
     encode_named_pose_req,
     encode_state,
     encode_tool_pose,
+    present_ticks,
 )
 
 
@@ -101,6 +105,13 @@ def test_ack_state_pose_named_roundtrip() -> None:
     kind, got = decode(encode_named_pose_rep(rep))
     assert kind == TYPE_NAMED_POSE_REP
     assert got == rep
+
+    joints = JointTicks(100, 200, 300, 400, 500, -1)
+    kind, got = decode(encode_joint_ticks(joints))
+    assert kind == TYPE_JOINT_TICKS
+    assert got == joints
+    assert present_ticks(joints)["shoulder_pan"] == 100
+    assert "gripper" not in present_ticks(joints)
 
 
 def test_rejects_truncated_and_bad_version() -> None:

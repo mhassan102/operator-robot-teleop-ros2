@@ -222,6 +222,13 @@ kbd {
   color: var(--muted);
 }
 
+.joints [data-joint] {
+  color: var(--text);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 kbd {
   display: inline-block;
   min-width: 1.4em;

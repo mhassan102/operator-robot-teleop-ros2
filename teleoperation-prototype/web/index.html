@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=1280">
   <title>Teleop · lab-arm · localhost</title>
-  <link rel="stylesheet" href="/operate.css?v=f6v">
+  <link rel="stylesheet" href="/operate.css?v=f7v">
 </head>
 <body>
   <div class="shell">
@@ -52,7 +52,7 @@
           <button type="button" class="stop" id="normal-stop">Normal Stop</button>
         </section>
 
-        <section class="rail-block legend">
+        <section class="rail-block legend" id="keys-block">
           <h2>Keys</h2>
           <ul>
             <li><kbd>w</kbd>/<kbd>s</kbd> <span>x</span></li>
@@ -63,6 +63,30 @@
             <li><kbd>i</kbd>/<kbd>k</kbd> <span>pitch</span></li>
             <li><kbd>g</kbd>/<kbd>h</kbd> <span>gripper</span></li>
             <li><kbd>space</kbd> <span>stop</span></li>
+          </ul>
+        </section>
+
+        <section class="rail-block legend joints" id="leader-joints-block" hidden>
+          <h2>Leader</h2>
+          <ul id="leader-joints">
+            <li><span>shoulder_pan</span><span data-joint="shoulder_pan">—</span></li>
+            <li><span>shoulder_lift</span><span data-joint="shoulder_lift">—</span></li>
+            <li><span>elbow_flex</span><span data-joint="elbow_flex">—</span></li>
+            <li><span>wrist_flex</span><span data-joint="wrist_flex">—</span></li>
+            <li><span>wrist_roll</span><span data-joint="wrist_roll">—</span></li>
+            <li><span>gripper</span><span data-joint="gripper">—</span></li>
+          </ul>
+        </section>
+
+        <section class="rail-block legend joints" id="follower-joints-block" hidden>
+          <h2>Follower</h2>
+          <ul id="follower-joints">
+            <li><span>shoulder_pan</span><span data-joint="shoulder_pan">—</span></li>
+            <li><span>shoulder_lift</span><span data-joint="shoulder_lift">—</span></li>
+            <li><span>elbow_flex</span><span data-joint="elbow_flex">—</span></li>
+            <li><span>wrist_flex</span><span data-joint="wrist_flex">—</span></li>
+            <li><span>wrist_roll</span><span data-joint="wrist_roll">—</span></li>
+            <li><span>gripper</span><span data-joint="gripper">—</span></li>
           </ul>
         </section>
       </aside>
@@ -88,7 +112,7 @@
     </footer>
   </div>
   <script src="/reader.js"></script>
-  <script src="/operate.js?v=f8v"></script>
+  <script src="/operate.js?v=f9v"></script>
   <script src="/session_bar.js"></script>
 </body>
 </html>
