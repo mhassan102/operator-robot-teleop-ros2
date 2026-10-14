@@ -1,8 +1,8 @@
-"""ROS 2 node: /gripper_safe -> Feetech STS3215 gripper (TELEOP_ARM=real only).
+"""ROS 2 node: follower SO-101 on one Feetech bus (TELEOP_ARM=real only).
 
-Writes torque/goal to the verified gripper id only. Joints 1-5 are read
-for the drive page and are never written. Missing/busy serial exits
-without starting Gazebo.
+Servo 6 follows /gripper_safe. Servos 1-5 follow /teleop/joint_command,
+one step at a time, and only when that joint's limits were read.
+Missing/busy serial exits without starting Gazebo.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 import time
 
-from std_msgs.msg import Float64, Int32MultiArray
+from std_msgs.msg import Float64, Float64MultiArray, Int32MultiArray
 from teleop_demo_msgs.msg import TeleopState
 import rclpy
 from rclpy.node import Node
@@ -23,7 +23,11 @@ from teleop_demo.feetech_bus import (
     SerialMissingError,
     SerialTransport,
 )
-from teleop_demo.feetech_protocol import ForbiddenServoCommand
+from teleop_demo.feetech_protocol import (
+    ADDR_MAX_POSITION,
+    ADDR_MIN_POSITION,
+    ForbiddenServoCommand,
+)
 from teleop_demo.gripper_control import (
     DEFAULT_MAX_DELTA_TICKS,
     VERIFIED_GRIPPER_ID,
@@ -32,6 +36,7 @@ from teleop_demo.gripper_control import (
     GripperActuator,
     GripperController,
 )
+from teleop_demo.joint_control import JointActuator, JointArmController
 from teleop_demo.parameters import declare_teleop_parameters
 from teleop_demo.qos import command_qos
 
@@ -53,18 +58,25 @@ class FeetechGripper(Node):
         self.gripper_id = int(self.get_parameter("gripper_id").value)
         watchdog_s = int(self.get_parameter("watchdog_timeout_ms").value) / 1000.0
         rate = float(self.get_parameter("controller_rate_hz").value)
+        max_delta = int(self.get_parameter("max_delta_ticks").value)
         self.controller = GripperController(
             range_min=int(self.get_parameter("range_min").value),
             range_max=int(self.get_parameter("range_max").value),
-            max_delta_ticks=int(self.get_parameter("max_delta_ticks").value),
+            max_delta_ticks=max_delta,
+            command_timeout_s=watchdog_s,
+        )
+        self.arm = JointArmController(
+            max_delta_ticks=max_delta,
             command_timeout_s=watchdog_s,
         )
         self._last_deadman: bool | None = None
+        self._arm_deadman: bool | None = None
         self._present = 0
         self._joint_ticks = [-1, -1, -1, -1, -1, -1]
         self._joint_cursor = 0
         self.bus = bus if bus is not None else self._open_bus()
         self.actuator = GripperActuator(self.bus)
+        self.arm_actuator = JointActuator(self.bus, max_delta_ticks=max_delta)
         self._present = self._connect()
 
         qos = command_qos()
@@ -72,6 +84,9 @@ class FeetechGripper(Node):
             Int32MultiArray, "/teleop/joint_ticks", qos
         )
         self.create_subscription(Float64, "/gripper_safe", self._on_gripper, qos)
+        self.create_subscription(
+            Float64MultiArray, "/teleop/joint_command", self._on_joint_command, qos
+        )
         self.create_subscription(TeleopState, "/teleop/state", self._on_state, qos)
         self.create_timer(1.0 / rate, self._tick)
         self.get_logger().info(
@@ -106,15 +121,48 @@ class FeetechGripper(Node):
                 "refusing to fall back to Gazebo"
             ) from exc
         self.actuator.last_torque = False
+        self._read_arm_limits()
         return present
+
+    def _read_arm_limits(self) -> None:
+        """One min/max read per arm joint. A miss leaves that joint unmoved."""
+        for index in range(5):
+            servo_id = index + 1
+            try:
+                low = self.bus.read_register(servo_id, ADDR_MIN_POSITION)
+                high = self.bus.read_register(servo_id, ADDR_MAX_POSITION)
+                present = self.bus.read_present_position(servo_id)
+            except (FeetechBusError, ForbiddenServoCommand, OSError) as exc:
+                self.arm.set_limits(index, None, None)
+                self.get_logger().info(
+                    f"JOINT LIMITS id={servo_id} unknown ({exc}); not moving"
+                )
+                continue
+            if high <= low:
+                self.arm.set_limits(index, None, None)
+                self.get_logger().info(
+                    f"JOINT LIMITS id={servo_id} {low}..{high} unusable; not moving"
+                )
+                continue
+            self.arm.set_limits(index, low, high)
+            if 0 <= int(present) <= 32767:
+                self._joint_ticks[index] = int(present)
+            self.get_logger().info(
+                f"JOINT LIMITS id={servo_id} {low}..{high} present={present}"
+            )
 
     def _on_gripper(self, message: Float64) -> None:
         self.controller.on_gripper_safe(float(message.data), time.monotonic())
 
+    def _on_joint_command(self, message: Float64MultiArray) -> None:
+        values = [float(item) for item in message.data]
+        self.arm.on_command(values[:5], time.monotonic())
+
     def _on_state(self, message: TeleopState) -> None:
-        self.controller.on_teleop_state(
-            str(message.connection_state), str(message.watchdog_state)
-        )
+        connection = str(message.connection_state)
+        watchdog = str(message.watchdog_state)
+        self.controller.on_teleop_state(connection, watchdog)
+        self.arm.on_teleop_state(connection, watchdog)
 
     def _tick(self) -> None:
         now = time.monotonic()
@@ -134,7 +182,25 @@ class FeetechGripper(Node):
             )
             self._last_deadman = False
         self.actuator.apply(output)
+        arm = self.arm.tick(now, self._arm_presents())
+        if arm.deadman:
+            if self._arm_deadman is not True:
+                self.get_logger().info(f"ARM DEADMAN torque=off ({arm.reason})")
+            self._arm_deadman = True
+        elif self._arm_deadman is not False:
+            self.get_logger().info("ARM LIVE")
+            self._arm_deadman = False
+        self.arm_actuator.apply(arm)
         self._sample_one_joint()
+
+    def _arm_presents(self) -> list[int | None]:
+        presents: list[int | None] = []
+        for value in self._joint_ticks[:5]:
+            if value < 0:
+                presents.append(None)
+            else:
+                presents.append(int(value))
+        return presents
 
     def _sample_one_joint(self) -> None:
         """One present-position read per tick. A miss keeps the last tick."""
@@ -152,6 +218,10 @@ class FeetechGripper(Node):
         self._joint_pub.publish(message)
 
     def destroy_node(self) -> bool:
+        try:
+            self.arm_actuator.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self.actuator.shutdown()
         except Exception:  # noqa: BLE001

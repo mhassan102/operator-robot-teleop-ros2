@@ -1,9 +1,10 @@
-"""Feetech SMS/STS (protocol 0) packets for the SO-ARM gripper.
+"""Feetech SMS/STS (protocol 0) packets for the SO-101 follower.
 
 Only ping, RAM read, torque-enable, and goal-position are allowed.
-EEPROM writes, factory reset, broadcast, and writes to arm joints are refused.
-A present-position read is allowed for servo ids 1-6 so the drive page can
-show the follower. Those reads do not enable torque and do not write a goal.
+EEPROM writes, factory reset, broadcast, and sync-write are refused.
+Torque and goal writes may address servos 1-6, one id at a time.
+Present-position and limit reads are allowed for those ids. A limit
+read does not enable torque and does not write a goal.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ BROADCAST_ID = 0xFE
 ADDR_MODEL_NUMBER = 3
 ADDR_ID = 5
 ADDR_BAUD_RATE = 6
+ADDR_MIN_POSITION = 9
+ADDR_MAX_POSITION = 11
 ADDR_TORQUE_ENABLE = 40
 ADDR_GOAL_POSITION = 42
 ADDR_LOCK = 55
@@ -35,6 +38,8 @@ ALLOWED_WRITE_ADDRESSES = frozenset({ADDR_TORQUE_ENABLE, ADDR_GOAL_POSITION})
 ALLOWED_READ_ADDRESSES = frozenset(
     {
         ADDR_MODEL_NUMBER,
+        ADDR_MIN_POSITION,
+        ADDR_MAX_POSITION,
         ADDR_TORQUE_ENABLE,
         ADDR_GOAL_POSITION,
         ADDR_PRESENT_POSITION,
@@ -42,11 +47,12 @@ ALLOWED_READ_ADDRESSES = frozenset(
 )
 
 ARM_JOINT_IDS = frozenset({1, 2, 3, 4, 5})
-PRESENT_READ_IDS = frozenset({1, 2, 3, 4, 5, 6})
+FOLLOWER_IDS = frozenset({1, 2, 3, 4, 5, 6})
+PRESENT_READ_IDS = FOLLOWER_IDS
 
 
 class ForbiddenServoCommand(ValueError):
-    """A packet would write EEPROM, reset, broadcast, or a non-gripper ID."""
+    """A packet would write EEPROM, reset, broadcast, or an unknown id."""
 
 
 def checksum(body: bytes | bytearray | list[int]) -> int:
@@ -126,25 +132,18 @@ def assert_command_allowed(
     gripper_id: int,
     address: int | None = None,
 ) -> None:
-    """Refuse anything that could move joints 1-5 or touch EEPROM/identity."""
+    """Allow ping, read, torque, and goal on servos 1-6. Nothing else.
+
+    ``gripper_id`` stays in the signature so existing callers still name
+    the jaw. It is not the only id that may be written.
+    """
     if servo_id == BROADCAST_ID:
         raise ForbiddenServoCommand(
             f"broadcast ID {BROADCAST_ID:#x} is forbidden; gripper id is {gripper_id}"
         )
-    if (
-        instruction == INST_READ
-        and address == ADDR_PRESENT_POSITION
-        and servo_id in PRESENT_READ_IDS
-    ):
-        return
-    if servo_id != gripper_id:
+    if servo_id not in FOLLOWER_IDS:
         raise ForbiddenServoCommand(
-            f"servo id {servo_id} is not gripper id {gripper_id}; "
-            "refusing to command arm joints 1-5"
-        )
-    if servo_id in ARM_JOINT_IDS:
-        raise ForbiddenServoCommand(
-            f"servo id {servo_id} is an arm joint; torque/goal writes are gripper-only"
+            f"servo id {servo_id} is not a follower joint 1-6"
         )
     if instruction == INST_RESET:
         raise ForbiddenServoCommand("factory reset is forbidden")

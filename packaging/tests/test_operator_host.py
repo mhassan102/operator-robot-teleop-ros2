@@ -18,16 +18,22 @@ from typing import Any
 from packaging.operator_app.host import OperatorHost
 from packaging.operator_app.keys import (
     COMMANDS,
+    JOINT_HOLD,
+    JOINT_JOG_NEGATIVE,
+    JOINT_JOG_POSITIVE,
     JOG_ANGULAR,
     JOG_LINEAR,
     KEY_BINDINGS,
+    direction_allowed,
 )
 from packaging.operator_app.payload import (
     Command,
     Heartbeat,
+    JointCommand,
     JointTicks,
     encode_command,
     encode_heartbeat,
+    encode_joint_command,
     encode_joint_ticks,
 )
 
@@ -142,6 +148,19 @@ def test_command_and_heartbeat_bytes_match_the_robot_codec() -> None:
     assert encode_joint_ticks(JointTicks(**ticks)) == robot.encode_joint_ticks(
         robot.JointTicks(**ticks)
     )
+    joints = dict(
+        shoulder_pan=0.0,
+        shoulder_lift=2.0,
+        elbow_flex=-1.0,
+        wrist_flex=0.2,
+        wrist_roll=0.498,
+        gripper=0.5,
+    )
+    assert encode_joint_command(JointCommand(**joints)) == robot.encode_joint_command(
+        robot.JointCommand(**joints)
+    )
+    assert robot.TYPE_COMMAND == 1
+    assert robot.TYPE_JOINT_CMD == 9
 
 
 def test_gripper_keys_send_the_robot_datagram_and_ignore_the_rest(tmp_path: Path) -> None:
@@ -161,8 +180,10 @@ def test_gripper_keys_send_the_robot_datagram_and_ignore_the_rest(tmp_path: Path
         host.session_id = "sess"
         for key in ("w", "a", "s", "d", "r", "f", "j", "l", "u", "o", "i", "k"):
             host.apply_key(key, True)
+            host.apply_key(key, False)
         assert host._motion == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         assert host._gripper == 0.5
+        assert host._joints == [JOINT_HOLD] * 5
         host.publish_command()
         host.publish_heartbeat()
         assert fake.sent == []
@@ -215,7 +236,10 @@ def test_gripper_keys_send_the_robot_datagram_and_ignore_the_rest(tmp_path: Path
         heart = robot.encode_heartbeat(
             robot.Heartbeat(sequence=1, stamp_sec=10, stamp_nsec=20, session_id="sess")
         )
-        assert fake.sent == [open_bytes, heart, close_bytes]
+        hold_joints = robot.encode_joint_command(
+            robot.JointCommand(0.5, 0.5, 0.5, 0.5, 0.5, 0.5)
+        )
+        assert fake.sent == [open_bytes, hold_joints, heart, close_bytes, hold_joints]
         kind, msg = robot.decode(fake.sent[0])
         assert kind == robot.TYPE_COMMAND
         assert msg.gripper == 1.0
@@ -268,13 +292,22 @@ def test_leader_input_sends_a_fraction_and_ignores_gripper_keys(tmp_path: Path) 
         assert host._gripper == 0.5
         host.command_sequence = 0
         host.publish_command()
-        _kind, msg = robot.decode(fake.sent[-1])
+        msg = _last(fake, robot, robot.TYPE_COMMAND)
         assert msg.gripper == encode_gripper_fraction(0.4)
         assert msg.gripper not in (0.0, 0.25, 0.5, 0.75, 1.0)
         assert (msg.lx, msg.ly, msg.lz, msg.ax, msg.ay, msg.az) == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        held_arm = _last(fake, robot, robot.TYPE_JOINT_CMD)
+        assert (
+            held_arm.shoulder_pan,
+            held_arm.shoulder_lift,
+            held_arm.elbow_flex,
+            held_arm.wrist_flex,
+            held_arm.wrist_roll,
+            held_arm.gripper,
+        ) == (0.5, 0.5, 0.5, 0.5, 0.5, 0.5)
         script.value = None
         host.publish_command()
-        _kind, held = robot.decode(fake.sent[-1])
+        held = _last(fake, robot, robot.TYPE_COMMAND)
         assert held.gripper == 0.5
         host._console._accepted_input = "leader"
         conn = _Open()
@@ -288,10 +321,30 @@ def test_leader_input_sends_a_fraction_and_ignores_gripper_keys(tmp_path: Path) 
         host.shutdown()
 
 
+def _last(fake: _FakeUdp, robot: Any, kind: int) -> Any:
+    found = None
+    for payload in fake.sent:
+        got_kind, msg = robot.decode(payload)
+        if got_kind == kind:
+            found = msg
+    assert found is not None
+    return found
+
+
 def _command_grippers(fake: _FakeUdp, robot: Any) -> list[float]:
     values: list[float] = []
     for payload in fake.sent:
         kind, msg = robot.decode(payload)
+        if kind == robot.TYPE_JOINT_CMD:
+            assert (
+                msg.shoulder_pan,
+                msg.shoulder_lift,
+                msg.elbow_flex,
+                msg.wrist_flex,
+                msg.wrist_roll,
+                msg.gripper,
+            ) == (0.5, 0.5, 0.5, 0.5, 0.5, 0.5)
+            continue
         assert kind == robot.TYPE_COMMAND
         assert (msg.lx, msg.ly, msg.lz, msg.ax, msg.ay, msg.az) == (
             0.0,
@@ -562,12 +615,12 @@ def test_websocket_g_and_h_on_a_free_port() -> None:
         _ws_send(sock, "h", b"\x11\x12\x13\x14")
         assert _until(lambda: host._gripper == 0.25)
         assert host._motion == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        assert host._joints[1] == JOINT_JOG_POSITIVE
         fake.sent.clear()
         host._gripper = 1.0
         host.command_sequence = 0
         host.publish_command()
-        kind, msg = robot.decode(fake.sent[-1])
-        assert kind == robot.TYPE_COMMAND
+        msg = _last(fake, robot, robot.TYPE_COMMAND)
         assert msg.gripper == 1.0
         assert (msg.lx, msg.ly, msg.lz, msg.ax, msg.ay, msg.az) == (
             0.0,
@@ -577,6 +630,10 @@ def test_websocket_g_and_h_on_a_free_port() -> None:
             0.0,
             0.0,
         )
+        arm = _last(fake, robot, robot.TYPE_JOINT_CMD)
+        assert arm.shoulder_lift == JOINT_JOG_POSITIVE
+        assert arm.shoulder_pan == JOINT_HOLD
+        assert arm.gripper == JOINT_HOLD
     finally:
         if sock is not None:
             sock.close()
@@ -599,3 +656,140 @@ def test_quit_stops_mlink_then_the_process(tmp_path: Path) -> None:
     assert "start_daemon.sh" not in " ".join(recorded[0].argv)
     assert recorded[0].argv[-1].endswith("packaging/run/mlink-op.pid")
     host.shutdown()
+
+
+def test_arm_keys_jog_one_joint_and_space_holds(tmp_path: Path) -> None:
+    """Page keys move servos 1-5. The twist stays zero. g/h stays one float."""
+    robot = _robot_codec()
+    fake = _FakeUdp()
+    host = OperatorHost(
+        tmp_path,
+        "ws://127.0.0.1:9",
+        opener=lambda: fake,
+        clock=lambda: (10, 20),
+        timers=False,
+    )
+    expected = {
+        "w": (1, JOINT_JOG_POSITIVE),
+        "s": (1, JOINT_JOG_NEGATIVE),
+        "a": (0, JOINT_JOG_POSITIVE),
+        "d": (0, JOINT_JOG_NEGATIVE),
+        "r": (2, JOINT_JOG_POSITIVE),
+        "f": (2, JOINT_JOG_NEGATIVE),
+        "j": (0, JOINT_JOG_POSITIVE),
+        "l": (0, JOINT_JOG_NEGATIVE),
+        "u": (4, JOINT_JOG_POSITIVE),
+        "o": (4, JOINT_JOG_NEGATIVE),
+        "i": (3, JOINT_JOG_POSITIVE),
+        "k": (3, JOINT_JOG_NEGATIVE),
+    }
+    try:
+        assert direction_allowed("+x") is True
+        assert direction_allowed("+x", gripper_only=True) is False
+        assert direction_allowed("open", gripper_only=True) is True
+        conn = _Open()
+        host._connection = conn  # type: ignore[assignment]
+        host.session_id = "sess"
+        host.enable_link()
+        status, body = host.named_pose("fold")
+        assert status == 400
+        assert body["message"] == "named poses disabled (gripper-only)"
+        for key, (index, level) in expected.items():
+            host.apply_key(key, True)
+            host.apply_key(key, True)
+            assert host._motion == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            assert host._gripper == 0.5
+            assert host._joints[index] == level
+            assert host._joints.count(level) == 1
+            host.apply_key(key, False)
+            assert host._joints == [JOINT_HOLD] * 5
+            assert host._joint_key is None
+        host.apply_key("w", True)
+        host.apply_key("g", True)
+        assert host._joints[1] == JOINT_JOG_POSITIVE
+        assert host._gripper == 1.0
+        host.apply_key(" ", True)
+        assert host._joints == [JOINT_HOLD] * 5
+        assert host._gripper == 1.0
+        assert host._motion == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        fake.sent.clear()
+        host.publish_command()
+        arm = _last(fake, robot, robot.TYPE_JOINT_CMD)
+        assert (
+            arm.shoulder_pan,
+            arm.shoulder_lift,
+            arm.elbow_flex,
+            arm.wrist_flex,
+            arm.wrist_roll,
+            arm.gripper,
+        ) == (0.5, 0.5, 0.5, 0.5, 0.5, 0.5)
+        command = _last(fake, robot, robot.TYPE_COMMAND)
+        assert command.gripper == 1.0
+        host.detach_session(conn)
+        closing = _last(fake, robot, robot.TYPE_JOINT_CMD)
+        assert closing.shoulder_lift == JOINT_HOLD
+        assert _last(fake, robot, robot.TYPE_COMMAND).gripper == 1.0
+    finally:
+        host.shutdown()
+
+
+def test_leader_arm_fractions_fill_the_joint_datagram(tmp_path: Path) -> None:
+    from packaging.operator_app.leader import encode_gripper_fraction, encode_joint_fraction
+
+    robot = _robot_codec()
+    fake = _FakeUdp()
+    host = OperatorHost(
+        tmp_path,
+        "ws://127.0.0.1:9",
+        opener=lambda: fake,
+        clock=lambda: (10, 20),
+        timers=False,
+    )
+
+    class _ScriptLeader:
+        def __init__(self) -> None:
+            self.value: float | None = 0.4
+            self.arms: list[float | None] = [0.0, 1.0, 0.5, 0.2, None]
+
+        def start(self, wait_s: float = 0.4) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def fraction(self) -> float | None:
+            return self.value
+
+        def arm_fractions(self) -> list[float | None]:
+            return list(self.arms)
+
+    host._leader = _ScriptLeader()  # type: ignore[assignment]
+    try:
+        host._connection = _Open()  # type: ignore[assignment]
+        host.session_id = "sess"
+        host._input_mode = "leader"
+        host.enable_link()
+        host.apply_key("w", True)
+        host.apply_key("g", True)
+        host.publish_command()
+        command = _last(fake, robot, robot.TYPE_COMMAND)
+        assert command.gripper == encode_gripper_fraction(0.4)
+        assert (command.lx, command.ly, command.lz, command.ax, command.ay, command.az) == (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+        arm = _last(fake, robot, robot.TYPE_JOINT_CMD)
+        assert arm.shoulder_pan == encode_joint_fraction(0.0)
+        assert arm.shoulder_lift == encode_joint_fraction(1.0)
+        assert arm.elbow_flex == encode_joint_fraction(0.5)
+        assert arm.elbow_flex != 0.5
+        assert arm.wrist_flex == encode_joint_fraction(0.2)
+        assert arm.wrist_roll == JOINT_HOLD
+        assert arm.gripper == JOINT_HOLD
+        assert arm.shoulder_lift != JOINT_JOG_POSITIVE
+    finally:
+        host.shutdown()

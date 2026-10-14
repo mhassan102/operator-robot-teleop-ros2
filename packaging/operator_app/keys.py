@@ -2,8 +2,9 @@
 
 The six jog rates and the gripper value match ``teleop_demo.commands``.
 That module stays in the ROS tree for the robot. This copy does not
-import it. Packaged teleop is gripper-only: ``g`` and ``h`` change the
-gripper, and the other keys are ignored.
+import it. ``g`` and ``h`` still change the gripper float. The other
+page keys jog follower servos 1-5 on the joint-command datagram. The
+Cartesian twist stays zero: the real arm does not follow it.
 """
 
 from __future__ import annotations
@@ -57,6 +58,31 @@ FRAME_ID = "tool0"
 COMMAND_RATE_HZ = 20.0
 HEARTBEAT_RATE_HZ = 10.0
 
+# Servo index in JOINT_NAMES order, and the sign of a positive tick step.
+# w/s lifts the shoulder, a/d and j/l pan it, r/f bends the elbow,
+# i/k flexes the wrist, and u/o rolls it. g/h stays on servo 6.
+ARM_JOINT = {
+    "+x": (1, 1),
+    "x-": (1, -1),
+    "+y": (0, 1),
+    "y-": (0, -1),
+    "+z": (2, 1),
+    "z-": (2, -1),
+    "+yaw": (0, 1),
+    "yaw-": (0, -1),
+    "+roll": (4, 1),
+    "roll-": (4, -1),
+    "+pitch": (3, 1),
+    "pitch-": (3, -1),
+}
+
+# Joint-command floats. 0.5 holds. The jog values sit outside [0, 1] so a
+# leader fraction is never read as a jog. The robot steps while a jog
+# value keeps arriving, and holds on 0.5.
+JOINT_HOLD = 0.5
+JOINT_JOG_POSITIVE = 2.0
+JOINT_JOG_NEGATIVE = -1.0
+
 # Hold is neither an open nor a close. Each keydown sends the other token
 # in its band so a latched 1.0 or 0.0 is not the next press. The robot
 # treats 1.0 and 0.75 as open, and 0.25 and 0.0 as close.
@@ -70,8 +96,8 @@ def gripper_step_value(latched: float, direction: str) -> float:
     return 0.0 if latched == 0.25 else 0.25
 
 
-def direction_allowed(direction: str, *, gripper_only: bool = True) -> bool:
-    """Packaged teleop allows the gripper and stop. Cartesian keys do not."""
-    if not gripper_only:
-        return True
-    return direction in GRIPPER_ONLY
+def direction_allowed(direction: str, *, gripper_only: bool = False) -> bool:
+    """Arm keys, the gripper, and stop are sent. ``gripper_only`` is the old gate."""
+    if gripper_only:
+        return direction in GRIPPER_ONLY
+    return direction in COMMANDS

@@ -84,7 +84,8 @@ class RobotReceiver(Node):
             if command_direction(message.twist) != "STOP":
                 self.get_logger().warn(
                     "REAL ARM drop cartesian "
-                    f"direction={command_direction(message.twist)}; gripper-only"
+                    f"direction={command_direction(message.twist)}; "
+                    "twist is not a joint goal"
                 )
             twist = zero_twist()
         disposition, transitions = self.safety.on_command(

@@ -19,11 +19,14 @@ from teleop_demo.feetech_protocol import (
     ADDR_GOAL_POSITION,
     ADDR_ID,
     ADDR_LOCK,
+    ADDR_MIN_POSITION,
+    ADDR_PRESENT_POSITION,
     ADDR_TORQUE_ENABLE,
     ARM_JOINT_IDS,
     BROADCAST_ID,
     ForbiddenServoCommand,
     INST_PING,
+    INST_READ,
     INST_RESET,
     INST_SYNC_WRITE,
     INST_WRITE,
@@ -80,14 +83,24 @@ def test_ping_packet_matches_hardware_capture() -> None:
     assert packet == bytes.fromhex("ffff060201f6")
 
 
-def test_id_filter_blocks_arm_joints_and_broadcast() -> None:
-    for servo_id in (1, 2, 3, 4, 5, BROADCAST_ID):
+def test_follower_joints_accept_torque_and_goal_writes() -> None:
+    """Servos 1-6 may be stepped. Broadcast, EEPROM, and other ids may not."""
+    for servo_id in (1, 2, 3, 4, 5, 6):
+        assert_command_allowed(servo_id, INST_WRITE, 6, ADDR_GOAL_POSITION)
+        assert_command_allowed(servo_id, INST_WRITE, 6, ADDR_TORQUE_ENABLE)
+        assert_command_allowed(servo_id, INST_PING, 6)
+        assert_command_allowed(servo_id, INST_READ, 6, ADDR_PRESENT_POSITION)
+        assert_command_allowed(servo_id, INST_READ, 6, ADDR_MIN_POSITION)
+    for servo_id in (0, 7, 9, BROADCAST_ID):
         with pytest.raises(ForbiddenServoCommand):
             assert_command_allowed(servo_id, INST_WRITE, 6, ADDR_GOAL_POSITION)
+    for servo_id in (1, 6):
         with pytest.raises(ForbiddenServoCommand):
-            assert_command_allowed(servo_id, INST_WRITE, 6, ADDR_TORQUE_ENABLE)
-    assert_command_allowed(6, INST_WRITE, 6, ADDR_GOAL_POSITION)
-    assert_command_allowed(6, INST_PING, 6)
+            assert_command_allowed(servo_id, INST_WRITE, 6, ADDR_MIN_POSITION)
+        with pytest.raises(ForbiddenServoCommand, match="factory reset"):
+            assert_command_allowed(servo_id, INST_RESET, 6)
+        with pytest.raises(ForbiddenServoCommand):
+            assert_command_allowed(servo_id, INST_SYNC_WRITE, 6, ADDR_GOAL_POSITION)
 
 
 def test_eeprom_reset_and_lock_writes_forbidden() -> None:
@@ -114,10 +127,23 @@ def test_bus_public_api_writes_gripper_id_only() -> None:
         assert int(parsed["id"]) == 6
 
 
-def test_bus_rejects_wrong_id_even_via_send() -> None:
-    _transport, bus = _bus()
-    with pytest.raises(ForbiddenServoCommand, match="not gripper"):
-        bus._send(1, INST_WRITE, bytes((ADDR_GOAL_POSITION, 0, 8)))
+def test_bus_steps_one_arm_joint_and_refuses_the_rest() -> None:
+    transport = FakeTransport(present={1: 1000, 6: 2061})
+    bus = FeetechBus(transport, gripper_id=6)
+    bus.write_torque_enable(True, 1)
+    bus.write_goal_position(1048, 1)
+    assert bus.read_present_position(1) == 1048
+    assert {int(item["id"]) for item in transport.writes} == {1}
+    with pytest.raises(ForbiddenServoCommand):
+        bus._send(BROADCAST_ID, INST_WRITE, bytes((ADDR_GOAL_POSITION, 0, 8)))
+    with pytest.raises(ForbiddenServoCommand):
+        bus._send(1, INST_WRITE, bytes((ADDR_MIN_POSITION, 0, 0)))
+    with pytest.raises(ForbiddenServoCommand, match="not a follower"):
+        bus._send(9, INST_WRITE, bytes((ADDR_GOAL_POSITION, 0, 8)))
+    bus.write_goal_position(2100)
+    jaw = [item for item in transport.writes if int(item["id"]) == 6]
+    assert jaw
+    assert all(int(item["address"]) == ADDR_GOAL_POSITION for item in jaw)
 
 
 def test_ping_and_present_position_on_fake_bus() -> None:

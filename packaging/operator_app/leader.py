@@ -61,6 +61,21 @@ class LeaderBus(Protocol):
         """Close the port. There is nothing to torque off."""
 
 
+# Same hold as packaging.operator_app.keys.JOINT_HOLD. A leader fraction
+# that lands on it is nudged so the robot keeps walking to mid-travel.
+JOINT_HOLD = 0.5
+
+
+def encode_joint_fraction(fraction: float) -> float:
+    """A leader joint fraction. Endpoints stay put. Exact hold is nudged off."""
+    if not math.isfinite(fraction):
+        return JOINT_HOLD
+    value = min(1.0, max(0.0, float(fraction)))
+    if abs(value - JOINT_HOLD) <= KEYBOARD_TOKEN_TOLERANCE:
+        return JOINT_HOLD - TOKEN_NUDGE
+    return value
+
+
 def encode_gripper_fraction(fraction: float) -> float:
     """A jaw fraction that is not one of the five keyboard floats.
 
@@ -82,16 +97,42 @@ def encode_gripper_fraction(fraction: float) -> float:
     return value
 
 
-def gripper_fraction(present: int, low: int, high: int) -> float:
-    """Fraction of leader travel. EEPROM min is closed, matching the follower."""
+def gripper_fraction(
+    present: int,
+    low: int,
+    high: int,
+    *,
+    invert: bool | None = None,
+) -> float:
+    """Fraction of leader travel. EEPROM min is 0. The jaw may invert."""
     span = int(high) - int(low)
     if span <= 0:
         raise LeaderReadError(f"leader gripper limits {low}..{high}")
     position = min(int(high), max(int(low), int(present)))
     fraction = (position - int(low)) / span
-    if INVERT_LEADER_FRACTION:
+    flipped = INVERT_LEADER_FRACTION if invert is None else bool(invert)
+    if flipped:
         return 1.0 - fraction
     return fraction
+
+
+def _arm_limits(bus: LeaderBus) -> list[tuple[int, int] | None]:
+    """Min/max for servos 1-5. A miss leaves that joint unknown."""
+    limits: list[tuple[int, int] | None] = [None] * 5
+    reader = getattr(bus, "read_register", None)
+    if reader is None:
+        return limits
+    for servo_id in range(1, GRIPPER_ID):
+        try:
+            low = int(reader(servo_id, ADDR_MIN_POSITION))
+            high = int(reader(servo_id, ADDR_MAX_POSITION))
+        except (OSError, LeaderReadError):
+            continue
+        if high <= low:
+            continue
+        limits[servo_id - 1] = (low, high)
+        log.info("leader joint %s limits %s..%s", servo_id, low, high)
+    return limits
 
 
 def _checksum(body: bytes) -> int:
@@ -179,12 +220,12 @@ class SerialLeaderBus:
             return raw
         return raw & 0x7FFF
 
-    def read_present(self, servo_id: int) -> int:
-        """Present position of one joint. Read only."""
+    def read_register(self, servo_id: int, address: int) -> int:
+        """One 16-bit register from one joint. Read only."""
         servo_id = int(servo_id)
         if servo_id < 1 or servo_id > GRIPPER_ID:
             raise LeaderReadError(f"leader servo {servo_id} is not a joint")
-        packet = read_packet(servo_id, ADDR_PRESENT_POSITION, 2)
+        packet = read_packet(servo_id, int(address) & 0xFF, 2)
         self._write(packet)
         try:
             data = self._read_status(servo_id)
@@ -195,6 +236,10 @@ class SerialLeaderBus:
             self._flush()
             raise LeaderReadError(f"short leader reply from servo {servo_id}")
         return (data[0] | (data[1] << 8)) & 0x7FFF
+
+    def read_present(self, servo_id: int) -> int:
+        """Present position of one joint. Read only."""
+        return self.read_register(servo_id, ADDR_PRESENT_POSITION)
 
     def _flush(self) -> None:
         fd = self._fd
@@ -306,6 +351,9 @@ class LeaderReader:
         self._high = 0
         self._published: int | None = None
         self._positions: dict[str, int] = {}
+        self._arm_limits: list[tuple[int, int] | None] = [None] * 5
+        self._arm_fractions: list[float | None] = [None] * 5
+        self._arm_seen: list[int | None] = [None] * 5
         self._misses = 0
         self._logged = 0.0
 
@@ -331,6 +379,8 @@ class LeaderReader:
         with self._lock:
             self._fraction = None
             self._positions = {}
+            self._arm_fractions = [None] * 5
+        self._arm_seen = [None] * 5
         self._published = None
         self._misses = 0
 
@@ -342,6 +392,11 @@ class LeaderReader:
         """Latest present tick of each joint that has answered."""
         with self._lock:
             return dict(self._positions)
+
+    def arm_fractions(self) -> list[float | None]:
+        """Five leader fractions for servos 1-5. None if that joint has no limits."""
+        with self._lock:
+            return list(self._arm_fractions)
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -362,6 +417,8 @@ class LeaderReader:
                     with self._lock:
                         self._fraction = None
                         self._positions = {}
+                        self._arm_fractions = [None] * 5
+                    self._arm_seen = [None] * 5
                     self._published = None
                 self._log_once(exc)
                 if self._misses >= 2:
@@ -383,6 +440,10 @@ class LeaderReader:
         self._low = low
         self._high = high
         self._published = None
+        self._arm_limits = _arm_limits(bus)
+        self._arm_seen = [None] * 5
+        with self._lock:
+            self._arm_fractions = [None] * 5
         log.info("leader gripper limits %s..%s", low, high)
 
     def _accept(self, present: int) -> None:
@@ -404,8 +465,27 @@ class LeaderReader:
         with self._lock:
             self._positions[name] = int(present) & 0x7FFF
 
+    def _accept_arm(self, servo_id: int, present: int) -> None:
+        index = int(servo_id) - 1
+        if index < 0 or index >= 5:
+            return
+        limits = self._arm_limits[index]
+        if limits is None:
+            return
+        seen = self._arm_seen[index]
+        if seen is not None and abs(int(present) - seen) < DEADBAND_TICKS:
+            return
+        low, high = limits
+        try:
+            fraction = gripper_fraction(present, low, high, invert=False)
+        except LeaderReadError:
+            return
+        self._arm_seen[index] = int(present)
+        with self._lock:
+            self._arm_fractions[index] = encode_joint_fraction(fraction)
+
     def _read_arm(self, bus: LeaderBus) -> None:
-        """Present ticks for the panel. A miss keeps the last sample."""
+        """Present ticks for the panel, and a fraction when limits were read."""
         reader = getattr(bus, "read_present", None)
         if reader is None:
             return
@@ -415,6 +495,7 @@ class LeaderReader:
             except (OSError, LeaderReadError):
                 continue
             self._remember(servo_id, present)
+            self._accept_arm(servo_id, present)
 
     def _close_bus(self) -> None:
         bus = self._bus

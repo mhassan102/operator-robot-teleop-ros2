@@ -23,13 +23,21 @@ from urllib.parse import urlparse
 
 from packaging.operator_app.console import ConsoleApp
 from packaging.operator_app.helper import Helper
-from packaging.operator_app.leader import LeaderReader, encode_gripper_fraction
+from packaging.operator_app.leader import (
+    LeaderReader,
+    encode_gripper_fraction,
+    encode_joint_fraction,
+)
 from packaging.operator_app.keys import (
+    ARM_JOINT,
     COMMAND_RATE_HZ,
     COMMANDS,
     FRAME_ID,
     GRIPPER_HOLD,
     HEARTBEAT_RATE_HZ,
+    JOINT_HOLD,
+    JOINT_JOG_NEGATIVE,
+    JOINT_JOG_POSITIVE,
     KEY_BINDINGS,
     direction_allowed,
     gripper_step_value,
@@ -40,6 +48,7 @@ from packaging.operator_app.payload import (
     TYPE_TOOL_POSE,
     Command,
     Heartbeat,
+    JointCommand,
     JointTicks,
     PayloadError,
     State,
@@ -47,6 +56,7 @@ from packaging.operator_app.payload import (
     decode,
     encode_command,
     encode_heartbeat,
+    encode_joint_command,
     present_ticks,
 )
 from packaging.operator_app.udp import open_mlink_udp
@@ -118,6 +128,9 @@ class OperatorHost:
         self._gripper_key: str | None = None
         self._label = "stop"
         self._active_key: str | None = None
+        self._joints = [JOINT_HOLD] * 5
+        self._joint_key: str | None = None
+        self._force_joint_hold = False
         self._state_connection = ""
         self._state_watchdog = ""
         self._state_session_id = ""
@@ -203,6 +216,8 @@ class OperatorHost:
             self._input_mode = "keyboard"
             self._follower_joints = {}
             self._gripper = GRIPPER_HOLD
+            self._joints = [JOINT_HOLD] * 5
+            self._joint_key = None
         with self._link_lock:
             self._hold = False
             self._armed = False
@@ -234,7 +249,7 @@ class OperatorHost:
             if down:
                 log.info("KEY %s ignored (leader input)", direction)
             return
-        if not direction_allowed(direction):
+        if not direction_allowed(direction, gripper_only=False):
             if down:
                 log.info("KEY %s ignored (gripper-only)", direction)
             return
@@ -259,9 +274,30 @@ class OperatorHost:
                     self._motion = values[:6]
                     self._label = "stop"
                     self._active_key = None
+                    self._joints = [JOINT_HOLD] * 5
+                    self._joint_key = None
                     # Blur sends stop without a gripper keyup. Drop the held
                     # key so the next tap is a new step. The float stays.
                     self._gripper_key = None
+            elif direction in ARM_JOINT:
+                index, sign = ARM_JOINT[direction]
+                if down:
+                    if self._joint_key != key:
+                        # The twist stays zero. The joint datagram carries the jog.
+                        self._motion = COMMANDS["stop"][:6]
+                        self._joints = [JOINT_HOLD] * 5
+                        self._joints[index] = (
+                            JOINT_JOG_POSITIVE if sign > 0 else JOINT_JOG_NEGATIVE
+                        )
+                        self._joint_key = key
+                        self._label = direction
+                        self._active_key = key
+                elif self._joint_key == key:
+                    self._motion = COMMANDS["stop"][:6]
+                    self._joints = [JOINT_HOLD] * 5
+                    self._joint_key = None
+                    self._label = "stop"
+                    self._active_key = None
             elif down:
                 self._motion = values[:6]
                 self._label = direction
@@ -436,7 +472,33 @@ class OperatorHost:
                 )
             )
         )
+        if self._force_joint_hold:
+            joint_command = JointCommand(*([JOINT_HOLD] * 6))
+        else:
+            joint_command = self._joint_command_locked()
+        self._socket.send(encode_joint_command(joint_command))
         self._note_gripper_sent()
+
+    def _joint_command_locked(self) -> JointCommand:
+        """Five arm values, then an unused gripper slot. Servo 6 uses the float."""
+        if self._input_mode == "leader":
+            raw = None
+            reader = getattr(self._leader, "arm_fractions", None)
+            if reader is not None:
+                raw = reader()
+            values: list[float] = []
+            for index in range(5):
+                item = None if raw is None or index >= len(raw) else raw[index]
+                if item is None:
+                    values.append(JOINT_HOLD)
+                else:
+                    values.append(encode_joint_fraction(float(item)))
+        else:
+            values = [float(item) for item in self._joints[:5]]
+            while len(values) < 5:
+                values.append(JOINT_HOLD)
+        values.append(JOINT_HOLD)
+        return JointCommand(*values)
 
     def _begin_locked(self, connection: WsConnection) -> str:
         self._connection = connection
@@ -448,6 +510,8 @@ class OperatorHost:
         self._gripper_key = None
         self._gripper_release = False
         self._gripper_unsent = self._gripper_sent != GRIPPER_HOLD
+        self._joints = [JOINT_HOLD] * 5
+        self._joint_key = None
         self._label = "stop"
         self._active_key = None
         self._publish_heartbeat_locked()
@@ -459,12 +523,20 @@ class OperatorHost:
             return None
         self._connection = None
         self._motion = COMMANDS["stop"][:6]
+        self._joints = [JOINT_HOLD] * 5
+        self._joint_key = None
         self._label = "stop"
         self._active_key = None
         self._gripper_key = None
         self._gripper_release = False
         self.command_sequence += 1
-        self._emit_command_locked()
+        # The last packet of a session is a hold, not a jog still in _joints
+        # and not a leader fraction. The jaw float is unchanged.
+        self._force_joint_hold = True
+        try:
+            self._emit_command_locked()
+        finally:
+            self._force_joint_hold = False
         self.session_id = ""
         return old
 

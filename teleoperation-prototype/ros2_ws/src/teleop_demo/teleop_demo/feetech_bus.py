@@ -1,8 +1,9 @@
 """Exclusive Feetech bus: one owner of the serial port.
 
-Writes stay on the gripper id. A present-position read may address
-servos 1-6. Wrong or missing serial fails clearly. Never falls back
-to Gazebo.
+Torque and goal writes address one servo id in 1-6. There is no
+broadcast and no sync-write. Present and limit reads may address
+those same ids. Wrong or missing serial fails clearly. Never falls
+back to Gazebo.
 """
 
 from __future__ import annotations
@@ -18,10 +19,13 @@ from typing import Protocol
 
 from teleop_demo.feetech_protocol import (
     ADDR_GOAL_POSITION,
+    ADDR_MAX_POSITION,
+    ADDR_MIN_POSITION,
     ADDR_PRESENT_POSITION,
     ADDR_TORQUE_ENABLE,
     ARM_JOINT_IDS,
     BROADCAST_ID,
+    FOLLOWER_IDS,
     ForbiddenServoCommand,
     INST_PING,
     INST_READ,
@@ -235,6 +239,7 @@ class FakeTransport:
         self.present = dict(present) if present is not None else default
         self.torque = {servo_id: 0 for servo_id in self.present}
         self.goal = dict(self.present)
+        self.limits: dict[int, tuple[int, int]] = {}
         self.model_number = model_number
         self.packets: list[bytes] = []
         self.writes: list[dict[str, object]] = []
@@ -266,6 +271,12 @@ class FakeTransport:
             return encode_u16_le(self.present[servo_id])
         if address == ADDR_GOAL_POSITION:
             return encode_u16_le(self.goal[servo_id])
+        if address in (ADDR_MIN_POSITION, ADDR_MAX_POSITION):
+            pair = self.limits.get(servo_id)
+            if pair is None:
+                return encode_u16_le(0)
+            low, high = pair
+            return encode_u16_le(low if address == ADDR_MIN_POSITION else high)
         if address == ADDR_TORQUE_ENABLE:
             return bytes((self.torque.get(servo_id, 0),))
         if address == 3:
@@ -286,7 +297,7 @@ class FakeTransport:
 
 
 class FeetechBus:
-    """Feetech transport. Writes are gripper-only. Present reads cover ids 1-6."""
+    """Feetech transport. One id per write. Ids 1-6, never broadcast."""
 
     def __init__(self, transport: Transport, gripper_id: int = 6) -> None:
         if gripper_id in ARM_JOINT_IDS or gripper_id == BROADCAST_ID:
@@ -319,17 +330,31 @@ class FeetechBus:
             raise FeetechBusError("short present-position reply")
         return decode_position(data)
 
-    def write_torque_enable(self, enable: bool) -> None:
+    def read_register(self, servo_id: int, address: int) -> int:
+        """Read one 16-bit register from a follower id. No torque, no goal."""
+        servo = int(servo_id)
+        if servo not in FOLLOWER_IDS:
+            raise ForbiddenServoCommand(f"servo id {servo} is not a follower joint 1-6")
+        rx = self._send(servo, INST_READ, bytes((int(address) & 0xFF, 2)))
+        parsed = parse_instruction(rx)
+        data = bytes(parsed["params"])
+        if len(data) < 2:
+            raise FeetechBusError("short register reply")
+        return decode_position(data)
+
+    def write_torque_enable(self, enable: bool, servo_id: int | None = None) -> None:
+        servo = self.gripper_id if servo_id is None else int(servo_id)
         self._send(
-            self.gripper_id,
+            servo,
             INST_WRITE,
             bytes((ADDR_TORQUE_ENABLE, 1 if enable else 0)),
         )
 
-    def write_goal_position(self, ticks: int) -> None:
+    def write_goal_position(self, ticks: int, servo_id: int | None = None) -> None:
+        servo = self.gripper_id if servo_id is None else int(servo_id)
         ticks = max(POSITION_MIN, min(POSITION_MAX, int(ticks)))
         self._send(
-            self.gripper_id,
+            servo,
             INST_WRITE,
             bytes((ADDR_GOAL_POSITION,)) + encode_u16_le(ticks),
         )

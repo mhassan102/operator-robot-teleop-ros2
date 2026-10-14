@@ -83,7 +83,7 @@ def env_flag_enabled(raw: str | None) -> bool:
 
 
 def drops_cartesian_jog(arm_mode: str) -> bool:
-    """Real arm is gripper-only: joints 1-5 are never commanded."""
+    """Real arm does not follow the Cartesian twist. Joints use their own datagram."""
     return arm_mode == ARM_REAL
 
 

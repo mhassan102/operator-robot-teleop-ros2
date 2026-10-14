@@ -9,6 +9,7 @@ from teleop_demo.mlink_payload import (
     TYPE_ACK,
     TYPE_COMMAND,
     TYPE_HEARTBEAT,
+    TYPE_JOINT_CMD,
     TYPE_JOINT_TICKS,
     TYPE_NAMED_POSE_REP,
     TYPE_NAMED_POSE_REQ,
@@ -17,6 +18,7 @@ from teleop_demo.mlink_payload import (
     Ack,
     Command,
     Heartbeat,
+    JointCommand,
     JointTicks,
     NamedPoseRep,
     NamedPoseReq,
@@ -27,6 +29,7 @@ from teleop_demo.mlink_payload import (
     encode_ack,
     encode_command,
     encode_heartbeat,
+    encode_joint_command,
     encode_joint_ticks,
     encode_named_pose_rep,
     encode_named_pose_req,
@@ -112,6 +115,18 @@ def test_ack_state_pose_named_roundtrip() -> None:
     assert got == joints
     assert present_ticks(joints)["shoulder_pan"] == 100
     assert "gripper" not in present_ticks(joints)
+
+
+def test_joint_command_roundtrip() -> None:
+    msg = JointCommand(0.0, 2.0, -1.0, 0.25, 0.498, 0.5)
+    data = encode_joint_command(msg)
+    assert len(data) <= MAX_PAYLOAD
+    kind, got = decode(data)
+    assert kind == TYPE_JOINT_CMD
+    assert got == msg
+    short = bytes((1, TYPE_JOINT_CMD, 4, 0)) + b"\x00\x00\x00\x00"
+    with pytest.raises(PayloadError, match="truncated joint command"):
+        decode(short)
 
 
 def test_rejects_truncated_and_bad_version() -> None:

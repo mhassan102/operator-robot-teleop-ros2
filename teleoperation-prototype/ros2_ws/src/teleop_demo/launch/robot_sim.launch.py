@@ -86,8 +86,8 @@ def _gripper_node(serial_port: str) -> Node:
 
 
 def _real_arm_launch_actions() -> list:
-    # Stage 2: receiver + Feetech gripper. No Gazebo, Servo, named poses, or
-    # arm-joint motion. Serial is opened by feetech_gripper only.
+    # Real arm: receiver + one Feetech bus. No Gazebo, Servo, or named poses.
+    # Servos 1-6 are stepped on that bus. Serial is opened by feetech_gripper only.
     serial_port = serial_port_from_env()
     actions = [
         LogInfo(msg=real_arm_gripper_log(serial_port)),

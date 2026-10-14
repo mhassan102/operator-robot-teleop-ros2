@@ -9,7 +9,7 @@ import signal
 import struct
 
 from geometry_msgs.msg import PoseStamped, Twist
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Float64MultiArray, Int32MultiArray
 from teleop_demo_msgs.msg import TeleopAck, TeleopCommand, TeleopHeartbeat, TeleopState
 from teleop_demo_msgs.srv import GoNamedPose
 import rclpy
@@ -18,10 +18,12 @@ from rclpy.node import Node
 from teleop_demo.mlink_payload import (
     TYPE_COMMAND,
     TYPE_HEARTBEAT,
+    TYPE_JOINT_CMD,
     TYPE_NAMED_POSE_REQ,
     Ack,
     Command,
     Heartbeat,
+    JointCommand,
     JointTicks,
     NamedPoseRep,
     NamedPoseReq,
@@ -51,6 +53,9 @@ class RobotMlinkBridge(Node):
         self._mlink = open_from_env(default_tx=DEFAULT_TX, default_rx=DEFAULT_RX)
         qos = command_qos()
         self.command_pub = self.create_publisher(TeleopCommand, "/teleop/command", qos)
+        self.joint_cmd_pub = self.create_publisher(
+            Float64MultiArray, "/teleop/joint_command", qos
+        )
         self.heartbeat_pub = self.create_publisher(
             TeleopHeartbeat, "/teleop/heartbeat", qos
         )
@@ -84,6 +89,8 @@ class RobotMlinkBridge(Node):
                 continue
             if kind == TYPE_COMMAND and isinstance(msg, Command):
                 self.command_pub.publish(_command_to_ros(msg))
+            elif kind == TYPE_JOINT_CMD and isinstance(msg, JointCommand):
+                self.joint_cmd_pub.publish(_joint_command_to_ros(msg))
             elif kind == TYPE_HEARTBEAT and isinstance(msg, Heartbeat):
                 self.heartbeat_pub.publish(_heartbeat_to_ros(msg))
             elif kind == TYPE_NAMED_POSE_REQ and isinstance(msg, NamedPoseReq):
@@ -193,6 +200,19 @@ class RobotMlinkBridge(Node):
                 )
             )
         )
+
+
+def _joint_command_to_ros(msg: JointCommand) -> Float64MultiArray:
+    out = Float64MultiArray()
+    out.data = [
+        float(msg.shoulder_pan),
+        float(msg.shoulder_lift),
+        float(msg.elbow_flex),
+        float(msg.wrist_flex),
+        float(msg.wrist_roll),
+        float(msg.gripper),
+    ]
+    return out
 
 
 def _command_to_ros(msg: Command) -> TeleopCommand:
